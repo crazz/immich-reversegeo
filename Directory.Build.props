@@ -17,4 +17,17 @@
     <ImplicitUsings>disable</ImplicitUsings>
     <Nullable>enable</Nullable>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!--
+      Security pin. Microsoft.Data.Sqlite 10.0.5 still resolves SQLitePCLRaw 2.1.11, which
+      carries a SQLite build affected by CVE-2025-6965 / GHSA-2m69-gcr7-jv3q (high severity;
+      fixed upstream in SQLite 3.50.2). NuGetAudit escalates that to NU1903, and
+      TreatWarningsAsErrors turns it into a build failure.
+
+      Pinning the bundle directly overrides the transitive version across every project.
+      Remove this once Microsoft.Data.Sqlite ships a patched SQLitePCLRaw of its own.
+    -->
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" Version="2.1.13" />
+  </ItemGroup>
 </Project>
