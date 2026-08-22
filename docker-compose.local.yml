@@ -13,6 +13,8 @@ services:
       - .env
     environment:
       - ASPNETCORE_URLS=http://+:8080
+    # Keep in step with docker-compose.yml — gives the .NET GC a ceiling to collect against.
+    mem_limit: 2g
     restart: unless-stopped
 
 volumes:

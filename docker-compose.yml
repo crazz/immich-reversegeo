@@ -14,6 +14,14 @@ services:
       - .env                 # reuse Immich's own .env (DB_USERNAME, DB_PASSWORD, etc.)
     environment:
       - ASPNETCORE_URLS=http://+:8080
+    # Without a limit here .NET sizes its heaps against total host RAM and never feels memory
+    # pressure, so it grows until the kernel OOM-kills it. With a limit set, the runtime caps
+    # its managed heap at 75% of it and collects instead of growing.
+    #
+    # 2g leaves room for the ~500MB resident country-boundary index plus DuckDB's native
+    # allocations while a country cache is being built. Do not set this much lower — a cap
+    # below the steady-state working set turns a slow climb into an immediate OOM kill.
+    mem_limit: 2g
     restart: unless-stopped
 
 volumes:
