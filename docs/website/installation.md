@@ -39,6 +39,15 @@ This service expects:
 - a persistent `/config` volume for settings
 - a persistent `/data` volume for downloaded Overture data and runtime state
 - a free host port for the web UI, with `8080` as the default example
+- about 2 GB of memory, set by `mem_limit` in the snippet above
+
+!!! note "Why the memory limit is there"
+    The bundled country boundary data is held in memory while processing runs, so the container
+    settles around 750 MB–1 GB once warm. `mem_limit` gives the .NET runtime a ceiling to collect
+    against; without one it sizes itself against total host memory and keeps growing.
+
+    Do not lower it much below `2g`. A limit under the working set makes the container fail
+    immediately instead of running. Raising it is fine.
 
 Typical variables come from the shared `.env` file:
 

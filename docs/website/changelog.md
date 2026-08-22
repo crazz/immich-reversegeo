@@ -8,6 +8,15 @@ This is the public-facing release summary for Immich ReverseGeo.
 
 Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/CHANGELOG.md).
 
+## 2026-08-23
+
+This release fixes the app running out of memory and restarting during processing.
+
+- Fixed the container growing in memory until it was killed, then restarting mid-run. Country matching was doing far more geometry work than it needed to on almost every photo. See [issue #13](https://github.com/immich-reversegeo/immich-reversegeo/issues/13).
+- Country matching is also much faster. On typical European coordinates a country lookup went from roughly 2.5 ms to under 0.1 ms.
+- The [installation snippet](./installation.md#docker) now sets a `mem_limit` of 2 GB. If you already run the service, adding this to your compose file is recommended — it gives the app a memory ceiling to work against instead of growing unchecked. See [The container keeps restarting or gets killed](./troubleshooting.md#the-container-keeps-restarting-or-gets-killed).
+- In rare cases near a border, a photo that sits exactly inside one country but within about 16 m of a neighbour now always resolves to the country it is actually in. Previously the neighbour could win.
+
 ## 2026-04-12
 
 This release focuses on better administrative area matching and clearer data management.

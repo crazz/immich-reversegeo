@@ -4,6 +4,15 @@ Technical release notes for Immich ReverseGeo live here.
 
 For a shorter user-facing summary, see [docs/website/changelog.md](./docs/website/changelog.md).
 
+## 2026-08-23
+
+- Fixed repeated `System.OutOfMemoryException` container kills during geocoding. Bundled country containment now resolves in two passes: `PreparedGeometry.Covers` first, with the boundary tolerance applied only when nothing contains the point. Previously every candidate that failed `Covers` fell through to `Geometry.Distance`, and because country bounding boxes overstate their footprint (antimeridian crossings, distant overseas territories), most lookups ran a full brute-force `DistanceOp` against several complete country boundaries.
+- Replaced the `Geometry.Distance` boundary tolerance with a small rectangle intersection in the bundled country lookup, `OvertureDataAccess.TryGeometryContains`, and `GadmDivisionsService`. NTS `DistanceOp` computes an exact minimum, so it cannot short-circuit at the tolerance, and it copies every boundary ring into a fresh `Coordinate[]` per call — large arrays landing on the non-compacted large object heap. Rectangle intersection reuses the prepared geometry index instead. Measured against the bundled dataset, a Berlin lookup drops from 2.71 ms and 2,596 KB allocated to 0.02 ms and 2.2 KB.
+- Switched the web app to Workstation GC and added `mem_limit` to both compose files. Server GC allocates a heap per core and collects lazily, and with no container limit the runtime sized heaps against total host memory. `2g` is chosen so the limit stays above the resident country index rather than below it.
+- Exact geometry containment now always outranks a within-tolerance neighbour in bundled country selection. Both previously set `GeometryContainsPoint`, so a neighbouring country with a tighter bounding box could win over a true containment.
+- Pinned `SQLitePCLRaw.bundle_e_sqlite3` to 2.1.13, overriding the 2.1.11 resolved transitively by `Microsoft.Data.Sqlite` 10.0.5. 2.1.11 carries a SQLite build affected by CVE-2025-6965, which `NuGetAudit` raised as `NU1903` and `TreatWarningsAsErrors` turned into a hard restore failure. 2.1.13 bundles SQLite 3.53.3, past the 3.50.2 fix.
+- Added `BundledCountryLookupTests`, which builds a synthetic two-country database so the containment behaviour is covered without the LFS-backed bundled dataset, including an allocation guard against regressing to full-boundary distance scans.
+
 ## 2026-04-12
 
 - Added optional GADM administrative-area support with per-country on-demand downloads, local SQLite cache export, Kosovo code mapping, and curated split-territory fallback families.

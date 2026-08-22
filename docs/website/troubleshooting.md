@@ -57,6 +57,27 @@ Things that affect throughput:
   </div>
 </div>
 
+## The container keeps restarting or gets killed
+
+This usually means the container ran out of memory.
+
+Check whether the restarts line up with processing runs:
+
+```bash
+docker inspect --format '{{.RestartCount}} {{.State.OOMKilled}}' immich-reversegeo
+```
+
+If `OOMKilled` is `true`, or the logs end with `System.OutOfMemoryException`, raise the memory
+ceiling. The compose snippet in [Installation](./installation.md#docker) sets `mem_limit: 2g`,
+which suits most libraries. If your compose file has no `mem_limit` at all, add one — without it
+the .NET runtime sizes itself against total host memory and never collects under pressure.
+
+Lowering the limit is not a fix. The bundled country boundary data alone needs several hundred
+megabytes once loaded, so a limit below that makes the container fail straight away.
+
+Reducing **max parallelism** in processing settings also lowers peak memory, at the cost of
+throughput.
+
 ## I want to rerun everything from scratch
 
 The Data page can clear existing `city`, `state`, and `country` values in immich.
