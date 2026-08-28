@@ -6,7 +6,7 @@
 
   <ItemGroup>
     <PackageReference Include="DuckDB.NET.Data.Full" Version="1.5.0" />
-    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.5" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.11" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.5" />
     <PackageReference Include="NetTopologySuite" Version="2.6.0" />
   </ItemGroup>

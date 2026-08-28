@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
@@ -83,6 +84,35 @@ public class PoiServiceTests
         Assert.AreEqual(CategoryTier.MajorTransport, result.Tier);
         Assert.IsTrue(result.DistanceMetres > 0);
         Assert.IsTrue(result.DistanceMetres < 1000);
+    }
+
+    [TestMethod]
+    public async Task FindNearestPoi_CommaDecimalCulture_ReturnsAirport()
+    {
+        CreateTestDb("CHE");
+        var cfg = new LegacyPoiConfig
+        {
+            CategoryAllowlist = ["4bf58dd8d48988d1ed931735"]
+        };
+        var tierMap = new Dictionary<string, CategoryTier>
+        {
+            ["4bf58dd8d48988d1ed931735"] = CategoryTier.MajorTransport
+        };
+        var svc = PoiService.CreateForTest(NullLogger<PoiService>.Instance, cfg, tierMap, dataDir: _tempDir);
+        var originalCulture = CultureInfo.CurrentCulture;
+
+        try
+        {
+            CultureInfo.CurrentCulture = CultureInfo.GetCultureInfo("pt-PT");
+            var result = await svc.FindNearestPoiAsync(47.4700, 8.5500, "CHE");
+
+            Assert.IsNotNull(result);
+            Assert.AreEqual("Zurich Airport", result.Name);
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = originalCulture;
+        }
     }
 
     [TestMethod]
