@@ -1,3 +1,4 @@
+using System.Text.Json;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Data.Sqlite;
@@ -43,6 +44,26 @@ public class CountryCodeServiceTests
             Assert.IsNotNull(identity, fixture.Label);
             Assert.AreEqual(fixture.DisplayName, identity.DisplayName, fixture.Label);
         }
+    }
+
+    [TestMethod]
+    public void CanonicalCatalog_ExplicitlyNamesEveryMappedIdentity()
+    {
+        var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var isoPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Web", "bundled-data", "iso3166.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(isoPath));
+        var root = document.RootElement;
+        var mappedAlpha2 = root.GetProperty("iso3ToAlpha2")
+            .EnumerateObject()
+            .Select(property => property.Value.GetString()!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var explicitlyNamedAlpha2 = root.GetProperty("displayNamesByAlpha2")
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToArray();
+
+        CollectionAssert.AreEquivalent(mappedAlpha2, explicitlyNamedAlpha2);
     }
 
     [TestMethod]
