@@ -8,6 +8,14 @@ This is the public-facing release summary for Immich ReverseGeo.
 
 Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/CHANGELOG.md).
 
+## Unreleased
+
+- Country detection now keeps supported territories as their own country identity instead of replacing them with the administering country.
+- Fixed the reported Hong Kong coordinates and expanded built-in coverage for Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
+- Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.
+
+See the technical [CHANGELOG.md](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/CHANGELOG.md) for implementation details.
+
 ## 2026-04-12
 
 This release focuses on better administrative area matching and clearer data management.

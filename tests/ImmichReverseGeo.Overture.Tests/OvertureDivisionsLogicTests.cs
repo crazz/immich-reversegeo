@@ -84,6 +84,96 @@ public class OvertureDivisionsLogicTests
     }
 
     [TestMethod]
+    public void ShouldPreferDivisionCandidate_PrefersExactCoverageBeforeToleranceCoverage()
+    {
+        var exact = CreateCandidate(
+            "dependency",
+            geometryContainsPoint: true,
+            bboxArea: 0.50,
+            exactGeometryContainsPoint: true);
+        var toleranceOnly = CreateCandidate(
+            "dependency",
+            geometryContainsPoint: true,
+            bboxArea: 0.01,
+            exactGeometryContainsPoint: false);
+
+        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(exact, toleranceOnly));
+        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(toleranceOnly, exact));
+    }
+
+    [TestMethod]
+    public void ShouldPreferBundledCountryCandidate_PrefersDependencyBeforeSovereignCountry()
+    {
+        var dependency = CreateCandidate("dependency", true, 0.50, country: "HK");
+        var country = CreateCandidate("country", true, 0.01, country: "CN");
+
+        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(dependency, country));
+        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(country, dependency));
+    }
+
+    [TestMethod]
+    public void ShouldPreferDivisionCandidate_DoesNotGiveDependencyPriorityInAdministrativeLookup()
+    {
+        var region = CreateCandidate("region", true, 0.50, country: "HK");
+        var dependency = CreateCandidate("dependency", true, 0.01, country: "HK");
+
+        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(region, dependency));
+        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(dependency, region));
+    }
+
+    [TestMethod]
+    public void ShouldPreferDivisionCandidate_UsesStableIdAsFinalTieBreak()
+    {
+        var first = CreateCandidate("dependency", true, 0.10, id: "a");
+        var second = CreateCandidate("dependency", true, 0.10, id: "b");
+
+        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(first, second));
+        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(second, first));
+    }
+
+    [TestMethod]
+    [DataRow("HK", "CN")]
+    [DataRow("GL", "DK")]
+    [DataRow("PR", "US")]
+    [DataRow("AW", "NL")]
+    [DataRow("RE", "FR")]
+    public void ShouldPreferBundledCountryCandidate_ReversedInputOrderProducesSameWinner(
+        string dependencyAlpha2,
+        string sovereignAlpha2)
+    {
+        var dependency = CreateCandidate("dependency", true, 0.50, id: "dependency", country: dependencyAlpha2);
+        var country = CreateCandidate("country", true, 0.01, id: "country", country: sovereignAlpha2);
+
+        var forward = SelectBestBundledCountry([country, dependency]);
+        var reverse = SelectBestBundledCountry([dependency, country]);
+
+        Assert.AreEqual("dependency", forward.Id);
+        Assert.AreEqual(forward.Id, reverse.Id);
+    }
+
+    [TestMethod]
+    public void ShouldPreferDivisionCandidate_AllNullableAdminLevelPermutationsProduceSameWinner()
+    {
+        var first = CreateCandidate("region", true, 100, adminLevel: 1, id: "first");
+        var missing = CreateCandidate("region", true, 1, adminLevel: null, id: "missing");
+        var second = CreateCandidate("region", true, 0.5, adminLevel: 2, id: "second");
+        OvertureDivisionResult[][] permutations =
+        [
+            [first, missing, second],
+            [first, second, missing],
+            [missing, first, second],
+            [missing, second, first],
+            [second, first, missing],
+            [second, missing, first]
+        ];
+
+        foreach (var permutation in permutations)
+        {
+            Assert.AreEqual("first", SelectBest(permutation).Id);
+        }
+    }
+
+    [TestMethod]
     public void SelectStateName_PrefersRegionOverCounty()
     {
         var result = OvertureDivisionsLogic.SelectStateName(
@@ -194,22 +284,45 @@ public class OvertureDivisionsLogicTests
         Assert.AreEqual("Preferred Region", result);
     }
 
+    private static OvertureDivisionResult SelectBest(IEnumerable<OvertureDivisionResult> candidates)
+    {
+        return candidates.Aggregate(
+            (OvertureDivisionResult?)null,
+            (current, candidate) => current is null || OvertureDivisionsLogic.ShouldPreferDivisionCandidate(candidate, current)
+                ? candidate
+                : current)!;
+    }
+
+    private static OvertureDivisionResult SelectBestBundledCountry(IEnumerable<OvertureDivisionResult> candidates)
+    {
+        return candidates.Aggregate(
+            (OvertureDivisionResult?)null,
+            (current, candidate) => current is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, current)
+                ? candidate
+                : current)!;
+    }
+
     private static OvertureDivisionResult CreateCandidate(
         string subtype,
         bool geometryContainsPoint,
         double bboxArea,
         bool isTerritorial = false,
-        int? adminLevel = null) =>
+        int? adminLevel = null,
+        string? id = null,
+        bool? exactGeometryContainsPoint = null,
+        string country = "CH") =>
         new(
-            Id: Guid.NewGuid().ToString("N"),
+            Id: id ?? Guid.NewGuid().ToString("N"),
             Name: "Candidate",
             SubType: subtype,
             ClassName: "land",
             AdminLevel: adminLevel,
-            Country: "CH",
+            Country: country,
+            Alpha3: null,
             IsLand: true,
             IsTerritorial: isTerritorial,
             BoundingBoxContainsPoint: true,
+            ExactGeometryContainsPoint: exactGeometryContainsPoint ?? geometryContainsPoint,
             GeometryContainsPoint: geometryContainsPoint,
             BoundingBoxArea: bboxArea);
 

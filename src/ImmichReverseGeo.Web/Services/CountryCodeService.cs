@@ -1,36 +1,33 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
-using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Text.Json;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Overture.Models;
+using ImmichReverseGeo.Overture.Services;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Services;
 
 public class CountryCodeService
 {
-    private readonly IReadOnlyDictionary<string, string> _iso3ToAlpha2;
-    private readonly IReadOnlyDictionary<string, string> _alpha2ToIso3;
+    private readonly CountryIdentityCatalog _catalog;
 
     public CountryCodeService(ILogger<CountryCodeService> logger, StorageOptions dirs)
     {
         var sw = Stopwatch.StartNew();
-        logger.LogInformation("CountryCodeService: loading ISO 3166 mappings");
-        _iso3ToAlpha2 = LoadIso3166(dirs.BundledDataDir);
-        _alpha2ToIso3 = BuildReverseIsoMap(_iso3ToAlpha2);
+        logger.LogInformation("CountryCodeService: loading ISO 3166 identities");
+        _catalog = LoadCatalog(dirs.BundledDataDir);
         logger.LogInformation(
-            "CountryCodeService: ISO 3166 mappings loaded ({Count} entries) in {Elapsed}ms",
-            _iso3ToAlpha2.Count,
+            "CountryCodeService: ISO 3166 identities loaded ({Count} entries) in {Elapsed}ms",
+            _catalog.Identities.Count,
             sw.ElapsedMilliseconds);
     }
 
     public CountryCodeService(string bundledDataDir)
     {
-        _iso3ToAlpha2 = LoadIso3166(bundledDataDir);
-        _alpha2ToIso3 = BuildReverseIsoMap(_iso3ToAlpha2);
+        _catalog = LoadCatalog(bundledDataDir);
     }
 
     public static CountryCodeService CreateForTest(string bundledDataDir = "data")
@@ -40,62 +37,46 @@ public class CountryCodeService
 
     public string? Iso3ToAlpha2(string iso3)
     {
-        return _iso3ToAlpha2.TryGetValue(iso3, out var alpha2) ? alpha2 : null;
+        return _catalog.FindByAlpha3(iso3)?.Alpha2;
     }
 
     public string? Alpha2ToIso3(string alpha2)
     {
-        return _alpha2ToIso3.TryGetValue(alpha2.ToUpperInvariant(), out var iso3) ? iso3 : null;
+        return _catalog.FindByAlpha2(alpha2)?.Alpha3;
+    }
+
+    public CountryIdentity? FindByAlpha2(string alpha2)
+    {
+        return _catalog.FindByAlpha2(alpha2);
+    }
+
+    public CountryIdentity? FindByAlpha3(string alpha3)
+    {
+        return _catalog.FindByAlpha3(alpha3);
     }
 
     public IReadOnlyList<string> GetKnownIso3Codes()
     {
-        return _iso3ToAlpha2.Keys
+        return _catalog.Identities
+            .Select(identity => identity.Alpha3)
             .OrderBy(code => code, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
     public IReadOnlyList<KnownCountryOption> GetKnownCountries()
     {
-        return _iso3ToAlpha2
-            .Select(kvp =>
-            {
-                var iso3 = kvp.Key.ToUpperInvariant();
-                var alpha2 = kvp.Value.ToUpperInvariant();
-                var displayName = alpha2;
-
-                try
-                {
-                    displayName = new RegionInfo(alpha2).EnglishName;
-                }
-                catch
-                {
-                }
-
-                return new KnownCountryOption(iso3, alpha2, displayName);
-            })
+        return _catalog.Identities
+            .Select(identity => new KnownCountryOption(
+                identity.Alpha3,
+                identity.Alpha2,
+                identity.DisplayName))
             .OrderBy(country => country.DisplayName, StringComparer.OrdinalIgnoreCase)
             .ToList();
     }
 
-    private static IReadOnlyDictionary<string, string> LoadIso3166(string bundledDataDir)
+    private static CountryIdentityCatalog LoadCatalog(string bundledDataDir)
     {
-        var path = Path.Combine(bundledDataDir, "iso3166.json");
-        if (!File.Exists(path))
-        {
-            return new Dictionary<string, string>();
-        }
-
-        var json = File.ReadAllText(path);
-        return JsonSerializer.Deserialize<Dictionary<string, string>>(json) ?? new Dictionary<string, string>();
-    }
-
-    private static IReadOnlyDictionary<string, string> BuildReverseIsoMap(IReadOnlyDictionary<string, string> iso3ToAlpha2)
-    {
-        return iso3ToAlpha2
-            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value))
-            .GroupBy(kvp => kvp.Value.ToUpperInvariant(), kvp => kvp.Key.ToUpperInvariant(), StringComparer.OrdinalIgnoreCase)
-            .ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
+        return CountryIdentityCatalog.Load(Path.Combine(bundledDataDir, "iso3166.json"));
     }
 }
 

@@ -45,13 +45,22 @@ public class AdministrativeAreaResolverService
         CancellationToken ct = default)
     {
         progress?.Report("Checking bundled Overture country coverage...");
-        var (iso3, countryName, alpha2) = await _overtureDivisions.FindBundledCountryAsync(lat, lon, ct);
-        if (iso3 is null || countryName is null)
+        var countryLookup = await _overtureDivisions.FindBundledCountryAsync(lat, lon, ct);
+        if (countryLookup.Status == BundledCountryLookupStatus.SpatialNoMatch)
         {
-            progress?.Report("Bundled Overture country lookup found no match.");
+            progress?.Report(countryLookup.FailureReason ?? "Bundled Overture spatial coverage found no match.");
             return null;
         }
 
+        if (countryLookup.Status == BundledCountryLookupStatus.IdentityMappingFailure)
+        {
+            progress?.Report(countryLookup.FailureReason ?? "Bundled Overture country identity mapping failed.");
+            return null;
+        }
+
+        var iso3 = countryLookup.Iso3!;
+        var countryName = countryLookup.CountryName!;
+        var alpha2 = countryLookup.Alpha2!;
         progress?.Report($"Country resolved as {countryName} ({iso3}).");
         var cityResolverProfile = _cityResolverCatalog.GetProfile(config.CityResolver, iso3);
         OvertureAdministrativeResult? overtureResult = null;

@@ -5,6 +5,7 @@ using DuckDB.NET.Data;
 using ImmichReverseGeo.Overture.Services;
 using Microsoft.Data.Sqlite;
 
+string? temporaryOutputPath = null;
 try
 {
     var options = ExportOptions.Parse(args);
@@ -13,6 +14,7 @@ try
 
     var release = options.Release ?? GetLatestRelease();
     var tmpPath = outputPath + ".tmp";
+    temporaryOutputPath = tmpPath;
 
     if (File.Exists(tmpPath))
     {
@@ -29,18 +31,15 @@ try
         ? ExportCountryDivisions(
             release,
             string.Format(CultureInfo.InvariantCulture, OvertureDivisionsLogic.DivisionAreaReleaseUrlTemplate, release),
-            tmpPath)
+            tmpPath,
+            CountryIdentityCatalog.Load(Path.Combine(AppContext.BaseDirectory, "bundled-data", "iso3166.json")))
         : ExportAirportInfrastructure(
             release,
             string.Format(CultureInfo.InvariantCulture, OverturePlacesLogic.InfrastructureReleaseUrlTemplate, release),
             tmpPath);
 
-    if (File.Exists(outputPath))
-    {
-        File.Delete(outputPath);
-    }
-
-    File.Move(tmpPath, outputPath);
+    File.Move(tmpPath, outputPath, overwrite: true);
+    temporaryOutputPath = null;
 
     var fileInfo = new FileInfo(outputPath);
     Console.WriteLine($"Rows exported: {rowCount:N0}");
@@ -52,6 +51,20 @@ catch (Exception ex)
 {
     Console.Error.WriteLine(ex.ToString());
     return 1;
+}
+finally
+{
+    if (temporaryOutputPath is not null && File.Exists(temporaryOutputPath))
+    {
+        try
+        {
+            File.Delete(temporaryOutputPath);
+        }
+        catch (IOException)
+        {
+            // Preserve the original export result; a stale temporary file is deleted on the next run.
+        }
+    }
 }
 
 static long ExportAirportInfrastructure(string release, string releaseUrl, string sqlitePath)
@@ -172,7 +185,11 @@ static long ExportAirportInfrastructure(string release, string releaseUrl, strin
     return rowCount;
 }
 
-static long ExportCountryDivisions(string release, string releaseUrl, string sqlitePath)
+static long ExportCountryDivisions(
+    string release,
+    string releaseUrl,
+    string sqlitePath,
+    CountryIdentityCatalog identityCatalog)
 {
     using var duck = new DuckDBConnection("Data Source=:memory:");
     duck.Open();
@@ -196,7 +213,7 @@ static long ExportCountryDivisions(string release, string releaseUrl, string sql
             bbox.xmax AS bbox_xmax,
             bbox.ymax AS bbox_ymax
         FROM read_parquet('{releaseUrl}', filename = true, hive_partitioning = 1)
-        WHERE subtype = 'country'
+        WHERE subtype IN ('country', 'dependency')
         """;
     using var reader = selectCmd.ExecuteReader();
 
@@ -209,17 +226,20 @@ static long ExportCountryDivisions(string release, string releaseUrl, string sql
             CREATE TABLE division_area (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
-                subtype TEXT NULL,
+                source_name TEXT NOT NULL,
+                subtype TEXT NOT NULL,
                 class_name TEXT NULL,
                 admin_level INTEGER NULL,
-                country TEXT NULL,
+                country TEXT NOT NULL,
+                source_country TEXT NOT NULL,
+                alpha3 TEXT NULL,
                 is_land INTEGER NOT NULL,
                 is_territorial INTEGER NOT NULL,
-                geom_wkb BLOB NULL,
-                bbox_xmin REAL NULL,
-                bbox_ymin REAL NULL,
-                bbox_xmax REAL NULL,
-                bbox_ymax REAL NULL
+                geom_wkb BLOB NOT NULL,
+                bbox_xmin REAL NOT NULL,
+                bbox_ymin REAL NOT NULL,
+                bbox_xmax REAL NOT NULL,
+                bbox_ymax REAL NOT NULL
             );
             CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
             CREATE INDEX idx_division_area_bbox_x ON division_area (bbox_xmin, bbox_xmax);
@@ -227,8 +247,10 @@ static long ExportCountryDivisions(string release, string releaseUrl, string sql
             CREATE INDEX idx_division_area_subtype ON division_area (subtype);
             CREATE INDEX idx_division_area_admin_level ON division_area (admin_level);
             CREATE INDEX idx_division_area_country ON division_area (country);
+            CREATE INDEX idx_division_area_alpha3 ON division_area (alpha3);
             INSERT INTO _meta VALUES ('release', $release);
             INSERT INTO _meta VALUES ('downloadedAt', $downloadedAt);
+            INSERT INTO _meta VALUES ('sourceSubtypes', 'country,dependency');
             """;
         ddl.Parameters.AddWithValue("$release", release);
         ddl.Parameters.AddWithValue("$downloadedAt", DateTime.UtcNow.ToString("O"));
@@ -239,20 +261,23 @@ static long ExportCountryDivisions(string release, string releaseUrl, string sql
     using var insert = sqlite.CreateCommand();
     insert.CommandText = """
         INSERT INTO division_area (
-            id, name, subtype, class_name, admin_level, country, is_land, is_territorial,
-            geom_wkb, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax
+            id, name, source_name, subtype, class_name, admin_level, country, source_country, alpha3,
+            is_land, is_territorial, geom_wkb, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax
         ) VALUES (
-            $id, $name, $subtype, $className, $adminLevel, $country, $isLand, $isTerritorial,
-            $geom, $xmin, $ymin, $xmax, $ymax
+            $id, $name, $sourceName, $subtype, $className, $adminLevel, $country, $sourceCountry, $alpha3,
+            $isLand, $isTerritorial, $geom, $xmin, $ymin, $xmax, $ymax
         )
         """;
 
     var pId = insert.Parameters.Add("$id", SqliteType.Text);
     var pName = insert.Parameters.Add("$name", SqliteType.Text);
+    var pSourceName = insert.Parameters.Add("$sourceName", SqliteType.Text);
     var pSubtype = insert.Parameters.Add("$subtype", SqliteType.Text);
     var pClassName = insert.Parameters.Add("$className", SqliteType.Text);
     var pAdminLevel = insert.Parameters.Add("$adminLevel", SqliteType.Integer);
     var pCountry = insert.Parameters.Add("$country", SqliteType.Text);
+    var pSourceCountry = insert.Parameters.Add("$sourceCountry", SqliteType.Text);
+    var pAlpha3 = insert.Parameters.Add("$alpha3", SqliteType.Text);
     var pIsLand = insert.Parameters.Add("$isLand", SqliteType.Integer);
     var pIsTerritorial = insert.Parameters.Add("$isTerritorial", SqliteType.Integer);
     var pGeom = insert.Parameters.Add("$geom", SqliteType.Blob);
@@ -264,19 +289,38 @@ static long ExportCountryDivisions(string release, string releaseUrl, string sql
     long rowCount = 0;
     while (reader.Read())
     {
-        pId.Value = reader.GetString(0);
-        pName.Value = reader.GetString(1);
-        pSubtype.Value = reader.IsDBNull(2) ? DBNull.Value : reader.GetString(2);
+        var id = reader.GetString(0);
+        var sourceName = reader.GetString(1);
+        var sourceAlpha2 = reader.IsDBNull(5) ? null : reader.GetString(5).ToUpperInvariant();
+        if (string.IsNullOrWhiteSpace(sourceAlpha2))
+        {
+            throw new InvalidDataException($"Overture country row '{id}' has no Alpha-2 identity.");
+        }
+
+        var identity = identityCatalog.ResolveSourceAlpha2(sourceAlpha2);
+        if (identity is null && !identityCatalog.IsExplicitlyNonIso(sourceAlpha2))
+        {
+            throw new InvalidDataException($"Overture country row '{id}' uses unmapped standard identity '{sourceAlpha2}'.");
+        }
+
+        pId.Value = id;
+        pName.Value = identity?.DisplayName ?? sourceName;
+        pSourceName.Value = sourceName;
+        pSubtype.Value = reader.GetString(2);
         pClassName.Value = reader.IsDBNull(3) ? DBNull.Value : reader.GetString(3);
         pAdminLevel.Value = reader.IsDBNull(4) ? DBNull.Value : reader.GetInt32(4);
-        pCountry.Value = reader.IsDBNull(5) ? DBNull.Value : reader.GetString(5);
+        pCountry.Value = identity?.Alpha2 ?? sourceAlpha2;
+        pSourceCountry.Value = sourceAlpha2;
+        pAlpha3.Value = identity?.Alpha3 ?? (object)DBNull.Value;
         pIsLand.Value = reader.GetBoolean(6) ? 1 : 0;
         pIsTerritorial.Value = reader.GetBoolean(7) ? 1 : 0;
-        pGeom.Value = reader.IsDBNull(8) ? DBNull.Value : ReadBlobValue(reader.GetValue(8));
-        pXMin.Value = reader.IsDBNull(9) ? DBNull.Value : reader.GetDouble(9);
-        pYMin.Value = reader.IsDBNull(10) ? DBNull.Value : reader.GetDouble(10);
-        pXMax.Value = reader.IsDBNull(11) ? DBNull.Value : reader.GetDouble(11);
-        pYMax.Value = reader.IsDBNull(12) ? DBNull.Value : reader.GetDouble(12);
+        pGeom.Value = reader.IsDBNull(8)
+            ? throw new InvalidDataException($"Overture country row '{id}' has no geometry.")
+            : ReadBlobValue(reader.GetValue(8));
+        pXMin.Value = reader.IsDBNull(9) ? throw new InvalidDataException($"Overture country row '{id}' has no xmin.") : reader.GetDouble(9);
+        pYMin.Value = reader.IsDBNull(10) ? throw new InvalidDataException($"Overture country row '{id}' has no ymin.") : reader.GetDouble(10);
+        pXMax.Value = reader.IsDBNull(11) ? throw new InvalidDataException($"Overture country row '{id}' has no xmax.") : reader.GetDouble(11);
+        pYMax.Value = reader.IsDBNull(12) ? throw new InvalidDataException($"Overture country row '{id}' has no ymax.") : reader.GetDouble(12);
         insert.ExecuteNonQuery();
         rowCount++;
     }
@@ -287,6 +331,9 @@ static long ExportCountryDivisions(string release, string releaseUrl, string sql
     compact.CommandText = "VACUUM;";
     compact.ExecuteNonQuery();
 
+    var statistics = BundledCountryArtifactValidator.Validate(sqlitePath, identityCatalog);
+    Console.WriteLine(
+        $"Validated {statistics.StandardIdentityCount:N0} standard identities and {statistics.WkbBytes:N0} WKB bytes.");
     return rowCount;
 }
 
@@ -327,8 +374,8 @@ static byte[] ReadBlobValue(object value)
 
 file sealed record ExportOptions
 {
-    public const string DefaultOutputRelativePath = @"..\..\src\ImmichReverseGeo.Web\bundled-data\defaults\overture-airports.db";
-    public const string DefaultCountryDivisionsOutputRelativePath = @"..\..\src\ImmichReverseGeo.Web\bundled-data\defaults\overture-country-divisions.db";
+    public const string DefaultOutputRelativePath = "src/ImmichReverseGeo.Web/bundled-data/defaults/overture-airports.db";
+    public const string DefaultCountryDivisionsOutputRelativePath = "src/ImmichReverseGeo.Web/bundled-data/defaults/overture-country-divisions.db";
 
     public string OutputPath { get; init; } = DefaultOutputRelativePath;
     public string? Release { get; init; }

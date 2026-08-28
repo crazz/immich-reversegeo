@@ -36,13 +36,19 @@ The app uses it for:
 Why this source is used:
 
 - it is open and easy to bundle
-- it gives consistent country polygons for the active runtime
+- it gives consistent country and distinct-territory boundaries for the active runtime
 - it avoids a live network dependency for the first step of every lookup
+- territories keep their own ISO identity instead of being rewritten as the administering country
+
+The bundled fixture set covers Hong Kong, Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 
 What it does not do by itself:
 
 - it is not the main state and city source for the final result
-- it can still miss some edge-case territories, so country detection is not perfect everywhere
+- a territory outside the bundled fixture set can still be missing if the pinned Overture release has no country or dependency boundary for it
+- changing the bundled database requires an application or container restart because the country index stays in memory
+
+If a coordinate still looks wrong, use [Lookup](./using-the-app.md#lookup) first. Confirm the country identity, then inspect the downloaded Overture and optional GADM administrative results before changing settings.
 
 Origin:
 

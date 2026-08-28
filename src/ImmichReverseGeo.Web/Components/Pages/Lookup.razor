@@ -535,16 +535,22 @@
         };
 
         await UpdateLookupStatusAsync("Checking bundled Overture country coverage...");
-        (r.Iso3, r.CountryName, r.Alpha2) = await OvertureDivisions.FindBundledCountryAsync(_lat, _lon);
-        if (r.Iso3 is null)
+        var countryLookup = await OvertureDivisions.FindBundledCountryAsync(_lat, _lon);
+        if (!countryLookup.IsMatched)
         {
-            r.Trace.Add("Country lookup: bundled Overture country divisions found no match.");
-            await UpdateLookupStatusAsync("Bundled Overture country lookup found no match.");
+            var failure = countryLookup.FailureReason ?? (countryLookup.Status == BundledCountryLookupStatus.SpatialNoMatch
+                ? "Bundled Overture spatial coverage found no match."
+                : "Bundled Overture country identity mapping failed.");
+            r.Trace.Add($"Country lookup: {failure}");
+            await UpdateLookupStatusAsync(failure);
             _result = r;
             StateHasChanged();
             return;
         }
 
+        r.Iso3 = countryLookup.Iso3;
+        r.CountryName = countryLookup.CountryName;
+        r.Alpha2 = countryLookup.Alpha2;
         r.Trace.Add($"Country matched from bundled Overture divisions: {r.CountryName} ({r.Iso3}, {r.Alpha2 ?? "no alpha-2"})");
         await UpdateLookupStatusAsync($"Country resolved as {r.CountryName} ({r.Iso3}).");
 
