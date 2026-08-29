@@ -15,6 +15,9 @@ public class GadmDivisionCacheService
 {
     private readonly ILogger<GadmDivisionCacheService> _logger;
     private readonly string _dataDir;
+    private readonly Func<string, CancellationToken, Task> _sourceOperation;
+    private readonly Func<string, string, CancellationToken, Task> _downloadOperation;
+    private readonly Func<string, string, string, long> _exportOperation;
     private readonly ConcurrentDictionary<string, Lazy<Task>> _inflightDownloads = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
 
@@ -22,12 +25,38 @@ public class GadmDivisionCacheService
     {
         _logger = logger;
         _dataDir = dirs.DataDir;
+        _sourceOperation = DownloadDataInternalAsync;
+        _downloadOperation = DownloadFileAsync;
+        _exportOperation = GadmCacheExporter.ExportGeoPackageToSqlite;
     }
 
     public GadmDivisionCacheService(ILogger<GadmDivisionCacheService> logger, string dataDir)
     {
         _logger = logger;
         _dataDir = dataDir;
+        _sourceOperation = DownloadDataInternalAsync;
+        _downloadOperation = DownloadFileAsync;
+        _exportOperation = GadmCacheExporter.ExportGeoPackageToSqlite;
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, CancellationToken, Task> sourceOperation)
+        : this(logger, dataDir)
+    {
+        _sourceOperation = sourceOperation ?? throw new ArgumentNullException(nameof(sourceOperation));
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string, CancellationToken, Task> downloadOperation,
+        Func<string, string, string, long> exportOperation)
+        : this(logger, dataDir)
+    {
+        _downloadOperation = downloadOperation ?? throw new ArgumentNullException(nameof(downloadOperation));
+        _exportOperation = exportOperation ?? throw new ArgumentNullException(nameof(exportOperation));
     }
 
     public Dictionary<string, GadmDivisionStatus> GetStatus()
@@ -102,40 +131,43 @@ public class GadmDivisionCacheService
             return (Task.CompletedTask, GadmDivisionEnsureResult.AlreadyReady);
         }
 
-        var startedNew = false;
-        var lazyDownload = _inflightDownloads.GetOrAdd(
-            iso3,
-            key =>
-            {
-                startedNew = true;
-                return new Lazy<Task>(
-                    () => DownloadDataInternalAsync(key, ct),
-                    LazyThreadSafetyMode.ExecutionAndPublication);
-            });
+        Lazy<Task>? candidate = null;
+        candidate = new Lazy<Task>(
+            () => RunSourceOperationAsync(iso3, ct, candidate!),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        var winningLazy = _inflightDownloads.GetOrAdd(iso3, candidate);
 
-        var result = startedNew
+        var result = ReferenceEquals(candidate, winningLazy)
             ? GadmDivisionEnsureResult.StartedDownload
             : GadmDivisionEnsureResult.AwaitedExistingDownload;
 
-        return (lazyDownload.Value, result);
+        return (winningLazy.Value, result);
     }
 
     public async Task<GadmDivisionEnsureResult> EnsureDataAsync(string iso3, CancellationToken ct = default)
     {
         var (downloadTask, result) = GetOrStartDownload(iso3, ct);
 
+        await downloadTask.WaitAsync(ct);
+        return result;
+    }
+
+    private async Task RunSourceOperationAsync(string iso3, CancellationToken ct, Lazy<Task> lazy)
+    {
         try
         {
-            await downloadTask.WaitAsync(ct);
-            return result;
+            await _sourceOperation(iso3, ct);
         }
         finally
         {
-            if (downloadTask.IsCompleted)
-            {
-                _inflightDownloads.TryRemove(iso3, out _);
-            }
+            RemoveExact(_inflightDownloads, iso3, lazy);
         }
+    }
+
+    internal static bool RemoveExact(ConcurrentDictionary<string, Lazy<Task>> downloads, string iso3, Lazy<Task> lazy)
+    {
+        return ((ICollection<KeyValuePair<string, Lazy<Task>>>)downloads).Remove(
+            new KeyValuePair<string, Lazy<Task>>(iso3, lazy));
     }
 
     private async Task DownloadDataInternalAsync(string iso3, CancellationToken ct)
@@ -165,8 +197,8 @@ public class GadmDivisionCacheService
 
         try
         {
-            await DownloadFileAsync(GadmDivisionsLogic.BuildCountryGeoPackageUrl(gadmCode), tmpDownloadPath, ct);
-            var rowCount = await Task.Run(() => GadmCacheExporter.ExportGeoPackageToSqlite(tmpDownloadPath, tmpDbPath, iso3), ct);
+            await _downloadOperation(GadmDivisionsLogic.BuildCountryGeoPackageUrl(gadmCode), tmpDownloadPath, ct);
+            var rowCount = await Task.Run(() => _exportOperation(tmpDownloadPath, tmpDbPath, iso3), ct);
             if (rowCount == 0)
             {
                 throw new InvalidOperationException($"No GADM rows were downloaded for {iso3}.");
@@ -191,7 +223,6 @@ public class GadmDivisionCacheService
         finally
         {
             TryDelete(tmpDownloadPath);
-            _inflightDownloads.TryRemove(iso3, out _);
         }
     }
 

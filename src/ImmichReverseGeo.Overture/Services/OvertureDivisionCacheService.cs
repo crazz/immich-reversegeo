@@ -17,6 +17,7 @@ public class OvertureDivisionCacheService
     private readonly string _dataDir;
     private readonly Func<string, string?> _iso3ToAlpha2;
     private readonly Func<string, string, long> _exportOperation;
+    private readonly Func<string, CancellationToken, Task> _sourceOperation;
     private readonly ConcurrentDictionary<string, Lazy<Task>> _inflightDownloads = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
 
@@ -29,6 +30,7 @@ public class OvertureDivisionCacheService
         _dataDir = dirs.DataDir;
         _iso3ToAlpha2 = iso3ToAlpha2;
         _exportOperation = ExportOvertureDivisions;
+        _sourceOperation = DownloadDataInternalAsync;
     }
 
     public OvertureDivisionCacheService(ILogger<OvertureDivisionCacheService> logger, string dataDir, Func<string, string?> iso3ToAlpha2)
@@ -37,6 +39,7 @@ public class OvertureDivisionCacheService
         _dataDir = dataDir;
         _iso3ToAlpha2 = iso3ToAlpha2;
         _exportOperation = ExportOvertureDivisions;
+        _sourceOperation = DownloadDataInternalAsync;
     }
 
     internal OvertureDivisionCacheService(
@@ -47,6 +50,17 @@ public class OvertureDivisionCacheService
         : this(logger, dataDir, iso3ToAlpha2)
     {
         _exportOperation = exportOperation ?? throw new ArgumentNullException(nameof(exportOperation));
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        Func<string, string, long> exportOperation,
+        Func<string, CancellationToken, Task> sourceOperation)
+        : this(logger, dataDir, iso3ToAlpha2, exportOperation)
+    {
+        _sourceOperation = sourceOperation ?? throw new ArgumentNullException(nameof(sourceOperation));
     }
 
     public Dictionary<string, OvertureDivisionStatus> GetStatus()
@@ -121,40 +135,43 @@ public class OvertureDivisionCacheService
             return (Task.CompletedTask, OvertureDivisionEnsureResult.AlreadyReady);
         }
 
-        var startedNew = false;
-        var lazyDownload = _inflightDownloads.GetOrAdd(
-            iso3,
-            key =>
-            {
-                startedNew = true;
-                return new Lazy<Task>(
-                    () => DownloadDataInternalAsync(key, ct),
-                    LazyThreadSafetyMode.ExecutionAndPublication);
-            });
+        Lazy<Task>? candidate = null;
+        candidate = new Lazy<Task>(
+            () => RunSourceOperationAsync(iso3, ct, candidate!),
+            LazyThreadSafetyMode.ExecutionAndPublication);
+        var winningLazy = _inflightDownloads.GetOrAdd(iso3, candidate);
 
-        var result = startedNew
+        var result = ReferenceEquals(candidate, winningLazy)
             ? OvertureDivisionEnsureResult.StartedDownload
             : OvertureDivisionEnsureResult.AwaitedExistingDownload;
 
-        return (lazyDownload.Value, result);
+        return (winningLazy.Value, result);
     }
 
     public async Task<OvertureDivisionEnsureResult> EnsureDataAsync(string iso3, CancellationToken ct = default)
     {
         var (downloadTask, result) = GetOrStartDownload(iso3, ct);
 
+        await downloadTask.WaitAsync(ct);
+        return result;
+    }
+
+    private async Task RunSourceOperationAsync(string iso3, CancellationToken ct, Lazy<Task> lazy)
+    {
         try
         {
-            await downloadTask.WaitAsync(ct);
-            return result;
+            await _sourceOperation(iso3, ct);
         }
         finally
         {
-            if (downloadTask.IsCompleted)
-            {
-                _inflightDownloads.TryRemove(iso3, out _);
-            }
+            RemoveExact(_inflightDownloads, iso3, lazy);
         }
+    }
+
+    internal static bool RemoveExact(ConcurrentDictionary<string, Lazy<Task>> downloads, string iso3, Lazy<Task> lazy)
+    {
+        return ((ICollection<KeyValuePair<string, Lazy<Task>>>)downloads).Remove(
+            new KeyValuePair<string, Lazy<Task>>(iso3, lazy));
     }
 
     private async Task DownloadDataInternalAsync(string iso3, CancellationToken ct)
@@ -202,10 +219,6 @@ public class OvertureDivisionCacheService
         {
             TryDelete(tmpPath);
             throw;
-        }
-        finally
-        {
-            _inflightDownloads.TryRemove(iso3, out _);
         }
     }
 
