@@ -16,6 +16,7 @@ public class OvertureDivisionCacheService
     private readonly ILogger<OvertureDivisionCacheService> _logger;
     private readonly string _dataDir;
     private readonly Func<string, string?> _iso3ToAlpha2;
+    private readonly Func<string, string, long> _exportOperation;
     private readonly ConcurrentDictionary<string, Lazy<Task>> _inflightDownloads = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
 
@@ -27,6 +28,7 @@ public class OvertureDivisionCacheService
         _logger = logger;
         _dataDir = dirs.DataDir;
         _iso3ToAlpha2 = iso3ToAlpha2;
+        _exportOperation = ExportOvertureDivisions;
     }
 
     public OvertureDivisionCacheService(ILogger<OvertureDivisionCacheService> logger, string dataDir, Func<string, string?> iso3ToAlpha2)
@@ -34,6 +36,17 @@ public class OvertureDivisionCacheService
         _logger = logger;
         _dataDir = dataDir;
         _iso3ToAlpha2 = iso3ToAlpha2;
+        _exportOperation = ExportOvertureDivisions;
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        Func<string, string, long> exportOperation)
+        : this(logger, dataDir, iso3ToAlpha2)
+    {
+        _exportOperation = exportOperation ?? throw new ArgumentNullException(nameof(exportOperation));
     }
 
     public Dictionary<string, OvertureDivisionStatus> GetStatus()
@@ -169,7 +182,7 @@ public class OvertureDivisionCacheService
 
         try
         {
-            var rowCount = await Task.Run(() => ExportOvertureDivisions(tmpPath, alpha2), ct);
+            var rowCount = await Task.Run(() => _exportOperation(tmpPath, alpha2), ct);
             if (rowCount == 0)
             {
                 throw new InvalidOperationException($"No Overture division rows were downloaded for {iso3}.");
@@ -229,8 +242,7 @@ public class OvertureDivisionCacheService
             ";
         using var reader = selectCmd.ExecuteReader();
 
-        using var sqlite = new SqliteConnection($"Data Source={tmpPath}");
-        sqlite.Open();
+        using var sqlite = OpenTemporaryOutputConnection(tmpPath);
 
         using (var ddl = sqlite.CreateCommand())
         {
@@ -320,6 +332,26 @@ public class OvertureDivisionCacheService
         sqlite.Close();
         SqliteConnection.ClearPool(sqlite);
         return rows;
+    }
+
+    internal static SqliteConnection OpenTemporaryOutputConnection(string tmpPath)
+    {
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = tmpPath,
+            Pooling = false
+        }.ConnectionString;
+        var sqlite = new SqliteConnection(connectionString);
+        try
+        {
+            sqlite.Open();
+            return sqlite;
+        }
+        catch
+        {
+            sqlite.Dispose();
+            throw;
+        }
     }
 
     private static string GetLatestOvertureReleaseForCache()
