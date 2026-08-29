@@ -12,38 +12,61 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Services;
 
-public class ProcessingBackgroundService(
-    ILogger<ProcessingBackgroundService> logger,
-    ConfigService config,
-    AdministrativeAreaResolverService administrativeResolver,
-    ProcessingState state,
-    ImmichDbRepository db,
-    OverturePlacesService overturePlaces,
-    SkippedAssetsRepository skipped) : BackgroundService
+public class ProcessingBackgroundService : BackgroundService
 {
+    private readonly ILogger<ProcessingBackgroundService> logger;
+    private readonly ProcessingState state;
+    private readonly ProcessingOperations _operations;
+    private readonly Func<Task> _initialiseSkippedAssetsAsync;
     private CancellationTokenSource? _runCts;
+    private Task? _manualRunTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
-    private readonly ProcessingOperations _operations = new(
-        db.GetUnprocessedCountAsync,
-        config.GetConfigAsync,
-        skipped.GetAllAsync,
-        db.GetUnprocessedBatchAsync,
-        administrativeResolver.ResolveAsync,
-        overturePlaces.FindNearestInfrastructureWithDiagnosticsAsync,
-        skipped.AddAsync,
-        db.WriteLocationAsync);
+
+    public ProcessingBackgroundService(
+        ILogger<ProcessingBackgroundService> logger,
+        ConfigService config,
+        AdministrativeAreaResolverService administrativeResolver,
+        ProcessingState state,
+        ImmichDbRepository db,
+        OverturePlacesService overturePlaces,
+        SkippedAssetsRepository skipped)
+    {
+        this.logger = logger;
+        this.state = state;
+        _initialiseSkippedAssetsAsync = skipped.InitialiseAsync;
+        _operations = new ProcessingOperations(
+            db.GetUnprocessedCountAsync,
+            config.GetConfigAsync,
+            skipped.GetAllAsync,
+            db.GetUnprocessedBatchAsync,
+            administrativeResolver.ResolveAsync,
+            overturePlaces.FindNearestInfrastructureWithDiagnosticsAsync,
+            skipped.AddAsync,
+            db.WriteLocationAsync);
+    }
+
+    internal ProcessingBackgroundService(
+        ILogger<ProcessingBackgroundService> logger,
+        ProcessingState state,
+        ProcessingOperations operations)
+    {
+        this.logger = logger;
+        this.state = state;
+        _operations = operations;
+        _initialiseSkippedAssetsAsync = () => Task.CompletedTask;
+    }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         var sw = Stopwatch.StartNew();
         logger.LogInformation("ProcessingBackgroundService: initialising skipped-assets db");
-        await skipped.InitialiseAsync();
+        await _initialiseSkippedAssetsAsync();
         logger.LogInformation("ProcessingBackgroundService: skipped-assets db ready in {Elapsed}ms", sw.ElapsedMilliseconds);
         state.AppendLog("Service started. Waiting for next scheduled run.");
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var cfg = await config.GetConfigAsync();
+            var cfg = await _operations.GetConfigAsync();
             if (!cfg.Schedule.Enabled)
             {
                 await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
@@ -66,17 +89,22 @@ public class ProcessingBackgroundService(
 
             if (!stoppingToken.IsCancellationRequested)
             {
-                if (await _runLock.WaitAsync(0, stoppingToken))
-                {
-                    state.MarkPending();
-                    try { await RunOnceAsync(stoppingToken); }
-                    finally { _runLock.Release(); }
-                }
-                else
-                {
-                    state.AppendLog("Scheduled run skipped because a processing pass is already in progress.");
-                }
+                await TryRunScheduledAsync(stoppingToken);
             }
+        }
+    }
+
+    internal async Task TryRunScheduledAsync(CancellationToken stoppingToken)
+    {
+        if (await _runLock.WaitAsync(0, stoppingToken))
+        {
+            state.MarkPending();
+            try { await RunOnceAsync(stoppingToken); }
+            finally { _runLock.Release(); }
+        }
+        else
+        {
+            state.AppendLog("Scheduled run skipped because a processing pass is already in progress.");
         }
     }
 
@@ -98,14 +126,21 @@ public class ProcessingBackgroundService(
         _runCts = new CancellationTokenSource();
         var token = _runCts.Token;
 
-        _ = Task.Run(async () =>
+        var manualRunTask = Task.Run(async () =>
         {
             try { await RunOnceAsync(token); }
             finally { _runLock.Release(); }
-        }).ContinueWith(t => logger.LogError(t.Exception, "TriggerRunAsync faulted"),
-                        TaskContinuationOptions.OnlyOnFaulted);
+        });
+        _manualRunTask = manualRunTask;
+        _ = manualRunTask.ContinueWith(t => logger.LogError(t.Exception, "TriggerRunAsync faulted"),
+                                       TaskContinuationOptions.OnlyOnFaulted);
 
         return Task.CompletedTask;
+    }
+
+    internal Task WaitForManualAdmissionAsync()
+    {
+        return _manualRunTask ?? Task.CompletedTask;
     }
 
     public void CancelRun() => _runCts?.Cancel();
