@@ -6,6 +6,91 @@ namespace ImmichReverseGeo.Tests;
 public class ProcessingStateTests
 {
     [TestMethod]
+    public void StartRun_ReplacesPriorRunValuesAndRetainsCompletionAndLogs()
+    {
+        var state = new ProcessingState();
+        state.StartRun(7);
+        state.IncrementProcessed();
+        state.IncrementSkipped();
+        state.IncrementError("prior error");
+        state.AppendLog("prior log");
+        state.CompleteRun();
+
+        var priorCompletion = state.LastRunCompleted;
+        var priorLog = state.GetRecentLog();
+        var beforeStart = DateTime.UtcNow;
+        state.StartRun(42);
+        var afterStart = DateTime.UtcNow;
+
+        Assert.AreEqual(42L, state.TotalUnprocessed);
+        Assert.AreEqual(0L, state.ProcessedThisRun);
+        Assert.AreEqual(0L, state.SkippedThisRun);
+        Assert.AreEqual(0L, state.ErrorsThisRun);
+        Assert.IsNull(state.LastError);
+        Assert.IsTrue(state.IsRunning);
+        Assert.IsNotNull(state.LastRunStarted);
+        Assert.IsTrue(state.LastRunStarted >= beforeStart);
+        Assert.IsTrue(state.LastRunStarted <= afterStart);
+        Assert.AreEqual(priorCompletion, state.LastRunCompleted);
+        CollectionAssert.AreEqual(priorLog.ToArray(), state.GetRecentLog().ToArray());
+    }
+
+    [TestMethod]
+    public void IncrementOutcomes_UpdatesIndependentCountersAndNewestErrorLog()
+    {
+        var state = new ProcessingState();
+        state.StartRun(5);
+
+        state.IncrementProcessed();
+        state.IncrementProcessed();
+        state.IncrementSkipped();
+        state.IncrementError("first error");
+        state.IncrementError("latest error");
+
+        Assert.AreEqual(2L, state.ProcessedThisRun);
+        Assert.AreEqual(1L, state.SkippedThisRun);
+        Assert.AreEqual(2L, state.ErrorsThisRun);
+        Assert.AreEqual("latest error", state.LastError);
+
+        var log = state.GetRecentLog();
+        Assert.IsTrue(log.Any(entry => entry.EndsWith("[ERROR] first error", StringComparison.Ordinal)));
+        Assert.IsTrue(log.Any(entry => entry.EndsWith("[ERROR] latest error", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public void CompleteRun_ClearsTransientStateAndRetainsFinalSnapshot()
+    {
+        var state = new ProcessingState();
+        state.StartRun(8);
+        state.IncrementProcessed();
+        state.IncrementSkipped();
+        state.IncrementError("final error");
+        state.AppendLog("final log");
+        var scope = state.BeginActivity("Downloading data");
+        var start = state.LastRunStarted;
+        var logBeforeCompletion = state.GetRecentLog();
+        var beforeCompletion = DateTime.UtcNow;
+
+        state.CompleteRun();
+
+        var afterCompletion = DateTime.UtcNow;
+        Assert.IsFalse(state.IsRunning);
+        Assert.IsNotNull(state.LastRunCompleted);
+        Assert.IsTrue(state.LastRunCompleted >= beforeCompletion);
+        Assert.IsTrue(state.LastRunCompleted <= afterCompletion);
+        Assert.IsTrue(state.LastRunCompleted >= start);
+        Assert.IsNull(state.CurrentActivity);
+        Assert.AreEqual(8L, state.TotalUnprocessed);
+        Assert.AreEqual(1L, state.ProcessedThisRun);
+        Assert.AreEqual(1L, state.SkippedThisRun);
+        Assert.AreEqual(1L, state.ErrorsThisRun);
+        Assert.AreEqual("final error", state.LastError);
+        CollectionAssert.AreEqual(logBeforeCompletion.ToArray(), state.GetRecentLog().ToArray());
+
+        scope.Dispose();
+    }
+
+    [TestMethod]
     public void BeginActivity_KeepsActivityVisibleUntilLastScopeEnds()
     {
         var state = new ProcessingState();
@@ -20,5 +105,97 @@ public class ProcessingStateTests
 
         scope2.Dispose();
         Assert.IsNull(state.CurrentActivity);
+    }
+
+    [TestMethod]
+    public void BeginActivity_WhenLaterDistinctScopeEnds_ShowsOnlyRemainingScope()
+    {
+        var state = new ProcessingState();
+        var first = state.BeginActivity("A");
+        var second = state.BeginActivity("B");
+
+        Assert.AreEqual("B", state.CurrentActivity);
+
+        second.Dispose();
+
+        Assert.AreEqual("A", state.CurrentActivity);
+        first.Dispose();
+    }
+
+    [TestMethod]
+    public void ActivityScope_DisposalIsIdempotentAndCannotRestoreCompletedActivity()
+    {
+        var state = new ProcessingState();
+        var scope = state.BeginActivity("Downloading data");
+
+        scope.Dispose();
+        scope.Dispose();
+        Assert.IsNull(state.CurrentActivity);
+
+        var preCompletionScope = state.BeginActivity("Finishing data");
+        state.CompleteRun();
+        preCompletionScope.Dispose();
+        preCompletionScope.Dispose();
+
+        Assert.IsNull(state.CurrentActivity);
+    }
+
+    [TestMethod]
+    public void GetRecentLog_RetainsNewestHundredEntriesInInsertionOrder()
+    {
+        var state = new ProcessingState();
+
+        for (var index = 1; index <= 101; index++)
+        {
+            state.AppendLog($"entry-{index:D3}");
+        }
+
+        var snapshot = state.GetRecentLog();
+        Assert.AreEqual(100, snapshot.Count);
+
+        for (var index = 0; index < snapshot.Count; index++)
+        {
+            Assert.IsTrue(snapshot[index].EndsWith($"entry-{index + 2:D3}", StringComparison.Ordinal));
+        }
+    }
+
+    [TestMethod]
+    public void ObservableMutations_RaiseOnChanged()
+    {
+        var state = new ProcessingState();
+
+        AssertRaisesOnChanged(state, state.MarkPending);
+        AssertRaisesOnChanged(state, () => state.StartRun(3));
+        AssertRaisesOnChanged(state, state.IncrementProcessed);
+        AssertRaisesOnChanged(state, state.IncrementSkipped);
+        AssertRaisesOnChanged(state, () => state.IncrementError("error"));
+        AssertRaisesOnChanged(state, () => state.AppendLog("log"));
+        AssertRaisesOnChanged(state, () => state.SetActivity("activity"));
+
+        IDisposable? scope = null;
+        AssertRaisesOnChanged(state, () => scope = state.BeginActivity("scoped activity"));
+        Assert.IsNotNull(scope);
+        AssertRaisesOnChanged(state, scope.Dispose);
+
+        state.BeginActivity("completion activity");
+        AssertRaisesOnChanged(state, state.CompleteRun);
+    }
+
+    private static void AssertRaisesOnChanged(ProcessingState state, Action mutation)
+    {
+        var changed = false;
+        Action handler = () => changed = true;
+        state.OnChanged += handler;
+
+        try
+        {
+            changed = false;
+            mutation();
+            Assert.IsTrue(changed);
+        }
+        finally
+        {
+            state.OnChanged -= handler;
+        }
     }
 }
