@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - master
+      - major-redesign
   pull_request:
 
 jobs:
