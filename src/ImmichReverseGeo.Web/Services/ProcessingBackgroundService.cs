@@ -1,9 +1,11 @@
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Threading;
 using System.Threading.Tasks;
 using Cronos;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Overture.Models;
 using ImmichReverseGeo.Overture.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -21,6 +23,15 @@ public class ProcessingBackgroundService(
 {
     private CancellationTokenSource? _runCts;
     private readonly SemaphoreSlim _runLock = new(1, 1);
+    private readonly ProcessingOperations _operations = new(
+        db.GetUnprocessedCountAsync,
+        config.GetConfigAsync,
+        skipped.GetAllAsync,
+        db.GetUnprocessedBatchAsync,
+        administrativeResolver.ResolveAsync,
+        overturePlaces.FindNearestInfrastructureWithDiagnosticsAsync,
+        skipped.AddAsync,
+        db.WriteLocationAsync);
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -99,11 +110,20 @@ public class ProcessingBackgroundService(
 
     public void CancelRun() => _runCts?.Cancel();
 
-    private async Task RunOnceAsync(CancellationToken ct)
+    private Task RunOnceAsync(CancellationToken ct)
+    {
+        return RunOnceAsync(logger, state, _operations, ct);
+    }
+
+    internal static async Task RunOnceAsync(
+        ILogger<ProcessingBackgroundService> logger,
+        ProcessingState state,
+        ProcessingOperations operations,
+        CancellationToken ct)
     {
         try
         {
-            var total = await db.GetUnprocessedCountAsync(ct);
+            var total = await operations.GetUnprocessedCountAsync(ct);
             state.StartRun(total);
 
             if (total == 0)
@@ -114,19 +134,19 @@ public class ProcessingBackgroundService(
 
             state.AppendLog($"Run started. {total} assets to process.");
 
-            var skippedIds = await skipped.GetAllAsync();
+            var skippedIds = await operations.GetSkippedAssetsAsync();
             if (skippedIds.Count > 0)
             {
                 state.AppendLog($"Skipping {skippedIds.Count} previously unresolvable assets.");
             }
 
             var cursor = AssetCursor.Initial;
-            var cfg = await config.GetConfigAsync();
+            var cfg = await operations.GetConfigAsync();
             int batchNum = 0;
 
             while (!ct.IsCancellationRequested)
             {
-                var batch = await db.GetUnprocessedBatchAsync(cursor, cfg.Processing.BatchSize, ct);
+                var batch = await operations.GetUnprocessedBatchAsync(cursor, cfg.Processing.BatchSize, ct);
                 if (batch.Count == 0)
                 {
                     break;
@@ -153,7 +173,7 @@ public class ProcessingBackgroundService(
                             return;
                         }
 
-                        await ProcessAssetAsync(asset, cfg, token);
+                        await ProcessAssetAsync(logger, state, operations, asset, cfg, token);
                     });
 
                 if (cfg.Processing.BatchDelayMs > 0)
@@ -176,13 +196,19 @@ public class ProcessingBackgroundService(
         }
     }
 
-    private async Task ProcessAssetAsync(AssetRecord asset, AppConfig cfg, CancellationToken ct)
+    private static async Task ProcessAssetAsync(
+        ILogger<ProcessingBackgroundService> logger,
+        ProcessingState state,
+        ProcessingOperations operations,
+        AssetRecord asset,
+        AppConfig cfg,
+        CancellationToken ct)
     {
         var step = "FindCountry";
         try
         {
             // 1. Country detection — bundled Overture country divisions only.
-            var adminResolution = await administrativeResolver.ResolveAsync(
+            var adminResolution = await operations.ResolveAdministrativeAreaAsync(
                 asset.Latitude,
                 asset.Longitude,
                 cfg.Processing,
@@ -192,7 +218,7 @@ public class ProcessingBackgroundService(
             if (adminResolution is null)
             {
                 state.AppendLog($"[WARN] Asset {asset.Id}: no country found at ({asset.Latitude:F4}, {asset.Longitude:F4}), skipping.");
-                await skipped.AddAsync(asset.Id);
+                await operations.AddSkippedAssetAsync(asset.Id);
                 state.IncrementSkipped();
                 return;
             }
@@ -206,7 +232,7 @@ public class ProcessingBackgroundService(
             {
                 // 2. Transport lookup — bundled Overture airport infrastructure.
                 step = "FindNearestInfrastructure";
-                var infrastructure = await overturePlaces.FindNearestInfrastructureWithDiagnosticsAsync(
+                var infrastructure = await operations.FindNearestInfrastructureAsync(
                     asset.Latitude,
                     asset.Longitude,
                     iso3,
@@ -251,13 +277,13 @@ public class ProcessingBackgroundService(
                     logger.LogDebug("Asset {AssetId}: {City}, {State}, {Country}",
                         asset.Id, geoResult.City, geoResult.State, geoResult.Country);
                 }
-                await db.WriteLocationAsync(asset.Id, geoResult, ct);
+                await operations.WriteLocationAsync(asset.Id, geoResult, ct);
                 state.IncrementProcessed();
             }
             else
             {
                 state.AppendLog($"[WARN] Asset {asset.Id}: country={countryName} but no admin match, skipping.");
-                await skipped.AddAsync(asset.Id);
+                await operations.AddSkippedAssetAsync(asset.Id);
                 state.IncrementSkipped();
             }
         }
@@ -286,6 +312,16 @@ public class ProcessingBackgroundService(
         }
         catch { return null; }
     }
+
+    internal sealed record ProcessingOperations(
+        Func<CancellationToken, Task<long>> GetUnprocessedCountAsync,
+        Func<Task<AppConfig>> GetConfigAsync,
+        Func<Task<HashSet<Guid>>> GetSkippedAssetsAsync,
+        Func<AssetCursor, int, CancellationToken, Task<List<AssetRecord>>> GetUnprocessedBatchAsync,
+        Func<double, double, ProcessingConfig, IAdministrativeAreaResolutionProgress?, CancellationToken, Task<AdministrativeAreaResolution?>> ResolveAdministrativeAreaAsync,
+        Func<double, double, string?, CancellationToken, Task<OvertureInfrastructureLookupDiagnostics>> FindNearestInfrastructureAsync,
+        Func<Guid, Task> AddSkippedAssetAsync,
+        Func<Guid, GeoResult, CancellationToken, Task> WriteLocationAsync);
 
     private sealed class ProcessingResolutionProgress(ProcessingState state) : IAdministrativeAreaResolutionProgress
     {
