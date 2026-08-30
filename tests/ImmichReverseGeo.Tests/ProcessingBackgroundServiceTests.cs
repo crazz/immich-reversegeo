@@ -255,8 +255,10 @@ public class ProcessingBackgroundServiceTests
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0 } }),
             () => Task.FromResult(new HashSet<Guid>()),
             (_, _, _) => Task.FromResult(new List<AssetRecord> { asset }),
-            (_, _, _, _, _) =>
+            async (_, _, _, session, _) =>
             {
+                await using var activity = await session.BeginActivityAsync("active geodata cancellation");
+                Assert.AreEqual("active geodata cancellation", state.CurrentActivity);
                 cts.Cancel();
                 throw new OperationCanceledException(cts.Token);
             },
@@ -282,6 +284,11 @@ public class ProcessingBackgroundServiceTests
         Assert.AreEqual(0, writes);
         Assert.AreEqual(0, state.ErrorsThisRun);
         Assert.AreEqual(0, state.SkippedThisRun);
+        Assert.IsFalse(state.IsRunning);
+        Assert.IsNull(state.CurrentActivity);
+        Assert.IsNull(state.LastError);
+        Assert.IsFalse(state.GetRecentLog().Any(line => line.Contains("Fatal:", StringComparison.Ordinal)));
+        Assert.IsNotNull(state.LastRunCompleted);
         AssertLogOrder(state, "Run cancelled.", "Run complete. Processed=0 Skipped=0 Errors=0");
     }
 

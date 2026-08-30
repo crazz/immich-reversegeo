@@ -207,6 +207,10 @@ internal sealed class ProcessingRunEventSession : IProcessingRunEventSession
         {
             await _accept(processingEvent, cancellationToken).ConfigureAwait(false);
         }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
         catch
         {
             _broken = true;

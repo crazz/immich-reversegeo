@@ -109,7 +109,7 @@ public class ProcessingEventReporterTests
     }
 
     [TestMethod]
-    public async Task CancellationBeforeAcceptance_EmitsNothingAndBreaksSession()
+    public async Task CancellationBeforeAcceptance_EmitsNothingAndAllowsCancelledTerminal()
     {
         var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -133,9 +133,11 @@ public class ProcessingEventReporterTests
         cancellation.Cancel();
         gate.SetResult();
         await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => logging);
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.ReportLogAsync(ProcessingLogLevel.Information, "accepted").AsTask());
+        await session.FinishAsync(Result(request, 0, 0, 0, 0, ProcessingRunOutcome.Cancelled));
 
         Assert.AreEqual(0, reporter.Events.OfType<LogEmitted>().Count());
+        CollectionAssert.AreEqual(new[] { typeof(RunStarted), typeof(EligibilityDetermined), typeof(RunFinished) }, reporter.Events.Select(x => x.GetType()).ToArray());
+        Assert.AreEqual(ProcessingRunOutcome.Cancelled, ((RunFinished)reporter.Events[^1]).Result.Outcome);
     }
 
     [TestMethod]
@@ -261,6 +263,41 @@ public class ProcessingEventReporterTests
         }
 
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.ReportLogAsync(ProcessingLogLevel.Information, "late").AsTask());
+    }
+
+    [TestMethod]
+    [DataRow("ActivityStarted")]
+    [DataRow("LogEmitted")]
+    public async Task ForeignCancellationDuringAdmission_BreaksSessionWithoutRecursiveReporting(string eventType)
+    {
+        var foreignCancellation = new OperationCanceledException("foreign sink cancellation", CancellationToken.None);
+        var reporter = new RecordingProcessingEventReporter
+        {
+            FailureFactory = processingEvent => processingEvent.GetType().Name == eventType ? foreignCancellation : null
+        };
+        var request = Request();
+        var session = await reporter.OpenRunAsync(request, Start);
+        await session.DetermineEligibilityAsync(0);
+
+        if (eventType == nameof(ActivityStarted))
+        {
+            var thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => session.BeginActivityAsync("work").AsTask());
+            Assert.AreSame(foreignCancellation, thrown);
+        }
+        else
+        {
+            var thrown = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => session.ReportLogAsync(ProcessingLogLevel.Information, "detail").AsTask());
+            Assert.AreSame(foreignCancellation, thrown);
+        }
+
+        Assert.IsFalse(foreignCancellation.CancellationToken.IsCancellationRequested);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.ReportSkippedAsync().AsTask());
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.ReportLogAsync(ProcessingLogLevel.Information, "late").AsTask());
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => session.FinishAsync(Result(request, 0, 0, 0, 0, ProcessingRunOutcome.Cancelled)).AsTask());
+        CollectionAssert.AreEqual(
+            new[] { typeof(RunStarted), typeof(EligibilityDetermined), eventType == nameof(ActivityStarted) ? typeof(ActivityStarted) : typeof(LogEmitted) },
+            reporter.Attempts.Select(processingEvent => processingEvent.GetType()).ToArray());
+        Assert.AreEqual(0, reporter.Attempts.OfType<RunFinished>().Count());
     }
 
     [TestMethod]

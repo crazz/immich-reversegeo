@@ -132,3 +132,82 @@
 - Focused Overture deterministic: 57/57 passed.
 - Final npm run test: 176/176 passed, 0 failed/skipped (16.2 seconds). git diff --check passed.
 - No live or all-country verification was run because query behavior was unchanged.
+
+## 2026-08-30 — Change 10: controlled-gate test hang investigation
+
+### Evidence
+- Three focused attempts exceeded the ten-minute ceiling. Bounded deep analysis isolated the GADM rows of the StartedDownload and AwaitedExistingDownload cases plus the cross-source concurrency case.
+- The fixture gated both fake sources even for a single-source case. A preferred-GADM resolution legitimately continues into Overture for field completion, so releasing only GADM left the resolver waiting forever on the unreleased Overture gate. The concurrent case also awaited full GADM resolution before releasing its Overture dependency, creating a direct test-side wait cycle.
+- The Microsoft.Testing.Platform command and production source order are correct. Already-ready, failure-matrix, and no-report/session-isolation cases passed bounded isolation.
+
+### Decisions
+- Classify the blocker as a deterministic test-harness defect, not a production defect, command error, external instability, or incomplete OpenSpec artifact. No `openspec-update-change` is needed and acceptance is unchanged.
+- Scope source gates to the selected source, assert exact source-specific readiness, wait on matching activity-end signals before releasing dependent gates, replace mutable callback swapping with stable bounded signals, and retain/add the equal-label scenario.
+- Reopen and reverify focused/full validation tasks after the harness correction; do not claim the hanging suite passed.
+
+## 2026-08-30 — Change 10: reporter-fault boundary remediation
+
+### Evidence
+- Resolver session log, activity-begin, and activity-end failures now cross a narrow ProcessingEventReportingException boundary rather than entering GADM source-unavailability handling.
+- ProcessingBackgroundService recognizes that boundary before generic per-asset failure handling, abandons the block-9 reporter correlation with the original reporter exception, and rethrows that same exception without recursive log, disposition, or terminal reporting.
+- Focused AdministrativeAreaResolverEventReportingTests passed 10/10 with a 45-second per-test bound after correcting the GADM fixture source gate and reporter-fault assertions.
+
+### Decisions
+- The boundary is internal to the resolver/processing seam; cache ownership, source order, Lookup, DI, and block-8/9 event vocabulary remain unchanged.
+
+## 2026-08-30 — Change 10: final Brooks remediation evidence
+
+### Evidence
+- Added deterministic, timeout-bounded resolver and routing tests for real nested activity-begin, Information (including GADM), and activity-end reporter faults. They prove the original sink exception is rethrown by reference, no recursive asset log/disposition/terminal event occurs, the admitted correlation is abandoned, and a later request completes successfully.
+- Resolver tests now assert Information-level ordered diagnostics and ActivityStarted/ActivityEnded identity pairing across success, propagating Overture failure, GADM fallback, cancellation, and OOM. They also cover explicit no-op, concurrent reported/no-report isolation, request-correlated equal-label activity overlap, and the narrow Lookup cache-operation overlap seam without modifying Lookup production/Razor.
+- Every controlled test gate in the affected resolver and territory coverage is bounded with `WaitAsync` and a 15-second test timeout.
+- Focused Change 10 Web coverage passed: 34/34, 0 failed, 0 skipped (16.4 seconds). Final default suite passed: `npm run test` 291/291, 0 failed, 0 skipped (17.9 seconds). `openspec validate 10-move-resolver-progress-behind-event-reporter --strict` passed, as did `git diff --check`.
+
+### Decisions
+- Tasks 4.2–4.5 and 5.1–5.4 were reopened pending proof, then completed only after the focused suite, full default suite, strict validation, and scope review passed.
+- The existing unrelated Change 02 archive/deletion and other untracked workspace items were preserved. No commit, push, sync, archive, Lookup/Razor, or unrelated production change was made for this remediation.
+
+## 2026-08-30 — Change 10: Brooks exact-proof follow-up
+
+### Evidence
+- Reopened tasks 4.1, 4.4, 4.5, and all validation tasks until the event assertions were strict. Resolver coverage now requires complete per-session Information `(level, message)` arrays with no extra or duplicate diagnostics for Overture/GADM StartedDownload, AwaitedExistingDownload, AlreadyReady, fallback, and unwinds, including the exact GADM cached-query diagnostic.
+- Every non-broken required path asserts a non-empty accepted activity identity and exactly one matching end per accepted start. Broken activity-end reporting explicitly captures the accepted identity and verifies its attempted local-only closure rather than treating it as a normal end pair.
+- The tests open and use a real `NoOpProcessingEventReporter` session, and execute Lookup's real private page-local cache/status/query core through a test-only renderer/reflection seam while a real `ProcessingBackgroundService` admission is active; the admitted request receives no Lookup-attributable events. No Lookup production/Razor behavior changed.
+- All controlled source, routing, and overlap gates use a 15-second `WaitAsync` bound. Focused Change 10 coverage passed 35/35, 0 failed, 0 skipped (17.3 seconds).
+- The first `npm run test` attempt hit the known parallel-test temporary-directory cleanup race in `OvertureDivisionCacheServiceTests.GetOrStartDownload_CancellationDuringTaskAcquisitionDoesNotReturnTuple` (`Directory not empty` during cleanup), while all other assemblies passed. One permitted retry passed 292/292, 0 failed, 0 skipped (19.6 seconds). Strict OpenSpec validation and `git diff --check` passed.
+
+### Decisions
+- Tasks were completed only after focused proof, the permitted successful default-suite retry, strict validation/status, and diff review. Existing unrelated workspace changes remain preserved; no commit, push, sync, or archive was performed.
+
+## 2026-08-30 — Change 10: final combined-sequence evidence
+
+### Evidence
+- Reopened tasks 4.1–4.3 and validation until event order and cross-session ownership were asserted as one combined sequence. StartedDownload and AwaitedExistingDownload coverage now asserts, per request and per source, exact `ActivityStarted`, its matching `ActivityEnded`, followed by exact readiness and cached-query Information diagnostics; this proves activity end precedes readiness rather than merely comparing independent arrays.
+- Cross-source overlap retains both sessions and uses `EventsFor` for the exact request identity. The GADM request proves its own GADM activity plus its Overture wait activity, while matching ends remain within the same request and no cross-request end is accepted.
+- Controlled source data produces distinct Overture and GADM state/city values. Preference-false and preference-true cases assert final selected source values as well as territory ISO, display name, and persisted `GeoResult.Country`.
+- Focused Change 10 tests passed 36/36, 0 failed, 0 skipped (19.1 seconds). `npm run test` passed 293/293, 0 failed, 0 skipped (20.2 seconds); strict OpenSpec validation/status and `git diff --check` passed.
+
+### Decisions
+- Tasks 4.1–4.3 and validation were marked complete only after the focused and full suites passed. No production/Razor change, commit, push, sync, or archive was performed; unrelated workspace changes remain preserved.
+
+## 2026-08-30 — Change 10: reporter-admission cancellation follow-up
+
+### Evidence
+- `ReportAsync`, `BeginCacheActivityAsync`, and the underlying event session now preserve active-token admission cancellation without breaking correlation; foreign reporter cancellation remains a reporting marker. Deterministic production-boundary tests cover cancellation at Information-log and activity-begin admission, Cancelled terminal handling, no recursive reporting, and activity cleanup when a start was accepted.
+- Core reporter tests distinguish active from foreign admission cancellation, including the foreign-cancellation broken-session/no-recursive-terminal boundary. Production-adapter coverage observes cancellation cleanup without fatal/abandoned state. Territory processing coverage captures the `GeoResult` passed to `WriteLocationAsync` and asserts territory display country plus preferred distinct state/city at the actual write boundary.
+- Focused coverage passed 83/83, 0 failed, 0 skipped (22.5 seconds). Strict OpenSpec validation and `git diff --check` passed.
+- `npm run test` was attempted twice, as permitted for the known isolated parallel temporary-directory cleanup flake. Both attempts failed only in `OvertureDivisionCacheServiceTests.GetOrStartDownload_CancellationDuringTaskAcquisitionDoesNotReturnTuple` while recursively deleting its temp `overture-divisions` directory (`IOException: Directory not empty`); each had 299/300 passing tests and all other assemblies passed. This failure predates and is outside the Change 10 reporter/territory paths, but task 5.2 remains unchecked because no successful default suite was obtained.
+
+### Decisions
+- Tasks 2.4, 4.4, 5.1, 5.3, and 5.4 are complete from focused/strict proof. Task 5.2 remained open pending a successful default suite.
+
+## 2026-08-30 — Change 10: stable default-suite completion
+
+### Evidence
+- Deep analysis reproduced two pre-existing default-suite races independently of change 10: the Overture cache acquisition test deleted its temporary directory before the exact shared task finished, and the Config environment test mutated process-global `DB_*` values under method-level parallelism.
+- The test harness now awaits the exact shared cache task before cleanup and isolates/snapshots/restores the five database environment variables. Each formerly flaky isolated test passed 20/20. Brooks review approved the two-file harness correction.
+- The canonical parallel `npm run test` passed 300/300 with zero failures/skips after the correction. CI for maintenance commit `86ca84e` passed: https://github.com/crazz/immich-reversegeo/actions/runs/33325350970.
+
+### Decisions
+- The harness fixes were committed separately from change 10 because both defects predated it and task 5.4 preserves change-10 implementation scope. No acceptance criterion or repository parallelism was weakened.
+- Task 5.2 is complete with a stable canonical parallel-suite pass. Change 10 remains pending its final Brooks approval, implementation commit/CI, spec sync, and archive.

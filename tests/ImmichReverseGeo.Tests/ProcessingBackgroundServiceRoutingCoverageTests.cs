@@ -8,6 +8,7 @@ namespace ImmichReverseGeo.Tests;
 [TestClass]
 public class ProcessingBackgroundServiceRoutingCoverageTests
 {
+    private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(15);
     [TestMethod]
     public async Task CountCancellationAndFailure_PreservePendingSnapshotWithoutEligibilityProjection()
     {
@@ -111,12 +112,12 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             (_, _, _, _, _) => Task.FromResult<AdministrativeAreaResolution?>(new("USA", "US", "United States", new GeoResult("United States", "State", "City"), null, null)),
             (_, _, _, _) => throw new AssertFailedException("airport lookup was not expected"),
             _ => Task.CompletedTask,
-            async (_, _, _) => { writeAccepted.TrySetResult(); await releaseCancellation.Task; });
+            async (_, _, _) => { writeAccepted.TrySetResult(); await releaseCancellation.Task.WaitAsync(TestTimeout); });
         var pass = ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
-        await writeAccepted.Task;
+        await writeAccepted.Task.WaitAsync(TestTimeout);
         releaseCancellation.SetResult();
         cancellation.Cancel();
-        await pass;
+        await pass.WaitAsync(TestTimeout);
 
         Assert.AreEqual(1L, state.ProcessedThisRun);
         AssertLogSuffixes(state, "Run cancelled.", "Run complete. Processed=1 Skipped=0 Errors=0");
@@ -339,22 +340,25 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
     }
 
     [TestMethod]
-    public async Task ResolverProgress_UsesDirectStateBridgeExactlyOnceWithoutReporterDuplicate()
+    public async Task ResolverProgress_ReusesAdmittedSessionWithoutDirectStateBridge()
     {
         var state = new ProcessingState();
-        var reporter = new RecordingProcessingEventReporter();
+        var sink = new RecordingProcessingEventReporter();
+        var reporter = new CapturingEventReporter(sink);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
         var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
         var batches = new Queue<List<AssetRecord>>([[asset], []]);
+        IProcessingRunEventSession? resolverSession = null;
         var operations = new ProcessingBackgroundService.ProcessingOperations(
             _ => Task.FromResult(1L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1 } }),
             () => Task.FromResult(new HashSet<Guid>()),
             (_, _, _) => Task.FromResult(batches.Dequeue()),
-            (_, _, _, progress, _) =>
+            async (_, _, _, session, _) =>
             {
-                progress!.Report("resolver direct progress");
-                return Task.FromResult<AdministrativeAreaResolution?>(null);
+                resolverSession = session;
+                await session.ReportLogAsync(ProcessingLogLevel.Information, "resolver event progress");
+                return null;
             },
             (_, _, _, _) => throw new AssertFailedException("airport lookup was not expected"),
             _ => Task.CompletedTask,
@@ -362,8 +366,197 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
 
         await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, CancellationToken.None);
 
-        Assert.AreEqual(1, state.GetRecentLog().Count(line => line.EndsWith("resolver direct progress", StringComparison.Ordinal)));
-        Assert.AreEqual(0, reporter.Events.OfType<LogEmitted>().Count(log => log.Message == "resolver direct progress"));
+        Assert.IsNotNull(reporter.OpenedSession);
+        Assert.IsNotNull(resolverSession);
+        Assert.AreSame(reporter.OpenedSession, resolverSession);
+        Assert.AreSame(request, resolverSession.Request);
+        var resolverLogs = sink.EventsFor(request).OfType<LogEmitted>().ToArray();
+        Assert.AreEqual(3, resolverLogs.Length);
+        Assert.AreEqual(ProcessingLogLevel.Information, resolverLogs[0].Level);
+        Assert.AreEqual("Batch 1: fetched 1 assets (total processed so far: 0).", resolverLogs[0].Message);
+        Assert.AreEqual(ProcessingLogLevel.Information, resolverLogs[1].Level);
+        Assert.AreEqual("resolver event progress", resolverLogs[1].Message);
+        Assert.AreEqual(ProcessingLogLevel.Warning, resolverLogs[2].Level);
+        Assert.AreEqual($"Asset {asset.Id}: no country found at (1.0000, 2.0000), skipping.", resolverLogs[2].Message);
+        Assert.AreEqual(0, state.GetRecentLog().Count(line => line.EndsWith("resolver event progress", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task ResolverReportingBoundary_AbandonsOriginalSinkFailureWithoutRecursiveEventsAndRecovers()
+    {
+        foreach (var stage in new[] { "activity-begin", "information", "activity-end", "gadm-information" })
+        {
+            var gadm = stage == "gadm-information";
+            await using var fixture = await AdministrativeAreaResolverEventReportingTests.ResolverFixture.CreateAsync(gadm ? AdministrativeAreaResolverEventReportingTests.Source.Gadm : AdministrativeAreaResolverEventReportingTests.Source.Overture, ready: gadm);
+            var state = new ProcessingState();
+            var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
+            var attempts = new List<ProcessingEvent>();
+            var sinkFailure = new InvalidOperationException($"{stage} sink failed");
+            var faulted = false;
+            var reporter = new ProcessingStateEventReporter(state, e =>
+            {
+                attempts.Add(e);
+                var fault = stage switch { "activity-begin" => e is ActivityStarted, "information" => e is LogEmitted { Message: "Starting Overture administrative cache download for USA." }, "activity-end" => e is ActivityEnded, _ => e is LogEmitted { Message: "GADM administrative cache already ready for USA." } };
+                if (fault && !faulted) { faulted = true; throw sinkFailure; }
+            });
+            state.MarkPending(); Assert.IsTrue(reporter.Arm(request));
+            var batches = new Queue<List<AssetRecord>>([[new(Guid.NewGuid(), 38.9, -77.0, DateTime.UtcNow)], []]);
+            var operations = new ProcessingBackgroundService.ProcessingOperations(_ => Task.FromResult(1L), () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false, UseGadmAdministrativeAreas = gadm, PreferGadmAdministrativeAreas = gadm } }), () => Task.FromResult(new HashSet<Guid>()), (_, _, _) => Task.FromResult(batches.Dequeue()), (_, _, c, s, ct) => fixture.ResolveAsync(c.UseGadmAdministrativeAreas, s, ct), (_, _, _, _) => throw new AssertFailedException("airport lookup was not expected"), _ => Task.CompletedTask, (_, _, _) => Task.CompletedTask);
+            var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, CancellationToken.None));
+            Assert.AreSame(sinkFailure, failure); Assert.IsTrue(faulted);
+            var common = new[]
+            {
+                "RunStarted", "EligibilityDetermined:1",
+                "LogEmitted:Information:Batch 1: fetched 1 assets (total processed so far: 0).",
+                "LogEmitted:Information:Checking bundled Overture country coverage...",
+                "LogEmitted:Information:Country resolved as United States (USA)."
+            };
+            string[] expectedAttempts = stage switch
+            {
+                "activity-begin" => [.. common, "ActivityStarted:Downloading Overture administrative cache for USA..."],
+                "information" => [.. common,
+                    "ActivityStarted:Downloading Overture administrative cache for USA...",
+                    "LogEmitted:Information:Starting Overture administrative cache download for USA."],
+                "activity-end" => [.. common,
+                    "ActivityStarted:Downloading Overture administrative cache for USA...",
+                    "LogEmitted:Information:Starting Overture administrative cache download for USA.",
+                    "ActivityEnded:Downloading Overture administrative cache for USA..."],
+                _ =>
+                [
+                    "RunStarted", "EligibilityDetermined:1",
+                    "LogEmitted:Information:Batch 1: fetched 1 assets (total processed so far: 0).",
+                    "LogEmitted:Information:Checking bundled Overture country coverage...",
+                    "LogEmitted:Information:Country resolved as United States (USA).",
+                    "LogEmitted:Information:Preparing GADM administrative caches for USA...",
+                    "LogEmitted:Information:GADM administrative cache already ready for USA."
+                ]
+            };
+            AssertExactEventSequence(attempts, expectedAttempts);
+            if (stage == "activity-end")
+            {
+                var acceptedStart = attempts.OfType<ActivityStarted>().Single();
+                var attemptedEnd = attempts.OfType<ActivityEnded>().Single();
+                Assert.AreEqual(acceptedStart.ActivityId, attemptedEnd.ActivityId);
+                Assert.IsNull(state.CurrentActivity, "Abandon must locally close the accepted start after the matching end projection faults; the end is only an attempted event, not a completed pair.");
+            }
+            Assert.AreEqual(0L, state.ProcessedThisRun); Assert.AreEqual(0L, state.SkippedThisRun); Assert.AreEqual(1L, state.ErrorsThisRun); Assert.IsFalse(state.IsRunning);
+            var recovery = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Scheduled); state.MarkPending(); Assert.IsTrue(reporter.Arm(recovery));
+            await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, recovery, Operations(_ => Task.FromResult(0L)), CancellationToken.None);
+
+            var recoveryEvents = attempts.Where(processingEvent => ReferenceEquals(processingEvent.Request, recovery)).ToArray();
+            CollectionAssert.AreEqual(new[] { typeof(RunStarted), typeof(EligibilityDetermined), typeof(RunFinished) }, recoveryEvents.Select(processingEvent => processingEvent.GetType()).ToArray());
+            var terminal = recoveryEvents.OfType<RunFinished>().Single();
+            Assert.AreSame(recovery, terminal.Request);
+            Assert.AreSame(recovery, terminal.Result.Request);
+            Assert.AreEqual(ProcessingRunOutcome.Completed, terminal.Result.Outcome);
+            Assert.AreEqual(0L, terminal.Result.ProcessedCount);
+            Assert.AreEqual(0L, terminal.Result.UpdatedCount);
+            Assert.AreEqual(0L, terminal.Result.SkippedCount);
+            Assert.AreEqual(0L, terminal.Result.FailedCount);
+            Assert.AreEqual(0L, state.ProcessedThisRun);
+            Assert.AreEqual(0L, state.SkippedThisRun);
+            Assert.AreEqual(0L, state.ErrorsThisRun);
+            Assert.IsFalse(state.IsRunning);
+            Assert.IsNull(state.CurrentActivity);
+            Assert.IsNull(state.LastError);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("information")]
+    [DataRow("activity-begin")]
+    public async Task ResolverReportingAdmissionCancellation_CompletesCancelledWithoutReporterAbandonment(string admission)
+    {
+        await using var fixture = await AdministrativeAreaResolverEventReportingTests.ResolverFixture.CreateAsync(AdministrativeAreaResolverEventReportingTests.Source.Overture);
+        using var cancellation = new CancellationTokenSource();
+        var reporter = fixture.Reporter;
+        var cancelledAtAdmission = false;
+        reporter.BeforeAcceptAsync = (processingEvent, _) =>
+        {
+            var matches = admission == "information"
+                ? processingEvent is LogEmitted { Level: ProcessingLogLevel.Information, Message: "Starting Overture administrative cache download for USA." }
+                : processingEvent is ActivityStarted { Label: "Downloading Overture administrative cache for USA..." };
+            if (matches && !cancelledAtAdmission)
+            {
+                cancelledAtAdmission = true;
+                cancellation.Cancel();
+            }
+
+            return ValueTask.CompletedTask;
+        };
+
+        var state = new ProcessingState();
+        var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
+        var asset = new AssetRecord(Guid.NewGuid(), 38.9, -77.0, DateTime.UtcNow);
+        var batches = new Queue<List<AssetRecord>>([[asset], []]);
+        var operations = new ProcessingBackgroundService.ProcessingOperations(
+            _ => Task.FromResult(1L),
+            () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false } }),
+            () => Task.FromResult(new HashSet<Guid>()),
+            (_, _, _) => Task.FromResult(batches.Dequeue()),
+            (lat, lon, config, session, ct) => fixture.ResolveAsync(false, session, ct),
+            (_, _, _, _) => throw new AssertFailedException("Airport lookup was not expected."),
+            _ => Task.CompletedTask,
+            (_, _, _) => throw new AssertFailedException("Write must not be reached after admission cancellation."));
+
+        await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
+
+        Assert.IsTrue(cancelledAtAdmission);
+        Assert.IsTrue(cancellation.IsCancellationRequested);
+        var terminal = reporter.EventsFor(request).OfType<RunFinished>().Single();
+        Assert.AreEqual(ProcessingRunOutcome.Cancelled, terminal.Result.Outcome);
+        Assert.IsNull(terminal.Result.FailureMessage);
+        Assert.AreEqual(0, reporter.Attempts.OfType<ProgressChanged>().Count());
+        Assert.AreEqual(0, reporter.Attempts.OfType<LogEmitted>().Count(log => log.Level == ProcessingLogLevel.Error));
+        Assert.AreEqual(0, reporter.Attempts.OfType<LogEmitted>().Count(log => log.Message.Contains($"Asset {asset.Id} [", StringComparison.Ordinal)));
+
+        var starts = reporter.EventsFor(request).OfType<ActivityStarted>().ToArray();
+        var ends = reporter.EventsFor(request).OfType<ActivityEnded>().ToArray();
+        if (admission == "information")
+        {
+            Assert.AreEqual(1, starts.Length, "The activity start was accepted before Information admission cancelled.");
+            Assert.AreEqual(1, ends.Length, "Accepted activities must use non-cancelled cleanup.");
+            Assert.AreEqual(starts[0].ActivityId, ends[0].ActivityId);
+        }
+        else
+        {
+            Assert.AreEqual(0, starts.Length, "The activity begin was cancelled before acceptance.");
+            Assert.AreEqual(0, ends.Length, "No cleanup is needed when activity begin was not accepted.");
+        }
+    }
+
+    private sealed class CapturingEventReporter(IProcessingEventReporter inner) : IProcessingEventReporter
+    {
+        public IProcessingRunEventSession? OpenedSession { get; private set; }
+
+        public async ValueTask<IProcessingRunEventSession> OpenRunAsync(ProcessingRunRequest request, DateTimeOffset startedAtUtc, CancellationToken cancellationToken = default)
+        {
+            OpenedSession = await inner.OpenRunAsync(request, startedAtUtc, cancellationToken);
+            return OpenedSession;
+        }
+    }
+
+    private static void AssertExactEventSequence(IEnumerable<ProcessingEvent> events, params string[] expected)
+    {
+        var labelsById = new Dictionary<Guid, string>();
+        var actual = events.Select(processingEvent => processingEvent switch
+        {
+            RunStarted => "RunStarted",
+            EligibilityDetermined eligibility => $"EligibilityDetermined:{eligibility.EligibleCount}",
+            LogEmitted log => $"LogEmitted:{log.Level}:{log.Message}",
+            ActivityStarted started => DescribeStart(started, labelsById),
+            ActivityEnded ended => $"ActivityEnded:{labelsById[ended.ActivityId]}",
+            ProgressChanged progress => $"ProgressChanged:{progress.Progress.UpdatedCount}:{progress.Progress.SkippedCount}:{progress.Progress.FailedCount}",
+            RunFinished finished => $"RunFinished:{finished.Result.Outcome}:{finished.Result.UpdatedCount}:{finished.Result.SkippedCount}:{finished.Result.FailedCount}",
+            _ => processingEvent.GetType().Name
+        }).ToArray();
+        CollectionAssert.AreEqual(expected, actual, $"Expected: {string.Join(" | ", expected)}. Actual: {string.Join(" | ", actual)}");
+    }
+
+    private static string DescribeStart(ActivityStarted started, IDictionary<Guid, string> labelsById)
+    {
+        labelsById.Add(started.ActivityId, started.Label);
+        return $"ActivityStarted:{started.Label}";
     }
 
     private static ProcessingState PriorState()

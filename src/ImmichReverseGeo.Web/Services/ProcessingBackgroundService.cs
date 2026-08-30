@@ -350,7 +350,7 @@ public class ProcessingBackgroundService : BackgroundService
                 asset.Latitude,
                 asset.Longitude,
                 cfg.Processing,
-                new ProcessingResolutionProgress(state),
+                session,
                 ct);
 
             if (adminResolution is null)
@@ -429,6 +429,12 @@ public class ProcessingBackgroundService : BackgroundService
                 skipped();
             }
         }
+        catch (ProcessingEventReportingException ex)
+        {
+            ReportFailure(ex.ReporterException);
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(ex.ReporterException).Throw();
+            throw;
+        }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
             logger.LogDebug(
@@ -492,21 +498,9 @@ public class ProcessingBackgroundService : BackgroundService
         Func<Task<AppConfig>> GetConfigAsync,
         Func<Task<HashSet<Guid>>> GetSkippedAssetsAsync,
         Func<AssetCursor, int, CancellationToken, Task<List<AssetRecord>>> GetUnprocessedBatchAsync,
-        Func<double, double, ProcessingConfig, IAdministrativeAreaResolutionProgress?, CancellationToken, Task<AdministrativeAreaResolution?>> ResolveAdministrativeAreaAsync,
+        Func<double, double, ProcessingConfig, IProcessingRunEventSession, CancellationToken, Task<AdministrativeAreaResolution?>> ResolveAdministrativeAreaAsync,
         Func<double, double, string?, CancellationToken, Task<OvertureInfrastructureLookupDiagnostics>> FindNearestInfrastructureAsync,
         Func<Guid, Task> AddSkippedAssetAsync,
         Func<Guid, GeoResult, CancellationToken, Task> WriteLocationAsync);
 
-    private sealed class ProcessingResolutionProgress(ProcessingState state) : IAdministrativeAreaResolutionProgress
-    {
-        public IDisposable BeginActivity(string activity)
-        {
-            return state.BeginActivity(activity);
-        }
-
-        public void Report(string message)
-        {
-            state.AppendLog(message);
-        }
-    }
 }
