@@ -304,8 +304,9 @@ public class OvertureDivisionCacheServiceTests
             Assert.Throws<OperationCanceledException>(() => service.GetOrStartDownload("CHE", cancellation.Token));
             await source.Entered.Task;
             Assert.AreEqual(1, source.InvocationCount);
+            var (sharedTask, _) = service.GetOrStartDownload("CHE");
             source.Release();
-            await Task.Yield();
+            await sharedTask;
             Assert.AreEqual(1, source.InvocationCount);
         }
         finally { DeleteTempDir(tempDir); }

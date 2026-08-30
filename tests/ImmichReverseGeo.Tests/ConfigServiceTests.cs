@@ -19,11 +19,6 @@ public class ConfigServiceTests
         {
             Directory.Delete(_tempDir, recursive: true);
         }
-        // Clear env vars set by GetDbSettings_ReadsEnvVars
-        foreach (var key in new[] { "DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE_NAME" })
-        {
-            Environment.SetEnvironmentVariable(key, null);
-        }
     }
 
     [TestMethod]
@@ -89,20 +84,38 @@ public class ConfigServiceTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
     public void GetDbSettings_ReadsEnvVars()
     {
-        Environment.SetEnvironmentVariable("DB_HOST", "testhost");
-        Environment.SetEnvironmentVariable("DB_PORT", "5433");
-        Environment.SetEnvironmentVariable("DB_USERNAME", "testuser");
-        Environment.SetEnvironmentVariable("DB_PASSWORD", "testpass");
-        Environment.SetEnvironmentVariable("DB_DATABASE_NAME", "testdb");
+        var oldHost = Environment.GetEnvironmentVariable("DB_HOST");
+        var oldPort = Environment.GetEnvironmentVariable("DB_PORT");
+        var oldUsername = Environment.GetEnvironmentVariable("DB_USERNAME");
+        var oldPassword = Environment.GetEnvironmentVariable("DB_PASSWORD");
+        var oldDatabaseName = Environment.GetEnvironmentVariable("DB_DATABASE_NAME");
 
-        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
-        var db = svc.GetDbSettings();
+        try
+        {
+            Environment.SetEnvironmentVariable("DB_HOST", "testhost");
+            Environment.SetEnvironmentVariable("DB_PORT", "5433");
+            Environment.SetEnvironmentVariable("DB_USERNAME", "testuser");
+            Environment.SetEnvironmentVariable("DB_PASSWORD", "testpass");
+            Environment.SetEnvironmentVariable("DB_DATABASE_NAME", "testdb");
 
-        Assert.AreEqual("testhost", db.Host);
-        Assert.AreEqual(5433, db.Port);
-        Assert.AreEqual("testuser", db.Username);
-        Assert.AreEqual("testdb", db.Database);
+            var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+            var db = svc.GetDbSettings();
+
+            Assert.AreEqual("testhost", db.Host);
+            Assert.AreEqual(5433, db.Port);
+            Assert.AreEqual("testuser", db.Username);
+            Assert.AreEqual("testdb", db.Database);
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("DB_HOST", oldHost);
+            Environment.SetEnvironmentVariable("DB_PORT", oldPort);
+            Environment.SetEnvironmentVariable("DB_USERNAME", oldUsername);
+            Environment.SetEnvironmentVariable("DB_PASSWORD", oldPassword);
+            Environment.SetEnvironmentVariable("DB_DATABASE_NAME", oldDatabaseName);
+        }
     }
 }
