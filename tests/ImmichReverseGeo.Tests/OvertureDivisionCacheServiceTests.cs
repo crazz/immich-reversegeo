@@ -198,6 +198,120 @@ public class OvertureDivisionCacheServiceTests
     }
 
     [TestMethod]
+    public async Task EnsureDataAsync_ForeignOwnerCancellationAfterRemovalUsesCapturedTaskAndDoesNotJoinRetry()
+    {
+        var tempDir = CreateTempDir();
+        var source = new ControlledSource(tempDir, "overture-divisions", "division_area", "release", "test-release")
+        {
+            CancelWithOwnerToken = true
+        };
+        var service = new OvertureDivisionCacheService(NullLogger<OvertureDivisionCacheService>.Instance, tempDir, _ => "CH", (_, _) => 0, source.RunAsync);
+        try
+        {
+            using var owner = new CancellationTokenSource();
+            var (ownerTask, _) = service.GetOrStartDownload("CHE", owner.Token);
+            await source.Entered.Task;
+            var waiter = service.EnsureDataAsync("CHE");
+            owner.Cancel();
+
+            // Awaiting owner completion guarantees exact-value cleanup removed its map entry.
+            await Assert.ThrowsAsync<TaskCanceledException>(async () => await ownerTask);
+            source.CancelWithOwnerToken = false;
+            source.ResetGate();
+            var (retry, retryResult) = service.GetOrStartDownload("CHE");
+            Assert.AreEqual(OvertureDivisionEnsureResult.StartedDownload, retryResult);
+
+            // The live waiter must normalize the cancelled task it captured, not look up and join retry.
+            var unavailable = await Assert.ThrowsAsync<InvalidOperationException>(async () => await waiter);
+            Assert.IsInstanceOfType<OperationCanceledException>(unavailable.InnerException);
+            Assert.AreEqual(2, source.InvocationCount);
+
+            source.Release();
+            await retry;
+            Assert.AreEqual(2, source.InvocationCount);
+        }
+        finally { DeleteTempDir(tempDir); }
+    }
+
+    [TestMethod]
+    public async Task GetOrStartDownload_CancellationAfterExportDoesNotPublishCache()
+    {
+        var tempDir = CreateTempDir();
+        var enteredPublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var releasePublication = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var exporter = new ControlledExporter { ThrowAfterOpen = false };
+        var dbPath = Path.Combine(tempDir, "overture-divisions", "CHE.db");
+        Directory.CreateDirectory(Path.GetDirectoryName(dbPath)!);
+        exporter.Export(dbPath, "CH");
+        var publishedBytes = File.ReadAllBytes(dbPath);
+        var publishedStatus = new OvertureDivisionCacheService(
+            NullLogger<OvertureDivisionCacheService>.Instance,
+            tempDir,
+            _ => "CH").GetStatus()["CHE"];
+        var service = new OvertureDivisionCacheService(
+            NullLogger<OvertureDivisionCacheService>.Instance,
+            tempDir,
+            _ => "CH",
+            new OvertureDivisionCacheTestHooks
+            {
+                HasRowsOperation = (_, _) => false,
+                ExportOperation = (path, alpha2, _) => exporter.Export(path, alpha2),
+                BeforePublication = async _ =>
+                {
+                    enteredPublication.TrySetResult();
+                    await releasePublication.Task;
+                }
+            });
+        try
+        {
+            using var cancellation = new CancellationTokenSource();
+            var (task, _) = service.GetOrStartDownload("CHE", cancellation.Token);
+            await enteredPublication.Task;
+            cancellation.Cancel();
+            releasePublication.TrySetResult();
+
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await task);
+            CollectionAssert.AreEqual(publishedBytes, File.ReadAllBytes(dbPath));
+            var verifier = new OvertureDivisionCacheService(
+                NullLogger<OvertureDivisionCacheService>.Instance,
+                tempDir,
+                _ => "CH");
+            Assert.IsTrue(verifier.HasData("CHE"));
+            Assert.AreEqual(publishedStatus, verifier.GetStatus()["CHE"]);
+            Assert.AreEqual(0, Directory.GetFiles(Path.GetDirectoryName(dbPath)!, "CHE.*.tmp").Length);
+        }
+        finally { DeleteTempDir(tempDir); }
+    }
+
+    [TestMethod]
+    public async Task GetOrStartDownload_CancellationDuringTaskAcquisitionDoesNotReturnTuple()
+    {
+        var tempDir = CreateTempDir();
+        using var cancellation = new CancellationTokenSource();
+        var source = new ControlledSource(tempDir, "overture-divisions", "division_area", "release", "test-release");
+        try
+        {
+            var service = new OvertureDivisionCacheService(
+                NullLogger<OvertureDivisionCacheService>.Instance,
+                tempDir,
+                _ => "CH",
+                new OvertureDivisionCacheTestHooks
+                {
+                    SourceOperation = source.RunAsync,
+                    AfterInFlightTaskAcquired = cancellation.Cancel
+                });
+
+            Assert.Throws<OperationCanceledException>(() => service.GetOrStartDownload("CHE", cancellation.Token));
+            await source.Entered.Task;
+            Assert.AreEqual(1, source.InvocationCount);
+            source.Release();
+            await Task.Yield();
+            Assert.AreEqual(1, source.InvocationCount);
+        }
+        finally { DeleteTempDir(tempDir); }
+    }
+
+    [TestMethod]
     public async Task GetOrStartDownload_ConcurrentCallersShareOneTaskAndReadyCacheSkipsSource()
     {
         var tempDir = CreateTempDir();
@@ -307,7 +421,7 @@ public class OvertureDivisionCacheServiceTests
             OwnerToken = ct;
             Entered.TrySetResult();
             if (Fault) { throw new InvalidOperationException("controlled preflight failure"); }
-            if (CancelWithOwnerToken) { await Task.Delay(Timeout.InfiniteTimeSpan, ct); }
+            if (CancelWithOwnerToken) { await _release.Task.WaitAsync(ct); }
             await _release.Task;
             Publish(iso3);
         }

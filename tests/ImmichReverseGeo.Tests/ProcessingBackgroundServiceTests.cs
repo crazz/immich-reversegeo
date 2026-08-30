@@ -242,6 +242,99 @@ public class ProcessingBackgroundServiceTests
         AssertTerminalSuccess(fixture.State);
     }
 
+    [TestMethod]
+    public async Task RunOnceAsync_ActiveGeodataCancellation_UsesRunCancellationWithoutAssetSideEffects()
+    {
+        var state = new ProcessingState();
+        using var cts = new CancellationTokenSource();
+        var skipped = 0;
+        var writes = 0;
+        var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
+        var operations = new ProcessingBackgroundService.ProcessingOperations(
+            _ => Task.FromResult(1L),
+            () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0 } }),
+            () => Task.FromResult(new HashSet<Guid>()),
+            (_, _, _) => Task.FromResult(new List<AssetRecord> { asset }),
+            (_, _, _, _, _) =>
+            {
+                cts.Cancel();
+                throw new OperationCanceledException(cts.Token);
+            },
+            (_, _, _, _) => throw UnexpectedOperation("airport lookup"),
+            _ =>
+            {
+                skipped++;
+                return Task.CompletedTask;
+            },
+            (_, _, _) =>
+            {
+                writes++;
+                return Task.CompletedTask;
+            });
+
+        await ProcessingBackgroundService.RunOnceAsync(
+            NullLogger<ProcessingBackgroundService>.Instance,
+            state,
+            operations,
+            cts.Token);
+
+        Assert.AreEqual(0, skipped);
+        Assert.AreEqual(0, writes);
+        Assert.AreEqual(0, state.ErrorsThisRun);
+        Assert.AreEqual(0, state.SkippedThisRun);
+        AssertLogOrder(state, "Run cancelled.", "Run complete. Processed=0 Skipped=0 Errors=0");
+    }
+
+    [TestMethod]
+    public async Task RunOnceAsync_UnrelatedGeodataCancellation_IsAnAssetFailureNotRunCancellation()
+    {
+        var state = new ProcessingState();
+        var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
+        var operations = new ProcessingBackgroundService.ProcessingOperations(
+            _ => Task.FromResult(1L),
+            () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0 } }),
+            () => Task.FromResult(new HashSet<Guid>()),
+            (cursor, _, _) => Task.FromResult(cursor == AssetCursor.Initial ? new List<AssetRecord> { asset } : []),
+            (_, _, _, _, _) => throw new OperationCanceledException("foreign cancellation"),
+            (_, _, _, _) => throw UnexpectedOperation("airport lookup"),
+            _ => throw UnexpectedOperation("skipped-record write"),
+            (_, _, _) => throw UnexpectedOperation("location write"));
+
+        await ProcessingBackgroundService.RunOnceAsync(
+            NullLogger<ProcessingBackgroundService>.Instance,
+            state,
+            operations,
+            CancellationToken.None);
+
+        Assert.AreEqual(1, state.ErrorsThisRun);
+        Assert.AreEqual(0, state.SkippedThisRun);
+        Assert.IsFalse(state.GetRecentLog().Any(line => line.EndsWith("Run cancelled.", StringComparison.Ordinal)));
+    }
+
+    [TestMethod]
+    public async Task RunOnceAsync_GeodataOutOfMemoryEscapesAssetAndRunBoundaries()
+    {
+        var state = new ProcessingState();
+        var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
+        var operations = new ProcessingBackgroundService.ProcessingOperations(
+            _ => Task.FromResult(1L),
+            () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0 } }),
+            () => Task.FromResult(new HashSet<Guid>()),
+            (cursor, _, _) => Task.FromResult(cursor == AssetCursor.Initial ? new List<AssetRecord> { asset } : []),
+            (_, _, _, _, _) => throw new OutOfMemoryException("controlled geodata memory failure"),
+            (_, _, _, _) => throw UnexpectedOperation("airport lookup"),
+            _ => throw UnexpectedOperation("skipped-record write"),
+            (_, _, _) => throw UnexpectedOperation("location write"));
+
+        await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => ProcessingBackgroundService.RunOnceAsync(
+            NullLogger<ProcessingBackgroundService>.Instance, state, operations, CancellationToken.None));
+
+        Assert.AreEqual(0, state.ErrorsThisRun);
+        Assert.AreEqual(0, state.SkippedThisRun);
+        Assert.IsFalse(state.IsRunning);
+        Assert.IsTrue(state.GetRecentLog().Any(line => line.EndsWith("Run complete. Processed=0 Skipped=0 Errors=0", StringComparison.Ordinal)));
+    }
+
     private static async Task<PassPlan> StartActiveManualPassAsync(
         ProcessingFixture fixture,
         ProcessingBackgroundService service,

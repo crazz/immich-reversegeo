@@ -44,6 +44,7 @@ public class AdministrativeAreaResolverService
         IAdministrativeAreaResolutionProgress? progress = null,
         CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         progress?.Report("Checking bundled Overture country coverage...");
         var countryLookup = await _overtureDivisions.FindBundledCountryAsync(lat, lon, ct);
         if (countryLookup.Status == BundledCountryLookupStatus.SpatialNoMatch)
@@ -81,6 +82,7 @@ public class AdministrativeAreaResolverService
             overtureResult ??= await ResolveOvertureAsync(lat, lon, alpha2, iso3, cityResolverProfile, progress, ct);
         }
 
+        ct.ThrowIfCancellationRequested();
         var finalState = SelectPreferredValue(
             config,
             gadmResult?.State,
@@ -90,6 +92,7 @@ public class AdministrativeAreaResolverService
             gadmResult?.City,
             overtureResult?.City);
 
+        ct.ThrowIfCancellationRequested();
         return new AdministrativeAreaResolution(
             iso3,
             alpha2,
@@ -117,7 +120,14 @@ public class AdministrativeAreaResolverService
         using (BeginCacheActivity(progress, GetOvertureCacheActivityMessage(iso3, ensureResult)))
         {
             ReportCacheEvent(progress, GetOvertureCacheLogMessage(iso3, ensureResult));
-            await downloadTask.WaitAsync(ct);
+            try
+            {
+                await downloadTask.WaitAsync(ct);
+            }
+            catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+            {
+                throw new InvalidOperationException($"Overture division source became unavailable for {iso3}.", ex);
+            }
         }
 
         ReportCacheEvent(progress, $"Overture administrative cache ready for {iso3}.");
@@ -144,30 +154,31 @@ public class AdministrativeAreaResolverService
             : [iso3];
 
         progress?.Report($"Preparing GADM administrative caches for {string.Join(", ", candidateCodes)}...");
-        var readyCodes = new List<string>();
-        foreach (var code in candidateCodes)
-        {
-            try
+        var readyCodes = await AdministrativeAreaResolverCacheHelper.PrepareGadmCachesAsync(
+            candidateCodes,
+            ct,
+            async (code, token) =>
             {
-                var (downloadTask, ensureResult) = _gadmCache.GetOrStartDownload(code, ct);
+                var (downloadTask, ensureResult) = _gadmCache.GetOrStartDownload(code, token);
                 using (BeginCacheActivity(progress, GetGadmCacheActivityMessage(code, ensureResult)))
                 {
                     ReportCacheEvent(progress, GetGadmCacheLogMessage(code, ensureResult));
-                    await downloadTask.WaitAsync(ct);
+                    await downloadTask.WaitAsync(token);
                 }
 
-                if (_gadmCache.HasData(code))
+                if (!_gadmCache.HasData(code))
                 {
-                    readyCodes.Add(code);
-                    ReportCacheEvent(progress, $"GADM administrative cache ready for {code}.");
+                    return false;
                 }
-            }
-            catch (Exception ex)
+
+                ReportCacheEvent(progress, $"GADM administrative cache ready for {code}.");
+                return true;
+            },
+            (code, ex) =>
             {
                 _logger.LogWarning(ex, "GADM cache unavailable for {ISO3}", code);
                 ReportCacheEvent(progress, $"GADM administrative cache unavailable for {code}: {ex.Message}");
-            }
-        }
+            });
 
         if (readyCodes.Count == 0)
         {

@@ -17,7 +17,13 @@ public class GadmDivisionCacheService
     private readonly string _dataDir;
     private readonly Func<string, CancellationToken, Task> _sourceOperation;
     private readonly Func<string, string, CancellationToken, Task> _downloadOperation;
-    private readonly Func<string, string, string, long> _exportOperation;
+    private readonly Func<string, string, string, CancellationToken, long> _exportOperation;
+    private readonly Func<CancellationToken, Task> _beforePublicationOperation;
+    private readonly Func<CancellationToken, Task> _afterPublicationOperation;
+    private readonly Func<string, GadmDivisionStatus> _statusOperation;
+    private readonly Func<string, string, bool> _hasRowsOperation;
+    private readonly Func<string, bool> _validationOperation;
+    private readonly Action<string, string> _deleteFileOperation;
     private readonly ConcurrentDictionary<string, Lazy<Task>> _inflightDownloads = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
 
@@ -28,6 +34,12 @@ public class GadmDivisionCacheService
         _sourceOperation = DownloadDataInternalAsync;
         _downloadOperation = DownloadFileAsync;
         _exportOperation = GadmCacheExporter.ExportGeoPackageToSqlite;
+        _beforePublicationOperation = static _ => Task.CompletedTask;
+        _afterPublicationOperation = static _ => Task.CompletedTask;
+        _statusOperation = ReadStatus;
+        _hasRowsOperation = HasRows;
+        _validationOperation = IsValidDb;
+        _deleteFileOperation = DeleteFileAndTemps;
     }
 
     public GadmDivisionCacheService(ILogger<GadmDivisionCacheService> logger, string dataDir)
@@ -37,6 +49,12 @@ public class GadmDivisionCacheService
         _sourceOperation = DownloadDataInternalAsync;
         _downloadOperation = DownloadFileAsync;
         _exportOperation = GadmCacheExporter.ExportGeoPackageToSqlite;
+        _beforePublicationOperation = static _ => Task.CompletedTask;
+        _afterPublicationOperation = static _ => Task.CompletedTask;
+        _statusOperation = ReadStatus;
+        _hasRowsOperation = HasRows;
+        _validationOperation = IsValidDb;
+        _deleteFileOperation = DeleteFileAndTemps;
     }
 
     internal GadmDivisionCacheService(
@@ -53,10 +71,88 @@ public class GadmDivisionCacheService
         string dataDir,
         Func<string, string, CancellationToken, Task> downloadOperation,
         Func<string, string, string, long> exportOperation)
+        : this(logger, dataDir, downloadOperation,
+            (geoPackagePath, outputPath, iso3, _) => exportOperation(geoPackagePath, outputPath, iso3))
+    {
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string, CancellationToken, Task> downloadOperation,
+        Func<string, string, string, CancellationToken, long> exportOperation)
         : this(logger, dataDir)
     {
         _downloadOperation = downloadOperation ?? throw new ArgumentNullException(nameof(downloadOperation));
         _exportOperation = exportOperation ?? throw new ArgumentNullException(nameof(exportOperation));
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string, CancellationToken, Task> downloadOperation,
+        Func<string, string, string, long> exportOperation,
+        Func<CancellationToken, Task> beforePublicationOperation)
+        : this(logger, dataDir, downloadOperation, exportOperation)
+    {
+        _beforePublicationOperation = beforePublicationOperation ?? throw new ArgumentNullException(nameof(beforePublicationOperation));
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string, string, CancellationToken, long> exportOperation,
+        Func<CancellationToken, Task> beforePublicationOperation,
+        Func<CancellationToken, Task> afterPublicationOperation)
+        : this(logger, dataDir, static (_, _, _) => Task.CompletedTask, exportOperation)
+    {
+        _beforePublicationOperation = beforePublicationOperation ?? throw new ArgumentNullException(nameof(beforePublicationOperation));
+        _afterPublicationOperation = afterPublicationOperation ?? throw new ArgumentNullException(nameof(afterPublicationOperation));
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string, CancellationToken, Task> downloadOperation,
+        Func<string, string, string, CancellationToken, long> exportOperation,
+        Func<CancellationToken, Task> beforePublicationOperation,
+        Func<CancellationToken, Task> afterPublicationOperation)
+        : this(logger, dataDir, downloadOperation, exportOperation)
+    {
+        _beforePublicationOperation = beforePublicationOperation ?? throw new ArgumentNullException(nameof(beforePublicationOperation));
+        _afterPublicationOperation = afterPublicationOperation ?? throw new ArgumentNullException(nameof(afterPublicationOperation));
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, GadmDivisionStatus> statusOperation,
+        Func<string, string, bool> hasRowsOperation,
+        Func<string, bool> validationOperation,
+        Action<string, string> deleteFileOperation)
+        : this(logger, dataDir)
+    {
+        _statusOperation = statusOperation ?? throw new ArgumentNullException(nameof(statusOperation));
+        _hasRowsOperation = hasRowsOperation ?? throw new ArgumentNullException(nameof(hasRowsOperation));
+        _validationOperation = validationOperation ?? throw new ArgumentNullException(nameof(validationOperation));
+        _deleteFileOperation = deleteFileOperation ?? throw new ArgumentNullException(nameof(deleteFileOperation));
+    }
+
+    internal GadmDivisionCacheService(
+        ILogger<GadmDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string, CancellationToken, Task> downloadOperation,
+        Func<string, string, string, CancellationToken, long> exportOperation,
+        Func<string, GadmDivisionStatus> statusOperation,
+        Func<string, string, bool> hasRowsOperation,
+        Func<string, bool> validationOperation,
+        Action<string, string> deleteFileOperation)
+        : this(logger, dataDir, downloadOperation, exportOperation)
+    {
+        _statusOperation = statusOperation ?? throw new ArgumentNullException(nameof(statusOperation));
+        _hasRowsOperation = hasRowsOperation ?? throw new ArgumentNullException(nameof(hasRowsOperation));
+        _validationOperation = validationOperation ?? throw new ArgumentNullException(nameof(validationOperation));
+        _deleteFileOperation = deleteFileOperation ?? throw new ArgumentNullException(nameof(deleteFileOperation));
     }
 
     public Dictionary<string, GadmDivisionStatus> GetStatus()
@@ -73,19 +169,16 @@ public class GadmDivisionCacheService
             var iso3 = Path.GetFileNameWithoutExtension(file);
             try
             {
-                using var conn = new SqliteConnection($"Data Source={file};Pooling=false");
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT COUNT(*) FROM gadm_area";
-                var count = (long)cmd.ExecuteScalar()!;
-                var downloadedAt = ReadMetaTimestamp(conn, "downloadedAt");
-                var version = ReadMetaValue(conn, "version");
-                var fileSizeBytes = new FileInfo(file).Length;
-                result[iso3] = new GadmDivisionStatus(count, downloadedAt, version, fileSizeBytes);
-                if (count > 0)
+                var status = _statusOperation(file);
+                result[iso3] = status;
+                if (status.RowCount > 0)
                 {
                     _readyCaches[iso3] = 0;
                 }
+            }
+            catch (OutOfMemoryException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -109,7 +202,7 @@ public class GadmDivisionCacheService
             return true;
         }
 
-        var hasRows = HasRows(GetDbPath(iso3), "gadm_area");
+        var hasRows = _hasRowsOperation(GetDbPath(iso3), "gadm_area");
         if (hasRows)
         {
             _readyCaches[iso3] = 0;
@@ -121,13 +214,17 @@ public class GadmDivisionCacheService
     public void DeleteFile(string iso3)
     {
         _readyCaches.TryRemove(iso3, out _);
-        DeleteFileAndTemps(GetDbPath(iso3), iso3);
+        _deleteFileOperation(GetDbPath(iso3), iso3);
     }
 
     public (Task Task, GadmDivisionEnsureResult Result) GetOrStartDownload(string iso3, CancellationToken ct = default)
     {
-        if (HasData(iso3))
+        ct.ThrowIfCancellationRequested();
+        var hasData = HasData(iso3);
+        ct.ThrowIfCancellationRequested();
+        if (hasData)
         {
+            ct.ThrowIfCancellationRequested();
             return (Task.CompletedTask, GadmDivisionEnsureResult.AlreadyReady);
         }
 
@@ -141,6 +238,7 @@ public class GadmDivisionCacheService
             ? GadmDivisionEnsureResult.StartedDownload
             : GadmDivisionEnsureResult.AwaitedExistingDownload;
 
+        ct.ThrowIfCancellationRequested();
         return (winningLazy.Value, result);
     }
 
@@ -148,8 +246,16 @@ public class GadmDivisionCacheService
     {
         var (downloadTask, result) = GetOrStartDownload(iso3, ct);
 
-        await downloadTask.WaitAsync(ct);
-        return result;
+        try
+        {
+            await downloadTask.WaitAsync(ct);
+            ct.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"GADM cache source operation was cancelled for {iso3}.");
+        }
     }
 
     private async Task RunSourceOperationAsync(string iso3, CancellationToken ct, Lazy<Task> lazy)
@@ -172,12 +278,17 @@ public class GadmDivisionCacheService
 
     private async Task DownloadDataInternalAsync(string iso3, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var dbPath = GetDbPath(iso3);
-        if (HasData(iso3))
+        var hasData = HasData(iso3);
+        ct.ThrowIfCancellationRequested();
+        if (hasData)
         {
+            ct.ThrowIfCancellationRequested();
             return;
         }
 
+        ct.ThrowIfCancellationRequested();
         var gadmCode = GadmCountryCodeMapper.ToGadmCode(iso3);
 
         var dir = Path.GetDirectoryName(dbPath)!;
@@ -197,38 +308,58 @@ public class GadmDivisionCacheService
 
         try
         {
+            ct.ThrowIfCancellationRequested();
             await _downloadOperation(GadmDivisionsLogic.BuildCountryGeoPackageUrl(gadmCode), tmpDownloadPath, ct);
-            var rowCount = await Task.Run(() => _exportOperation(tmpDownloadPath, tmpDbPath, iso3), ct);
+            ct.ThrowIfCancellationRequested();
+            var rowCount = await Task.Run(() => _exportOperation(tmpDownloadPath, tmpDbPath, iso3, ct), ct);
+            ct.ThrowIfCancellationRequested();
             if (rowCount == 0)
             {
                 throw new InvalidOperationException($"No GADM rows were downloaded for {iso3}.");
             }
 
-            if (!IsValidDb(tmpDbPath))
+            if (!_validationOperation(tmpDbPath))
             {
                 throw new InvalidOperationException(
                     $"GADM division download for {iso3} produced an invalid SQLite file at {tmpDbPath}");
             }
 
             SqliteConnection.ClearAllPools();
+            await _beforePublicationOperation(ct);
+            ct.ThrowIfCancellationRequested();
             File.Move(tmpDbPath, dbPath, overwrite: true);
+            await _afterPublicationOperation(ct);
+            ct.ThrowIfCancellationRequested();
             _readyCaches[iso3] = 0;
             _logger.LogInformation("GADM division download complete for {ISO3} via {GadmCode}: {Rows} areas", iso3, gadmCode, rowCount);
         }
         catch
         {
-            TryDelete(tmpDbPath);
+            TryDeleteAfterFailure(tmpDbPath);
             throw;
         }
         finally
         {
-            TryDelete(tmpDownloadPath);
+            TryDeleteAfterFailure(tmpDownloadPath);
         }
     }
 
     private string GetDbPath(string iso3)
     {
         return Path.Combine(_dataDir, "gadm-divisions", $"{iso3}.db");
+    }
+
+    private static GadmDivisionStatus ReadStatus(string file)
+    {
+        using var conn = new SqliteConnection($"Data Source={file};Pooling=false");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM gadm_area";
+        var count = (long)cmd.ExecuteScalar()!;
+        var downloadedAt = ReadMetaTimestamp(conn, "downloadedAt");
+        var version = ReadMetaValue(conn, "version");
+        var fileSizeBytes = new FileInfo(file).Length;
+        return new GadmDivisionStatus(count, downloadedAt, version, fileSizeBytes);
     }
 
     private static bool HasRows(string path, string tableName)
@@ -245,6 +376,10 @@ public class GadmDivisionCacheService
             using var cmd = conn.CreateCommand();
             cmd.CommandText = $"SELECT COUNT(*) FROM {tableName}";
             return (long)cmd.ExecuteScalar()! > 0;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -266,6 +401,10 @@ public class GadmDivisionCacheService
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT value FROM _meta WHERE key = 'downloadedAt'";
             return cmd.ExecuteScalar() is not null;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -307,6 +446,17 @@ public class GadmDivisionCacheService
         }
     }
 
+    private static void TryDeleteAfterFailure(string path)
+    {
+        try
+        {
+            TryDelete(path);
+        }
+        catch
+        {
+        }
+    }
+
     private static void TryDelete(string path)
     {
         try
@@ -315,6 +465,10 @@ public class GadmDivisionCacheService
             {
                 File.Delete(path);
             }
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {

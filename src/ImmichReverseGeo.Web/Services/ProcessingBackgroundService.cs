@@ -217,7 +217,14 @@ public class ProcessingBackgroundService : BackgroundService
                 }
             }
         }
-        catch (OperationCanceledException) { state.AppendLog("Run cancelled."); }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            state.AppendLog("Run cancelled.");
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
         catch (Exception ex)
         {
             logger.LogError(ex, "Fatal error during processing run");
@@ -328,6 +335,11 @@ public class ProcessingBackgroundService : BackgroundService
                 "Processing cancelled at step={Step} for asset {AssetId}",
                 step,
                 asset.Id);
+            throw;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch (Exception ex)
         {

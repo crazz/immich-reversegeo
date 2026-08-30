@@ -501,17 +501,26 @@
         return direction.ToUpperInvariant() is "S" or "W" ? -value : value;
     }
 
-    private async Task RunLookup()
+    private Task RunLookup()
+    {
+        return RunLookupAsync(RunLookupCore, StateHasChanged);
+    }
+
+    internal async Task RunLookupAsync(Func<Task> operation, Action? stateHasChanged = null)
     {
         _error = null;
         _result = null;
         _running = true;
         _lookupStatus = "Preparing lookup...";
-        StateHasChanged();
+        stateHasChanged?.Invoke();
 
         try
         {
-            await RunLookupCore();
+            await LookupRunExceptionHelper.ExecuteAsync(operation);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -690,7 +699,7 @@
 
     private async Task EnsureDivisionCacheAsync(LookupResult r)
     {
-        try
+        var result = await LookupCacheHelper.TryEnsureAsync(async () =>
         {
             var (downloadTask, ensureResult) = OvertureCache.GetOrStartDownload(r.Iso3!);
             await UpdateLookupStatusAsync(ensureResult switch
@@ -700,13 +709,17 @@
                 _ => $"Overture administrative cache already ready for {r.Iso3}."
             });
             await downloadTask;
-            r.OvertureDivisionCacheReady = OvertureCache.HasData(r.Iso3!);
-            r.Trace.Add($"Overture division cache ready for {r.Iso3}");
-        }
-        catch (Exception ex)
+            return OvertureCache.HasData(r.Iso3!);
+        });
+
+        if (!result.IsAvailable)
         {
-            r.Trace.Add($"Overture division cache unavailable: {ex.Message}");
+            r.Trace.Add($"Overture division cache unavailable: {result.Error!.Message}");
+            return;
         }
+
+        r.OvertureDivisionCacheReady = result.Value;
+        r.Trace.Add($"Overture division cache ready for {r.Iso3}");
     }
 
     private async Task EnsureGadmCacheAsync(LookupResult r, IReadOnlyList<string> candidateCodes)
@@ -716,7 +729,7 @@
             return;
         }
 
-        try
+        var result = await LookupCacheHelper.TryEnsureAsync(async () =>
         {
             var readyCodes = new List<string>();
             foreach (var iso3 in candidateCodes)
@@ -735,15 +748,19 @@
                 }
             }
 
-            r.GadmDivisionCacheReady = readyCodes.Count > 0;
-            r.Trace.Add(readyCodes.Count > 0
-                ? $"GADM division cache ready for {string.Join(", ", readyCodes)}"
-                : "GADM division cache unavailable.");
-        }
-        catch (Exception ex)
+            return readyCodes;
+        });
+
+        if (!result.IsAvailable)
         {
-            r.Trace.Add($"GADM division cache unavailable: {ex.Message}");
+            r.Trace.Add($"GADM division cache unavailable: {result.Error!.Message}");
+            return;
         }
+
+        r.GadmDivisionCacheReady = result.Value!.Count > 0;
+        r.Trace.Add(result.Value.Count > 0
+            ? $"GADM division cache ready for {string.Join(", ", result.Value)}"
+            : "GADM division cache unavailable.");
     }
 
     private Task UpdateLookupStatusAsync(string status)

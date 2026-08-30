@@ -303,7 +303,10 @@ public static class OverturePlacesLogic
         };
     }
 
-    public static IReadOnlyList<string> ParseSources(string? json)
+    public static IReadOnlyList<string> ParseSources(string? json) =>
+        ParseSources(json, static value => JsonDocument.Parse(value));
+
+    internal static IReadOnlyList<string> ParseSources(string? json, Func<string, JsonDocument> parseOperation)
     {
         if (string.IsNullOrWhiteSpace(json))
         {
@@ -312,7 +315,7 @@ public static class OverturePlacesLogic
 
         try
         {
-            using var doc = JsonDocument.Parse(json);
+            using var doc = parseOperation(json);
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
             {
                 return [];
@@ -341,7 +344,11 @@ public static class OverturePlacesLogic
 
             return results.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
         }
-        catch
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch (Exception)
         {
             return [];
         }

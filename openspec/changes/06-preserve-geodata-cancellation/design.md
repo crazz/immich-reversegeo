@@ -70,4 +70,4 @@ Alternative: trigger failures via corrupt external services or memory pressure. 
 2. Add failing deterministic Web, Overture, and GADM taxonomy/checkpoint tests before changing catches.
 3. Correct processing/resolver classification, then Overture boundaries, then GADM boundaries, preserving ordinary diagnostic regression coverage in each step.
 4. Add post-native/pre-publication checkpoints and malformed-source/candidate cases.
-5. Run focused projects with default exclusions, then the repository default suite. No data migration, configuration change, or rollback procedure beyond reverting this behavior-only commit is required.
+5. Run focused projects with default exclusions, then the repository default suite. For integration-covered paths, run bounded source-specific live checks; record any failing positive assertion as failing, and classify whether it is caused by this change before using it as a change-06 completion gate. A demonstrated pre-existing query/upstream failure must be tracked for correction without weakening the live assertion. No data migration, configuration change, or rollback procedure beyond reverting this behavior-only commit is required.

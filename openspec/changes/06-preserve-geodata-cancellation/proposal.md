@@ -9,7 +9,7 @@ Cancellation must remain a terminal control signal before geodata work is moved 
 - Distinguish caller cancellation from unrelated `OperationCanceledException`; only the former reaches the current run's cancellation path, while the latter remains a failure.
 - Prevent `OutOfMemoryException` from being normalized by active geodata geometry, lookup, release, cache probe/validation/status, metadata, resolver, or UI-helper catch boundaries.
 - Preserve intended non-critical diagnostic behavior: ordinary network/database/I/O failures retain current source diagnostics and territory/release/cache fallbacks, malformed Overture candidate geometry remains a local non-match only at tolerant containment sites, malformed GADM cached geometry retains existing bounding-box fallback/ranking, and malformed source artifacts still fail loading or cache construction.
-- Add deterministic controlled-throw and token-checkpoint coverage without real network timing, sleeps, native interruption, or real memory exhaustion.
+- Add cooperative cancellation checkpoints before and after synchronous native regions, between practical managed candidates, rows, and layers—including GADM export loops—and immediately before cache publication or success return, with deterministic controlled-throw coverage that does not rely on live network timing, sleeps, native interruption, or real memory exhaustion.
 
 ## Capabilities
 
@@ -24,4 +24,5 @@ Cancellation must remain a terminal control signal before geodata work is moved 
 - Active runtime only: `ProcessingBackgroundService`, `AdministrativeAreaResolverService`, Lookup cache helpers, Overture and GADM lookup/cache/export/geometry paths, and their Web/Overture/GADM test projects; `tests/ImmichReverseGeo.Tests/ProcessingBackgroundServiceTests.cs` owns the processing cancellation cases; `ImmichReverseGeo.Legacy` is excluded.
 - Reuses the deterministic exporter/source-operation seams and exact-value in-flight cleanup established by blocks 4–5; those dependencies remain unchanged.
 - No API, configuration, storage-schema, source-ordering, or UI workflow change. Lookup and GeoBoundaries currently supply non-cancellable/default tokens; adding component-owned cancellation is outside this block.
-- Cancellation is cooperative: synchronous DuckDB/SQLite, filesystem, and NetTopologySuite work already executing cannot be preempted.
+- Cancellation is cooperative: synchronous DuckDB/SQLite, filesystem, and NetTopologySuite work already executing cannot be preempted. Managed loops must still observe cancellation at their next practical row, layer, or candidate boundary.
+- Change-06 acceptance uses focused and default deterministic suites with explicit `Integration` and `Performance` exclusions. When an integration-covered path is touched without changing its query semantics, bounded live checks are still executed and their assertions remain authoritative evidence, but a demonstrated pre-existing upstream/query failure is dispositioned and tracked separately rather than silently waived or treated as a change-06 cancellation regression.

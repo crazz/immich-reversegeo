@@ -16,8 +16,15 @@ public class OvertureDivisionCacheService
     private readonly ILogger<OvertureDivisionCacheService> _logger;
     private readonly string _dataDir;
     private readonly Func<string, string?> _iso3ToAlpha2;
-    private readonly Func<string, string, long> _exportOperation;
+    private readonly Func<string, string, CancellationToken, long> _exportOperation;
     private readonly Func<string, CancellationToken, Task> _sourceOperation;
+    private readonly Func<CancellationToken, Task> _beforePublication;
+    private readonly Func<string, OvertureDivisionStatus> _statusReader;
+    private readonly Func<string, string, bool> _hasRowsOperation;
+    private readonly Func<string, bool> _validationOperation;
+    private readonly Action<string, string> _deletionOperation;
+    private readonly Func<string?> _releaseDiscovery;
+    private readonly Action _afterInFlightTaskAcquired;
     private readonly ConcurrentDictionary<string, Lazy<Task>> _inflightDownloads = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
 
@@ -31,6 +38,13 @@ public class OvertureDivisionCacheService
         _iso3ToAlpha2 = iso3ToAlpha2;
         _exportOperation = ExportOvertureDivisions;
         _sourceOperation = DownloadDataInternalAsync;
+        _beforePublication = _ => Task.CompletedTask;
+        _statusReader = ReadStatus;
+        _hasRowsOperation = HasRows;
+        _validationOperation = IsValidDb;
+        _deletionOperation = DeleteFileAndTemps;
+        _releaseDiscovery = DiscoverLatestOvertureReleaseForCache;
+        _afterInFlightTaskAcquired = static () => { };
     }
 
     public OvertureDivisionCacheService(ILogger<OvertureDivisionCacheService> logger, string dataDir, Func<string, string?> iso3ToAlpha2)
@@ -40,6 +54,13 @@ public class OvertureDivisionCacheService
         _iso3ToAlpha2 = iso3ToAlpha2;
         _exportOperation = ExportOvertureDivisions;
         _sourceOperation = DownloadDataInternalAsync;
+        _beforePublication = _ => Task.CompletedTask;
+        _statusReader = ReadStatus;
+        _hasRowsOperation = HasRows;
+        _validationOperation = IsValidDb;
+        _deletionOperation = DeleteFileAndTemps;
+        _releaseDiscovery = DiscoverLatestOvertureReleaseForCache;
+        _afterInFlightTaskAcquired = static () => { };
     }
 
     internal OvertureDivisionCacheService(
@@ -49,7 +70,8 @@ public class OvertureDivisionCacheService
         Func<string, string, long> exportOperation)
         : this(logger, dataDir, iso3ToAlpha2)
     {
-        _exportOperation = exportOperation ?? throw new ArgumentNullException(nameof(exportOperation));
+        ArgumentNullException.ThrowIfNull(exportOperation);
+        _exportOperation = (path, alpha2, _) => exportOperation(path, alpha2);
     }
 
     internal OvertureDivisionCacheService(
@@ -61,6 +83,39 @@ public class OvertureDivisionCacheService
         : this(logger, dataDir, iso3ToAlpha2, exportOperation)
     {
         _sourceOperation = sourceOperation ?? throw new ArgumentNullException(nameof(sourceOperation));
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        Func<string, string, long> exportOperation,
+        Func<CancellationToken, Task> beforePublication)
+        : this(logger, dataDir, iso3ToAlpha2, exportOperation)
+    {
+        _beforePublication = beforePublication ?? throw new ArgumentNullException(nameof(beforePublication));
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        OvertureDivisionCacheTestHooks hooks)
+        : this(logger, dataDir, iso3ToAlpha2)
+    {
+        if (hooks.ExportOperation is not null)
+        {
+            _exportOperation = hooks.ExportOperation;
+        }
+
+        _sourceOperation = hooks.SourceOperation ?? _sourceOperation;
+        _beforePublication = hooks.BeforePublication ?? _beforePublication;
+        _statusReader = hooks.StatusReader ?? _statusReader;
+        _hasRowsOperation = hooks.HasRowsOperation ?? _hasRowsOperation;
+        _validationOperation = hooks.ValidationOperation ?? _validationOperation;
+        _deletionOperation = hooks.DeletionOperation ?? _deletionOperation;
+        _releaseDiscovery = hooks.ReleaseDiscovery ?? _releaseDiscovery;
+        _afterInFlightTaskAcquired = hooks.AfterInFlightTaskAcquired ?? _afterInFlightTaskAcquired;
     }
 
     public Dictionary<string, OvertureDivisionStatus> GetStatus()
@@ -77,19 +132,16 @@ public class OvertureDivisionCacheService
             var iso3 = Path.GetFileNameWithoutExtension(file);
             try
             {
-                using var conn = new SqliteConnection($"Data Source={file};Pooling=false");
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT COUNT(*) FROM division_area";
-                var count = (long)cmd.ExecuteScalar()!;
-                var downloadedAt = ReadMetaTimestamp(conn, "downloadedAt");
-                var release = ReadMetaValue(conn, "release");
-                var fileSizeBytes = new FileInfo(file).Length;
-                result[iso3] = new OvertureDivisionStatus(count, downloadedAt, release, fileSizeBytes);
-                if (count > 0)
+                var status = _statusReader(file);
+                result[iso3] = status;
+                if (status.RowCount > 0)
                 {
                     _readyCaches[iso3] = 0;
                 }
+            }
+            catch (OutOfMemoryException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -113,7 +165,7 @@ public class OvertureDivisionCacheService
             return true;
         }
 
-        var hasRows = HasRows(GetDbPath(iso3), "division_area");
+        var hasRows = RunHasRowsOperation(GetDbPath(iso3), "division_area");
         if (hasRows)
         {
             _readyCaches[iso3] = 0;
@@ -125,13 +177,15 @@ public class OvertureDivisionCacheService
     public void DeleteFile(string iso3)
     {
         _readyCaches.TryRemove(iso3, out _);
-        DeleteFileAndTemps(GetDbPath(iso3), iso3);
+        RunDeletionOperation(GetDbPath(iso3), iso3);
     }
 
     public (Task Task, OvertureDivisionEnsureResult Result) GetOrStartDownload(string iso3, CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         if (HasData(iso3))
         {
+            ct.ThrowIfCancellationRequested();
             return (Task.CompletedTask, OvertureDivisionEnsureResult.AlreadyReady);
         }
 
@@ -145,15 +199,34 @@ public class OvertureDivisionCacheService
             ? OvertureDivisionEnsureResult.StartedDownload
             : OvertureDivisionEnsureResult.AwaitedExistingDownload;
 
-        return (winningLazy.Value, result);
+        _afterInFlightTaskAcquired();
+        var sharedTask = winningLazy.Value;
+        ct.ThrowIfCancellationRequested();
+        return (sharedTask, result);
     }
 
-    public async Task<OvertureDivisionEnsureResult> EnsureDataAsync(string iso3, CancellationToken ct = default)
+    public Task<OvertureDivisionEnsureResult> EnsureDataAsync(string iso3, CancellationToken ct = default)
     {
-        var (downloadTask, result) = GetOrStartDownload(iso3, ct);
+        var sharedDownload = GetOrStartDownload(iso3, ct);
+        return AwaitSharedDownloadAsync(sharedDownload.Task, sharedDownload.Result, iso3, ct);
+    }
 
-        await downloadTask.WaitAsync(ct);
-        return result;
+    private static async Task<OvertureDivisionEnsureResult> AwaitSharedDownloadAsync(
+        Task sharedDownload,
+        OvertureDivisionEnsureResult result,
+        string iso3,
+        CancellationToken ct)
+    {
+        try
+        {
+            await sharedDownload.WaitAsync(ct);
+            ct.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"Overture division source became unavailable for {iso3}.", ex);
+        }
     }
 
     private async Task RunSourceOperationAsync(string iso3, CancellationToken ct, Lazy<Task> lazy)
@@ -176,9 +249,11 @@ public class OvertureDivisionCacheService
 
     private async Task DownloadDataInternalAsync(string iso3, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var dbPath = GetDbPath(iso3);
         if (HasData(iso3))
         {
+            ct.ThrowIfCancellationRequested();
             return;
         }
 
@@ -199,32 +274,40 @@ public class OvertureDivisionCacheService
 
         try
         {
-            var rowCount = await Task.Run(() => _exportOperation(tmpPath, alpha2), ct);
+            ct.ThrowIfCancellationRequested();
+            var rowCount = await Task.Run(() => _exportOperation(tmpPath, alpha2, ct), ct);
+            ct.ThrowIfCancellationRequested();
             if (rowCount == 0)
             {
                 throw new InvalidOperationException($"No Overture division rows were downloaded for {iso3}.");
             }
 
-            if (!IsValidDb(tmpPath))
+            if (!RunValidationOperation(tmpPath))
             {
                 throw new InvalidOperationException(
                     $"Overture division download for {iso3} produced an invalid SQLite file at {tmpPath}");
             }
 
+            ct.ThrowIfCancellationRequested();
+            await _beforePublication(ct);
+            ct.ThrowIfCancellationRequested();
             File.Move(tmpPath, dbPath, overwrite: true);
+            ct.ThrowIfCancellationRequested();
             _readyCaches[iso3] = 0;
             _logger.LogInformation("Overture division download complete for {ISO3}: {Rows} areas", iso3, rowCount);
         }
         catch
         {
-            TryDelete(tmpPath);
+            TryDeleteAfterFailure(tmpPath);
             throw;
         }
     }
 
-    private long ExportOvertureDivisions(string tmpPath, string alpha2)
+    private long ExportOvertureDivisions(string tmpPath, string alpha2, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var release = GetLatestOvertureReleaseForCache();
+        ct.ThrowIfCancellationRequested();
         var releaseUrl = string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
             OvertureDivisionsLogic.DivisionAreaReleaseUrlTemplate,
@@ -232,7 +315,9 @@ public class OvertureDivisionCacheService
 
         using var duck = new DuckDBConnection("Data Source=:memory:");
         duck.Open();
+        ct.ThrowIfCancellationRequested();
         OvertureDataAccess.LoadAzureAndSpatial(duck);
+        ct.ThrowIfCancellationRequested();
 
         using var selectCmd = duck.CreateCommand();
         selectCmd.CommandText = $@"
@@ -253,7 +338,10 @@ public class OvertureDivisionCacheService
             FROM read_parquet('{releaseUrl}', filename = true, hive_partitioning = 1)
             WHERE lower(country) = '{alpha2.ToLowerInvariant()}'
             ";
+        ct.ThrowIfCancellationRequested();
         using var reader = selectCmd.ExecuteReader();
+        ct.ThrowIfCancellationRequested();
+        ct.ThrowIfCancellationRequested();
 
         using var sqlite = OpenTemporaryOutputConnection(tmpPath);
 
@@ -322,8 +410,17 @@ public class OvertureDivisionCacheService
         var pYMax = insert.Parameters.Add("$ymax", SqliteType.Real);
 
         long rows = 0;
-        while (reader.Read())
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             pId.Value = reader.GetString(0);
             pName.Value = reader.GetString(1);
             pSubType.Value = reader.IsDBNull(2) ? DBNull.Value : reader.GetString(2);
@@ -341,9 +438,12 @@ public class OvertureDivisionCacheService
             rows++;
         }
 
+        ct.ThrowIfCancellationRequested();
         tx.Commit();
+        ct.ThrowIfCancellationRequested();
         sqlite.Close();
         SqliteConnection.ClearPool(sqlite);
+        ct.ThrowIfCancellationRequested();
         return rows;
     }
 
@@ -367,20 +467,90 @@ public class OvertureDivisionCacheService
         }
     }
 
-    private static string GetLatestOvertureReleaseForCache()
+    private string GetLatestOvertureReleaseForCache() => ResolveLatestRelease(_releaseDiscovery);
+
+    internal static string ResolveLatestRelease(Func<string?> releaseDiscovery)
     {
         try
         {
-            using var conn = new DuckDBConnection("Data Source=:memory:");
-            conn.Open();
-            OvertureDataAccess.LoadHttpfs(conn);
-            using var query = conn.CreateCommand();
-            query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
-            return query.ExecuteScalar()?.ToString() ?? OverturePlacesLogic.DocumentedFallbackRelease;
+            return releaseDiscovery() ?? OverturePlacesLogic.DocumentedFallbackRelease;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
             return OverturePlacesLogic.DocumentedFallbackRelease;
+        }
+    }
+
+    private static string? DiscoverLatestOvertureReleaseForCache()
+    {
+        using var conn = new DuckDBConnection("Data Source=:memory:");
+        conn.Open();
+        OvertureDataAccess.LoadHttpfs(conn);
+        using var query = conn.CreateCommand();
+        query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
+        return query.ExecuteScalar()?.ToString();
+    }
+
+    private static OvertureDivisionStatus ReadStatus(string file)
+    {
+        using var conn = new SqliteConnection($"Data Source={file};Pooling=false");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM division_area";
+        var count = (long)cmd.ExecuteScalar()!;
+        var downloadedAt = ReadMetaTimestamp(conn, "downloadedAt");
+        var release = ReadMetaValue(conn, "release");
+        return new OvertureDivisionStatus(count, downloadedAt, release, new FileInfo(file).Length);
+    }
+
+    private bool RunHasRowsOperation(string path, string tableName)
+    {
+        try
+        {
+            return _hasRowsOperation(path, tableName);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool RunValidationOperation(string path)
+    {
+        try
+        {
+            return _validationOperation(path);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void RunDeletionOperation(string path, string iso3)
+    {
+        try
+        {
+            _deletionOperation(path, iso3);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
         }
     }
 
@@ -404,6 +574,10 @@ public class OvertureDivisionCacheService
             cmd.CommandText = $"SELECT COUNT(*) FROM {tableName}";
             return (long)cmd.ExecuteScalar()! > 0;
         }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
         catch
         {
             return false;
@@ -424,6 +598,10 @@ public class OvertureDivisionCacheService
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT value FROM _meta WHERE key = 'downloadedAt'";
             return cmd.ExecuteScalar() is not null;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -465,6 +643,17 @@ public class OvertureDivisionCacheService
         }
     }
 
+    private static void TryDeleteAfterFailure(string path)
+    {
+        try
+        {
+            TryDelete(path);
+        }
+        catch
+        {
+        }
+    }
+
     private static void TryDelete(string path)
     {
         try
@@ -473,6 +662,10 @@ public class OvertureDivisionCacheService
             {
                 File.Delete(path);
             }
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -496,6 +689,19 @@ public class OvertureDivisionCacheService
 
         throw new InvalidCastException($"Unsupported blob value type '{value.GetType().FullName}' at ordinal {ordinal}.");
     }
+}
+
+internal sealed class OvertureDivisionCacheTestHooks
+{
+    public Func<string, string, CancellationToken, long>? ExportOperation { get; init; }
+    public Func<string, CancellationToken, Task>? SourceOperation { get; init; }
+    public Func<CancellationToken, Task>? BeforePublication { get; init; }
+    public Func<string, OvertureDivisionStatus>? StatusReader { get; init; }
+    public Func<string, string, bool>? HasRowsOperation { get; init; }
+    public Func<string, bool>? ValidationOperation { get; init; }
+    public Action<string, string>? DeletionOperation { get; init; }
+    public Func<string?>? ReleaseDiscovery { get; init; }
+    public Action? AfterInFlightTaskAcquired { get; init; }
 }
 
 public record OvertureDivisionStatus(long RowCount, DateTime? DownloadedAt, string? Release, long? FileSizeBytes);

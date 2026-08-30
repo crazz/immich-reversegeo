@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using Microsoft.Data.Sqlite;
 using NetTopologySuite.IO;
 
@@ -13,14 +14,49 @@ public static class GadmCacheExporter
     private static readonly WKBReader WkbReader = new();
     public static long ExportGeoPackageToSqlite(string geoPackagePath, string outputPath, string iso3)
     {
-        var layers = LoadLayerDefinitions(geoPackagePath);
+        return ExportGeoPackageToSqliteCore(geoPackagePath, outputPath, iso3, CancellationToken.None, null);
+    }
+
+    public static long ExportGeoPackageToSqlite(
+        string geoPackagePath,
+        string outputPath,
+        string iso3,
+        CancellationToken ct)
+    {
+        return ExportGeoPackageToSqliteCore(geoPackagePath, outputPath, iso3, ct, null);
+    }
+
+    internal static long ExportGeoPackageToSqlite(
+        string geoPackagePath,
+        string outputPath,
+        string iso3,
+        CancellationToken ct,
+        Action<GadmExportCheckpoint>? checkpoint)
+    {
+        return ExportGeoPackageToSqliteCore(geoPackagePath, outputPath, iso3, ct, checkpoint);
+    }
+
+    private static long ExportGeoPackageToSqliteCore(
+        string geoPackagePath,
+        string outputPath,
+        string iso3,
+        CancellationToken ct,
+        Action<GadmExportCheckpoint>? checkpoint)
+    {
+        ct.ThrowIfCancellationRequested();
+        var layers = LoadLayerDefinitions(geoPackagePath, ct, checkpoint);
+        ct.ThrowIfCancellationRequested();
 
         using var output = new SqliteConnection($"Data Source={outputPath};Pooling=false");
         output.Open();
+        ct.ThrowIfCancellationRequested();
         CreateOutputSchema(output);
+        ct.ThrowIfCancellationRequested();
         WriteMeta(output, iso3);
+        ct.ThrowIfCancellationRequested();
 
         using var transaction = output.BeginTransaction();
+        ct.ThrowIfCancellationRequested();
         using var insert = output.CreateCommand();
         insert.Transaction = transaction;
         insert.CommandText = """
@@ -61,11 +97,15 @@ public static class GadmCacheExporter
         var pYMax = insert.Parameters.Add("$ymax", SqliteType.Real);
 
         long rows = 0;
+        ct.ThrowIfCancellationRequested();
         using var source = new SqliteConnection($"Data Source={geoPackagePath};Pooling=false");
         source.Open();
+        ct.ThrowIfCancellationRequested();
 
         foreach (var layer in layers)
         {
+            checkpoint?.Invoke(GadmExportCheckpoint.Layer);
+            ct.ThrowIfCancellationRequested();
             using var cmd = source.CreateCommand();
             cmd.CommandText = $"""
                 SELECT
@@ -79,12 +119,27 @@ public static class GadmCacheExporter
                   AND {QuoteIdentifier(layer.NameColumn)} IS NOT NULL
                 """;
 
+            ct.ThrowIfCancellationRequested();
             using var reader = cmd.ExecuteReader();
-            while (reader.Read())
+            ct.ThrowIfCancellationRequested();
+            while (true)
             {
+                checkpoint?.Invoke(GadmExportCheckpoint.BeforeDataRowRead);
+                ct.ThrowIfCancellationRequested();
+                var hasRow = reader.Read();
+                checkpoint?.Invoke(GadmExportCheckpoint.AfterDataRowRead);
+                ct.ThrowIfCancellationRequested();
+                if (!hasRow)
+                {
+                    break;
+                }
+
+                ct.ThrowIfCancellationRequested();
                 var rawGeometry = (byte[])reader["geom"];
                 var parsed = GadmDataAccess.ReadGeoPackageGeometry(rawGeometry);
-                var bbox = GetBoundingBox(parsed.Wkb, parsed.XMin, parsed.YMin, parsed.XMax, parsed.YMax);
+                ct.ThrowIfCancellationRequested();
+                var bbox = GetBoundingBox(parsed.Wkb, parsed.XMin, parsed.YMin, parsed.XMax, parsed.YMax, ct, checkpoint);
+                ct.ThrowIfCancellationRequested();
 
                 pId.Value = reader["id"].ToString() ?? string.Empty;
                 pName.Value = reader["name"].ToString() ?? string.Empty;
@@ -96,14 +151,22 @@ public static class GadmCacheExporter
                 pYMin.Value = bbox.YMin;
                 pXMax.Value = bbox.XMax;
                 pYMax.Value = bbox.YMax;
+                checkpoint?.Invoke(GadmExportCheckpoint.BeforeInsert);
+                ct.ThrowIfCancellationRequested();
                 insert.ExecuteNonQuery();
+                checkpoint?.Invoke(GadmExportCheckpoint.AfterInsert);
+                ct.ThrowIfCancellationRequested();
                 rows++;
             }
         }
 
+        ct.ThrowIfCancellationRequested();
         transaction.Commit();
+        ct.ThrowIfCancellationRequested();
         output.Close();
+        ct.ThrowIfCancellationRequested();
         SqliteConnection.ClearPool(output);
+        ct.ThrowIfCancellationRequested();
         return rows;
     }
 
@@ -112,31 +175,59 @@ public static class GadmCacheExporter
         double? xmin,
         double? ymin,
         double? xmax,
-        double? ymax)
+        double? ymax,
+        CancellationToken ct,
+        Action<GadmExportCheckpoint>? checkpoint)
     {
+        ct.ThrowIfCancellationRequested();
         if (xmin.HasValue && ymin.HasValue && xmax.HasValue && ymax.HasValue)
         {
+            ct.ThrowIfCancellationRequested();
             return (xmin.Value, ymin.Value, xmax.Value, ymax.Value);
         }
 
+        checkpoint?.Invoke(GadmExportCheckpoint.BeforeGeometry);
+        ct.ThrowIfCancellationRequested();
         var geometry = WkbReader.Read(wkb);
         var envelope = geometry.EnvelopeInternal;
+        checkpoint?.Invoke(GadmExportCheckpoint.AfterGeometry);
+        ct.ThrowIfCancellationRequested();
         return (envelope.MinX, envelope.MinY, envelope.MaxX, envelope.MaxY);
     }
 
-    private static List<GadmLayerDefinition> LoadLayerDefinitions(string geoPackagePath)
+    private static List<GadmLayerDefinition> LoadLayerDefinitions(
+        string geoPackagePath,
+        CancellationToken ct,
+        Action<GadmExportCheckpoint>? checkpoint)
     {
+        ct.ThrowIfCancellationRequested();
         using var conn = new SqliteConnection($"Data Source={geoPackagePath};Pooling=false");
         conn.Open();
+        ct.ThrowIfCancellationRequested();
 
-        var geometryColumns = LoadGeometryColumns(conn);
+        ct.ThrowIfCancellationRequested();
+        var geometryColumns = LoadGeometryColumns(conn, ct, checkpoint);
+        ct.ThrowIfCancellationRequested();
         var layers = new List<GadmLayerDefinition>();
 
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT table_name FROM gpkg_contents WHERE data_type = 'features' ORDER BY table_name";
+        ct.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            checkpoint?.Invoke(GadmExportCheckpoint.BeforeLayerDefinitionRowRead);
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            checkpoint?.Invoke(GadmExportCheckpoint.AfterLayerDefinitionRowRead);
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             var tableName = reader.GetString(0);
             if (!TryGetAdminLevel(tableName, out var adminLevel))
             {
@@ -148,7 +239,9 @@ public static class GadmCacheExporter
                 continue;
             }
 
-            var columns = LoadColumns(conn, tableName);
+            ct.ThrowIfCancellationRequested();
+            var columns = LoadColumns(conn, tableName, ct, checkpoint);
+            ct.ThrowIfCancellationRequested();
             var idColumn = $"GID_{adminLevel}";
             var nameColumn = $"NAME_{adminLevel}";
             var englishTypeColumn = $"ENGTYPE_{adminLevel}";
@@ -185,28 +278,63 @@ public static class GadmCacheExporter
             .ToList();
     }
 
-    private static Dictionary<string, string> LoadGeometryColumns(SqliteConnection conn)
+    private static Dictionary<string, string> LoadGeometryColumns(
+        SqliteConnection conn,
+        CancellationToken ct,
+        Action<GadmExportCheckpoint>? checkpoint)
     {
+        ct.ThrowIfCancellationRequested();
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT table_name, column_name FROM gpkg_geometry_columns";
+        ct.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            checkpoint?.Invoke(GadmExportCheckpoint.BeforeGeometryColumnRowRead);
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            checkpoint?.Invoke(GadmExportCheckpoint.AfterGeometryColumnRowRead);
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             result[reader.GetString(0)] = reader.GetString(1);
         }
 
         return result;
     }
 
-    private static HashSet<string> LoadColumns(SqliteConnection conn, string tableName)
+    private static HashSet<string> LoadColumns(
+        SqliteConnection conn,
+        string tableName,
+        CancellationToken ct,
+        Action<GadmExportCheckpoint>? checkpoint)
     {
+        ct.ThrowIfCancellationRequested();
         var result = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"PRAGMA table_info({QuoteIdentifier(tableName)})";
+        ct.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            checkpoint?.Invoke(GadmExportCheckpoint.BeforeLayerColumnRowRead);
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            checkpoint?.Invoke(GadmExportCheckpoint.AfterLayerColumnRowRead);
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             if (!reader.IsDBNull(1))
             {
                 result.Add(reader.GetString(1));
@@ -281,6 +409,23 @@ public static class GadmCacheExporter
             NumberStyles.Integer,
             CultureInfo.InvariantCulture,
             out adminLevel);
+    }
+
+    internal enum GadmExportCheckpoint
+    {
+        BeforeGeometryColumnRowRead,
+        AfterGeometryColumnRowRead,
+        BeforeLayerDefinitionRowRead,
+        AfterLayerDefinitionRowRead,
+        BeforeLayerColumnRowRead,
+        AfterLayerColumnRowRead,
+        Layer,
+        BeforeDataRowRead,
+        AfterDataRowRead,
+        BeforeGeometry,
+        AfterGeometry,
+        BeforeInsert,
+        AfterInsert
     }
 
     private sealed record GadmLayerDefinition(
