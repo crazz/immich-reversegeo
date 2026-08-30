@@ -8,6 +8,7 @@ internal sealed class RecordingProcessingEventReporter : ProcessingEventReporter
 {
     private readonly object _sync = new();
     private readonly List<ProcessingEvent> _events = [];
+    private readonly List<ProcessingEvent> _attempts = [];
     private SemaphoreSlim? _capacity;
     public Func<ProcessingEvent, CancellationToken, ValueTask>? BeforeAcceptAsync { get; set; }
     public Func<ProcessingEvent, CancellationToken, ValueTask>? AfterAcceptAsync { get; set; }
@@ -37,6 +38,17 @@ internal sealed class RecordingProcessingEventReporter : ProcessingEventReporter
         _capacity?.Release();
     }
 
+    public IReadOnlyList<ProcessingEvent> Attempts
+    {
+        get
+        {
+            lock (_sync)
+            {
+                return _attempts.ToArray();
+            }
+        }
+    }
+
     public IReadOnlyList<ProcessingEvent> Events
     {
         get
@@ -50,6 +62,11 @@ internal sealed class RecordingProcessingEventReporter : ProcessingEventReporter
 
     protected override async ValueTask AcceptAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken)
     {
+        lock (_sync)
+        {
+            _attempts.Add(processingEvent);
+        }
+
         if (_capacity is not null)
         {
             await _capacity.WaitAsync(cancellationToken);

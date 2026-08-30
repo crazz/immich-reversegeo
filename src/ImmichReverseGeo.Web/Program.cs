@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Services;
@@ -86,9 +87,7 @@ builder.Services.AddSingleton(sp =>
         sp.GetRequiredService<StorageOptions>().DataDir));
 builder.Services.AddSingleton<SkippedAssetsRepository>();
 builder.Services.AddSingleton<ImmichDbRepository>();
-builder.Services.AddSingleton<ProcessingState>();
-builder.Services.AddSingleton<ProcessingBackgroundService>();
-builder.Services.AddHostedService(sp => sp.GetRequiredService<ProcessingBackgroundService>());
+builder.Services.AddProcessingServices();
 
 // ── App ─────────────────────────────────────────────────────────────────────
 

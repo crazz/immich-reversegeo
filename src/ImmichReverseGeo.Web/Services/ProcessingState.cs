@@ -23,9 +23,9 @@ public class ProcessingState
 
     public bool IsRunning => _isRunning;
     public long TotalUnprocessed => Volatile.Read(ref _totalUnprocessed);
-    public long ProcessedThisRun => Volatile.Read(ref _processedThisRun);
-    public long ErrorsThisRun => Volatile.Read(ref _errorsThisRun);
-    public long SkippedThisRun => Volatile.Read(ref _skippedThisRun);
+    public long ProcessedThisRun => Volatile.Read(ref _progress).Processed;
+    public long ErrorsThisRun => Volatile.Read(ref _progress).Errors;
+    public long SkippedThisRun => Volatile.Read(ref _progress).Skipped;
     public DateTime? LastRunStarted
     {
         get { lock (_stateLock) { return _lastRunStarted; } }
@@ -87,12 +87,16 @@ public class ProcessingState
         Notify();
     }
 
+    internal void ClearPending()
+    {
+        _isRunning = false;
+        Notify();
+    }
+
     public void StartRun(long totalUnprocessed)
     {
         _isRunning = true;
-        Interlocked.Exchange(ref _processedThisRun, 0);
-        Interlocked.Exchange(ref _errorsThisRun, 0);
-        Interlocked.Exchange(ref _skippedThisRun, 0);
+        Interlocked.Exchange(ref _progress, ProgressSnapshot.Empty);
         Volatile.Write(ref _totalUnprocessed, totalUnprocessed);
         lock (_stateLock)
         {
@@ -104,13 +108,13 @@ public class ProcessingState
 
     public void IncrementProcessed()
     {
-        Interlocked.Increment(ref _processedThisRun);
+        UpdateProgress(snapshot => snapshot with { Processed = checked(snapshot.Processed + 1) });
         Notify();
     }
 
     public void IncrementError(string message)
     {
-        Interlocked.Increment(ref _errorsThisRun);
+        UpdateProgress(snapshot => snapshot with { Errors = checked(snapshot.Errors + 1) });
         lock (_stateLock)
         {
             _lastError = message;
@@ -121,7 +125,66 @@ public class ProcessingState
 
     public void IncrementSkipped()
     {
-        Interlocked.Increment(ref _skippedThisRun);
+        UpdateProgress(snapshot => snapshot with { Skipped = checked(snapshot.Skipped + 1) });
+        Notify();
+    }
+
+    internal void ApplyProgress(long updatedCount, long skippedCount, long failedCount)
+    {
+        Interlocked.Exchange(ref _progress, new ProgressSnapshot(updatedCount, skippedCount, failedCount));
+        Notify();
+    }
+
+    internal void ReportErrorDiagnostic(string message)
+    {
+        lock (_stateLock)
+        {
+            _lastError = message;
+        }
+
+        AppendLog($"[ERROR] {message}");
+    }
+
+    internal void RestoreFatalFailureSnapshot(long updatedCount, long skippedCount, long failedCount, string fatalMessage)
+    {
+        var errors = checked(failedCount + 1);
+        Interlocked.Exchange(ref _progress, new ProgressSnapshot(updatedCount, skippedCount, errors));
+        _isRunning = false;
+        lock (_activityLock)
+        {
+            _currentActivity = null;
+            _activityCounts.Clear();
+        }
+
+        lock (_stateLock)
+        {
+            _lastError = fatalMessage;
+            _lastRunCompleted = DateTime.UtcNow;
+        }
+
+        var summary = $"Run complete. Processed={updatedCount} Skipped={skippedCount} Errors={errors}";
+        lock (_recentLog)
+        {
+            var retained = _recentLog.ToList();
+            if (retained.Count > 0 && retained[^1].Contains("Run complete. Processed=", StringComparison.Ordinal))
+            {
+                retained.RemoveAt(retained.Count - 1);
+            }
+
+            if (retained.Count > 0 && retained[^1].EndsWith($"[ERROR] {fatalMessage}", StringComparison.Ordinal))
+            {
+                retained.RemoveAt(retained.Count - 1);
+            }
+
+            retained.Add($"[{DateTime.UtcNow:HH:mm:ss}] [ERROR] {fatalMessage}");
+            retained.Add($"[{DateTime.UtcNow:HH:mm:ss}] {summary}");
+            _recentLog.Clear();
+            foreach (var line in retained.TakeLast(100))
+            {
+                _recentLog.Enqueue(line);
+            }
+        }
+
         Notify();
     }
 
@@ -162,7 +225,27 @@ public class ProcessingState
         }
     }
 
-    private long _processedThisRun, _errorsThisRun, _skippedThisRun;
+    internal ProgressSnapshot ReadProgressSnapshot() => Volatile.Read(ref _progress);
+
+    private void UpdateProgress(Func<ProgressSnapshot, ProgressSnapshot> update)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _progress);
+            var next = update(current);
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _progress, next, current), current))
+            {
+                return;
+            }
+        }
+    }
+
+    private ProgressSnapshot _progress = ProgressSnapshot.Empty;
+    internal sealed record ProgressSnapshot(long Processed, long Skipped, long Errors)
+    {
+        public static ProgressSnapshot Empty { get; } = new(0, 0, 0);
+    }
+
     private void Notify() => OnChanged?.Invoke();
 
     private void EndActivity(string activity)

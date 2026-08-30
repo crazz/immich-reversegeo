@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Cronos;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Overture.Models;
 using ImmichReverseGeo.Overture.Services;
 using Microsoft.Extensions.Hosting;
@@ -16,6 +17,7 @@ public class ProcessingBackgroundService : BackgroundService
 {
     private readonly ILogger<ProcessingBackgroundService> logger;
     private readonly ProcessingState state;
+    private readonly ProcessingStateEventReporter _reporter;
     private readonly ProcessingOperations _operations;
     private readonly Func<Task> _initialiseSkippedAssetsAsync;
     private CancellationTokenSource? _runCts;
@@ -27,12 +29,14 @@ public class ProcessingBackgroundService : BackgroundService
         ConfigService config,
         AdministrativeAreaResolverService administrativeResolver,
         ProcessingState state,
+        ProcessingStateEventReporter reporter,
         ImmichDbRepository db,
         OverturePlacesService overturePlaces,
         SkippedAssetsRepository skipped)
     {
         this.logger = logger;
         this.state = state;
+        _reporter = reporter;
         _initialiseSkippedAssetsAsync = skipped.InitialiseAsync;
         _operations = new ProcessingOperations(
             db.GetUnprocessedCountAsync,
@@ -49,9 +53,19 @@ public class ProcessingBackgroundService : BackgroundService
         ILogger<ProcessingBackgroundService> logger,
         ProcessingState state,
         ProcessingOperations operations)
+        : this(logger, state, new ProcessingStateEventReporter(state), operations)
+    {
+    }
+
+    internal ProcessingBackgroundService(
+        ILogger<ProcessingBackgroundService> logger,
+        ProcessingState state,
+        ProcessingStateEventReporter reporter,
+        ProcessingOperations operations)
     {
         this.logger = logger;
         this.state = state;
+        _reporter = reporter;
         _operations = operations;
         _initialiseSkippedAssetsAsync = () => Task.CompletedTask;
     }
@@ -98,9 +112,27 @@ public class ProcessingBackgroundService : BackgroundService
     {
         if (await _runLock.WaitAsync(0, stoppingToken))
         {
-            state.MarkPending();
-            try { await RunOnceAsync(stoppingToken); }
-            finally { _runLock.Release(); }
+            try
+            {
+                state.MarkPending();
+                var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Scheduled);
+                if (!_reporter.Arm(request))
+                {
+                    state.ClearPending();
+                    throw new InvalidOperationException("Processing event reporter is already armed.");
+                }
+
+                await RunOnceAsync(request, stoppingToken);
+            }
+            catch
+            {
+                TryClearPending(state);
+                throw;
+            }
+            finally
+            {
+                _runLock.Release();
+            }
         }
         else
         {
@@ -118,24 +150,38 @@ public class ProcessingBackgroundService : BackgroundService
             return Task.CompletedTask;
         }
 
-        // Mark as pending right now so the UI disables the button on this render cycle,
-        // before the background Task.Run has had a chance to call state.StartRun().
-        state.MarkPending();
-
-        _runCts?.Dispose();
-        _runCts = new CancellationTokenSource();
-        var token = _runCts.Token;
-
-        var manualRunTask = Task.Run(async () =>
+        try
         {
-            try { await RunOnceAsync(token); }
-            finally { _runLock.Release(); }
-        });
-        _manualRunTask = manualRunTask;
-        _ = manualRunTask.ContinueWith(t => logger.LogError(t.Exception, "TriggerRunAsync faulted"),
-                                       TaskContinuationOptions.OnlyOnFaulted);
+            // Mark as pending right now so the UI disables the button on this render cycle,
+            // before the background Task.Run has had a chance to call state.StartRun().
+            state.MarkPending();
+            var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
+            if (!_reporter.Arm(request))
+            {
+                throw new InvalidOperationException("Processing event reporter is already armed.");
+            }
 
-        return Task.CompletedTask;
+            _runCts?.Dispose();
+            _runCts = new CancellationTokenSource();
+            var token = _runCts.Token;
+
+            var manualRunTask = Task.Run(async () =>
+            {
+                try { await RunOnceAsync(request, token); }
+                finally { _runLock.Release(); }
+            });
+            _manualRunTask = manualRunTask;
+            _ = manualRunTask.ContinueWith(t => logger.LogError(t.Exception, "TriggerRunAsync faulted"),
+                                           TaskContinuationOptions.OnlyOnFaulted);
+
+            return Task.CompletedTask;
+        }
+        catch
+        {
+            TryClearPending(state);
+            _runLock.Release();
+            throw;
+        }
     }
 
     internal Task WaitForManualAdmissionAsync()
@@ -145,40 +191,79 @@ public class ProcessingBackgroundService : BackgroundService
 
     public void CancelRun() => _runCts?.Cancel();
 
-    private Task RunOnceAsync(CancellationToken ct)
+    private Task RunOnceAsync(ProcessingRunRequest request, CancellationToken ct)
     {
-        return RunOnceAsync(logger, state, _operations, ct);
+        return RunOnceAsync(logger, state, _reporter, request, _operations, ct);
     }
 
-    internal static async Task RunOnceAsync(
+    internal static Task RunOnceAsync(
         ILogger<ProcessingBackgroundService> logger,
         ProcessingState state,
         ProcessingOperations operations,
         CancellationToken ct)
     {
+        var reporter = new ProcessingStateEventReporter(state);
+        var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
+        reporter.Arm(request);
+        return RunOnceAsync(logger, state, reporter, request, operations, ct);
+    }
+
+    internal static async Task RunOnceAsync(
+        ILogger<ProcessingBackgroundService> logger,
+        ProcessingState state,
+        IProcessingEventReporter reporter,
+        ProcessingRunRequest request,
+        ProcessingOperations operations,
+        CancellationToken ct)
+    {
+        var startedAtUtc = DateTimeOffset.UtcNow;
+        long updated = 0;
+        long skipped = 0;
+        long failed = 0;
+        var outcome = ProcessingRunOutcome.Completed;
+        string? failureMessage = null;
+        var reportingFailed = 0;
+        void AbandonReporting(Exception failure)
+        {
+            Interlocked.Exchange(ref reportingFailed, 1);
+            logger.LogError(failure, "Processing event reporting failed for run {RunId}", request.RunId);
+            if (reporter is ProcessingStateEventReporter stateReporter)
+            {
+                stateReporter.Abandon(request, failure);
+            }
+        }
+
+        // Publish the session even when the active execution token was already cancelled,
+        // so the admitted pending run can project its terminal outcome.
+        IProcessingRunEventSession session;
+        try
+        {
+            session = await reporter.OpenRunAsync(request, startedAtUtc, CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            AbandonReporting(ex);
+            throw;
+        }
+
         try
         {
             var total = await operations.GetUnprocessedCountAsync(ct);
-            state.StartRun(total);
-
+            await ReportAsync(() => session.DetermineEligibilityAsync(total, ct), AbandonReporting);
             if (total == 0)
             {
-                state.AppendLog("Run started — nothing to process, all assets already have location data.");
                 return;
             }
-
-            state.AppendLog($"Run started. {total} assets to process.");
 
             var skippedIds = await operations.GetSkippedAssetsAsync();
             if (skippedIds.Count > 0)
             {
-                state.AppendLog($"Skipping {skippedIds.Count} previously unresolvable assets.");
+                await ReportAsync(() => session.ReportLogAsync(ProcessingLogLevel.Information, $"Skipping {skippedIds.Count} previously unresolvable assets.", ct), AbandonReporting);
             }
 
             var cursor = AssetCursor.Initial;
             var cfg = await operations.GetConfigAsync();
-            int batchNum = 0;
-
+            var batchNum = 0;
             while (!ct.IsCancellationRequested)
             {
                 var batch = await operations.GetUnprocessedBatchAsync(cursor, cfg.Processing.BatchSize, ct);
@@ -188,28 +273,19 @@ public class ProcessingBackgroundService : BackgroundService
                 }
 
                 batchNum++;
-                state.AppendLog($"Batch {batchNum}: fetched {batch.Count} assets " +
-                                $"(total processed so far: {state.ProcessedThisRun}).");
-
+                await ReportAsync(() => session.ReportLogAsync(ProcessingLogLevel.Information, $"Batch {batchNum}: fetched {batch.Count} assets (total processed so far: {Volatile.Read(ref updated)}).", ct), AbandonReporting);
                 cursor = new AssetCursor(batch[^1].CreatedAt, batch[^1].Id);
-
                 var maxParallelism = Math.Clamp(cfg.Processing.MaxDegreeOfParallelism, 1, 32);
-                await Parallel.ForEachAsync(
-                    batch,
-                    new ParallelOptions
+                await Parallel.ForEachAsync(batch, new ParallelOptions { CancellationToken = ct, MaxDegreeOfParallelism = maxParallelism }, async (asset, token) =>
+                {
+                    if (!skippedIds.Contains(asset.Id))
                     {
-                        CancellationToken = ct,
-                        MaxDegreeOfParallelism = maxParallelism
-                    },
-                    async (asset, token) =>
-                    {
-                        if (skippedIds.Contains(asset.Id))
-                        {
-                            return;
-                        }
-
-                        await ProcessAssetAsync(logger, state, operations, asset, cfg, token);
-                    });
+                        await ProcessAssetAsync(logger, state, session, operations, asset, cfg,
+                            () => Interlocked.Increment(ref updated),
+                            () => Interlocked.Increment(ref skipped),
+                            () => Interlocked.Increment(ref failed), AbandonReporting, token);
+                    }
+                });
 
                 if (cfg.Processing.BatchDelayMs > 0)
                 {
@@ -219,34 +295,54 @@ public class ProcessingBackgroundService : BackgroundService
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            state.AppendLog("Run cancelled.");
+            outcome = ProcessingRunOutcome.Cancelled;
         }
         catch (OutOfMemoryException)
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (Volatile.Read(ref reportingFailed) == 0)
         {
             logger.LogError(ex, "Fatal error during processing run");
-            state.IncrementError($"Fatal: {ex.Message}");
+            outcome = ProcessingRunOutcome.Failed;
+            failureMessage = ex.Message;
         }
         finally
         {
-            state.CompleteRun();
-            state.AppendLog($"Run complete. Processed={state.ProcessedThisRun} " +
-                            $"Skipped={state.SkippedThisRun} Errors={state.ErrorsThisRun}");
+            if (Volatile.Read(ref reportingFailed) == 0)
+            {
+                await ReportAsync(() => session.FinishAsync(new ProcessingRunResult(request, startedAtUtc, DateTimeOffset.UtcNow,
+                    checked(updated + skipped + failed), updated, skipped, failed, outcome, failureMessage)), AbandonReporting);
+            }
         }
+    }
+
+    internal static bool IsLoggerOnlyNoCitySkip(GeoResult geoResult)
+    {
+        return geoResult.HasMatch && geoResult.City is null;
     }
 
     private static async Task ProcessAssetAsync(
         ILogger<ProcessingBackgroundService> logger,
         ProcessingState state,
+        IProcessingRunEventSession session,
         ProcessingOperations operations,
         AssetRecord asset,
         AppConfig cfg,
+        Action updated,
+        Action skipped,
+        Action failed,
+        Action<Exception> reportingFailure,
         CancellationToken ct)
     {
         var step = "FindCountry";
+        var infrastructureFailed = false;
+        void ReportFailure(Exception failure)
+        {
+            infrastructureFailed = true;
+            reportingFailure(failure);
+        }
+
         try
         {
             // 1. Country detection — bundled Overture country divisions only.
@@ -259,9 +355,10 @@ public class ProcessingBackgroundService : BackgroundService
 
             if (adminResolution is null)
             {
-                state.AppendLog($"[WARN] Asset {asset.Id}: no country found at ({asset.Latitude:F4}, {asset.Longitude:F4}), skipping.");
+                await ReportAsync(() => session.ReportLogAsync(ProcessingLogLevel.Warning, $"Asset {asset.Id}: no country found at ({asset.Latitude:F4}, {asset.Longitude:F4}), skipping.", ct), ReportFailure);
                 await operations.AddSkippedAssetAsync(asset.Id);
-                state.IncrementSkipped();
+                await ReportAsync(session.ReportSkippedAsync, ReportFailure);
+                skipped();
                 return;
             }
 
@@ -295,24 +392,25 @@ public class ProcessingBackgroundService : BackgroundService
 
             // 4. Write back (only if we have country AND city)
             step = "WriteLocation";
+            if (IsLoggerOnlyNoCitySkip(geoResult))
+            {
+                // Don't write partial data to Immich — a write with city=NULL would
+                // satisfy the "country IS NULL" filter and prevent the asset from being
+                // reprocessed, permanently losing the city. Log for investigation and
+                // leave the asset unprocessed so it is retried on the next run.
+                logger.LogWarning(
+                    "Asset {AssetId}: country={Country} state={State} resolved but no city — skipping write (lat={Lat:F4}, lon={Lon:F4})",
+                    asset.Id, geoResult.Country, geoResult.State, asset.Latitude, asset.Longitude);
+                await ReportAsync(session.ReportSkippedAsync, ReportFailure);
+                skipped();
+                return;
+            }
+
             if (geoResult.HasMatch)
             {
-                if (geoResult.City is null)
-                {
-                    // Don't write partial data to Immich — a write with city=NULL would
-                    // satisfy the "country IS NULL" filter and prevent the asset from being
-                    // reprocessed, permanently losing the city. Log for investigation and
-                    // leave the asset unprocessed so it is retried on the next run.
-                    logger.LogWarning(
-                        "Asset {AssetId}: country={Country} state={State} resolved but no city — skipping write (lat={Lat:F4}, lon={Lon:F4})",
-                        asset.Id, geoResult.Country, geoResult.State, asset.Latitude, asset.Longitude);
-                    state.IncrementSkipped();
-                    return;
-                }
-
                 if (cfg.Processing.VerboseLogging)
                 {
-                    state.AppendLog($"Asset {asset.Id}: {geoResult.City}, {geoResult.State}, {geoResult.Country}");
+                    await ReportAsync(() => session.ReportLogAsync(ProcessingLogLevel.Trace, $"Asset {asset.Id}: {geoResult.City}, {geoResult.State}, {geoResult.Country}", ct), ReportFailure);
                 }
                 else
                 {
@@ -320,13 +418,15 @@ public class ProcessingBackgroundService : BackgroundService
                         asset.Id, geoResult.City, geoResult.State, geoResult.Country);
                 }
                 await operations.WriteLocationAsync(asset.Id, geoResult, ct);
-                state.IncrementProcessed();
+                await ReportAsync(session.ReportUpdatedAsync, ReportFailure);
+                updated();
             }
             else
             {
-                state.AppendLog($"[WARN] Asset {asset.Id}: country={countryName} but no admin match, skipping.");
+                await ReportAsync(() => session.ReportLogAsync(ProcessingLogLevel.Warning, $"Asset {asset.Id}: country={countryName} but no admin match, skipping.", ct), ReportFailure);
                 await operations.AddSkippedAssetAsync(asset.Id);
-                state.IncrementSkipped();
+                await ReportAsync(session.ReportSkippedAsync, ReportFailure);
+                skipped();
             }
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -341,12 +441,39 @@ public class ProcessingBackgroundService : BackgroundService
         {
             throw;
         }
-        catch (Exception ex)
+        catch (Exception ex) when (!infrastructureFailed)
         {
             // Log full exception including type and stack trace so we can pinpoint the source
             logger.LogError(ex, "Error at step={Step} for asset {AssetId} [{ExType}]",
                 step, asset.Id, ex.GetType().Name);
-            state.IncrementError($"Asset {asset.Id} [{step}]: {ex.Message}");
+            await ReportAsync(() => session.ReportLogAsync(ProcessingLogLevel.Error, $"Asset {asset.Id} [{step}]: {ex.Message}"), ReportFailure);
+            await ReportAsync(session.ReportFailedAsync, ReportFailure);
+            failed();
+        }
+    }
+
+    private static async ValueTask ReportAsync(Func<ValueTask> report, Action<Exception> reportingFailure)
+    {
+        try
+        {
+            await report();
+        }
+        catch (Exception ex)
+        {
+            reportingFailure(ex);
+            throw;
+        }
+    }
+
+    private static void TryClearPending(ProcessingState processingState)
+    {
+        try
+        {
+            processingState.ClearPending();
+        }
+        catch
+        {
+            // ClearPending commits before notifying; admission cleanup must still release its lock.
         }
     }
 

@@ -181,6 +181,63 @@ public class ProcessingStateTests
         AssertRaisesOnChanged(state, state.CompleteRun);
     }
 
+    [TestMethod]
+    public void ProjectionOperations_ReplaceCountersAndNotifyWithoutDiagnosticDoubleCount()
+    {
+        var state = new ProcessingState();
+        state.StartRun(10);
+        state.IncrementProcessed();
+        state.IncrementSkipped();
+        state.IncrementError("prior");
+        var notifications = 0;
+        state.OnChanged += () => notifications++;
+
+        state.ApplyProgress(2, 3, 4);
+        Assert.IsTrue(notifications > 0);
+        Assert.AreEqual(2L, state.ProcessedThisRun);
+        Assert.AreEqual(3L, state.SkippedThisRun);
+        Assert.AreEqual(4L, state.ErrorsThisRun);
+
+        notifications = 0;
+        state.ReportErrorDiagnostic("latest");
+        Assert.IsTrue(notifications > 0);
+        Assert.AreEqual(4L, state.ErrorsThisRun);
+        Assert.AreEqual("latest", state.LastError);
+        Assert.IsTrue(state.GetRecentLog().Last().EndsWith("[ERROR] latest", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
+    public async Task ApplyProgress_ExchangesOnlyWholeImmutableSnapshotsUnderConcurrency()
+    {
+        var state = new ProcessingState();
+        var first = (Processed: 11L, Skipped: 12L, Errors: 13L);
+        var second = (Processed: 21L, Skipped: 22L, Errors: 23L);
+        using var start = new ManualResetEventSlim();
+        var writer = Task.Run(() =>
+        {
+            start.Wait();
+            for (var index = 0; index < 10_000; index++)
+            {
+                var value = index % 2 == 0 ? first : second;
+                state.ApplyProgress(value.Processed, value.Skipped, value.Errors);
+            }
+        });
+        var reader = Task.Run(() =>
+        {
+            start.Wait();
+            for (var index = 0; index < 10_000; index++)
+            {
+                var snapshot = state.ReadProgressSnapshot();
+                Assert.IsTrue(snapshot == new ProcessingState.ProgressSnapshot(first.Processed, first.Skipped, first.Errors)
+                    || snapshot == new ProcessingState.ProgressSnapshot(second.Processed, second.Skipped, second.Errors)
+                    || snapshot == ProcessingState.ProgressSnapshot.Empty);
+            }
+        });
+
+        start.Set();
+        await Task.WhenAll(writer, reader);
+    }
+
     private static void AssertRaisesOnChanged(ProcessingState state, Action mutation)
     {
         var changed = false;
