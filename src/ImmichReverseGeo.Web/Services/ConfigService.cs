@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Services;
 
-public class ConfigService(ILogger<ConfigService> logger, string? configDir = null)
+public class ConfigService(ILogger<ConfigService> logger, string? configDir = null) : IProcessingRunConfiguration
 {
     private readonly string _configPath = Path.Combine(
         configDir ?? "/config", "settings.json");

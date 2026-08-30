@@ -10,7 +10,7 @@ using NpgsqlTypes;
 
 namespace ImmichReverseGeo.Web.Services;
 
-public class ImmichDbRepository(NpgsqlDataSource dataSource, ILogger<ImmichDbRepository> logger)
+public class ImmichDbRepository(NpgsqlDataSource dataSource, ILogger<ImmichDbRepository> logger) : IProcessingAssetRepository
 {
     /// <summary>
     /// Returns the next batch of assets with null city/country using keyset pagination.

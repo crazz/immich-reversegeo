@@ -12,14 +12,15 @@ namespace ImmichReverseGeo.Tests;
 public class ProcessingServiceRegistrationTests
 {
     [TestMethod]
-    public async Task ProductionRegistrations_UseOneStateAndOneSessionCorrelationOwner()
+    public async Task AddProcessingServices_ExecutorCollaboratorAndHostedAliasesPreserveReferenceIdentity()
     {
         var services = new ServiceCollection();
         services.AddSingleton<Microsoft.Extensions.Logging.ILogger<ProcessingBackgroundService>>(NullLogger<ProcessingBackgroundService>.Instance);
         services.AddSingleton((ConfigService)RuntimeHelpers.GetUninitializedObject(typeof(ConfigService)));
         services.AddSingleton((AdministrativeAreaResolverService)RuntimeHelpers.GetUninitializedObject(typeof(AdministrativeAreaResolverService)));
         services.AddSingleton((ImmichDbRepository)RuntimeHelpers.GetUninitializedObject(typeof(ImmichDbRepository)));
-        services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
+        var places = (ImmichReverseGeo.Overture.Services.OverturePlacesService)RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService));
+        services.AddSingleton(places);
         services.AddSingleton((SkippedAssetsRepository)RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
         services.AddProcessingServices();
         using var provider = services.BuildServiceProvider();
@@ -31,6 +32,20 @@ public class ProcessingServiceRegistrationTests
 
         Assert.AreSame(state, sameState);
         Assert.AreSame(adapter, reporter);
+        Assert.AreSame(provider.GetRequiredService<ConfigService>(), provider.GetRequiredService<IProcessingRunConfiguration>());
+        Assert.AreSame(provider.GetRequiredService<ImmichDbRepository>(), provider.GetRequiredService<IProcessingAssetRepository>());
+        Assert.AreSame(provider.GetRequiredService<SkippedAssetsRepository>(), provider.GetRequiredService<IProcessingSkippedStore>());
+        Assert.AreSame(provider.GetRequiredService<AdministrativeAreaResolverService>(), provider.GetRequiredService<IProcessingAdministrativeResolver>());
+        var infrastructureAdapter = provider.GetRequiredService<ProcessingInfrastructureLookup>();
+        Assert.AreSame(infrastructureAdapter, provider.GetRequiredService<IProcessingInfrastructureLookup>());
+        var wrappedPlacesField = typeof(ProcessingInfrastructureLookup)
+            .GetFields(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)
+            .Single(field => field.FieldType == typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService));
+        Assert.AreSame(provider.GetRequiredService<ImmichReverseGeo.Overture.Services.OverturePlacesService>(), wrappedPlacesField.GetValue(infrastructureAdapter));
+        Assert.AreSame(places, wrappedPlacesField.GetValue(infrastructureAdapter));
+        Assert.AreSame(provider.GetRequiredService<ProcessingRunDelay>(), provider.GetRequiredService<IProcessingRunDelay>());
+        Assert.AreSame(TimeProvider.System, provider.GetRequiredService<TimeProvider>());
+        Assert.AreSame(provider.GetRequiredService<ProcessingRunExecutor>(), provider.GetRequiredService<IProcessingRunExecutor>());
         Assert.AreEqual(1, provider.GetServices<ProcessingStateEventReporter>().Count());
 
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);

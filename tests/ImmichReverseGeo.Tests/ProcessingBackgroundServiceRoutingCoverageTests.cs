@@ -125,27 +125,30 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
 
 
     [TestMethod]
-    public async Task NoCityLoggerOnlyDecision_EmitsExactlyOneSkippedDispositionWithoutProcessingLog()
+    public void NoCityLoggerOnlyDecision_IsUnreachableAfterMandatoryFallbackForEveryMatchedShape()
     {
-        var noCity = new GeoResult("United States", null, null);
-        Assert.IsTrue(ProcessingBackgroundService.IsLoggerOnlyNoCitySkip(noCity));
-        Assert.IsFalse(ProcessingBackgroundService.IsLoggerOnlyNoCitySkip(noCity.WithFallbackCity()));
-
-        var reporter = new RecordingProcessingEventReporter();
-        var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
-        var session = await reporter.OpenRunAsync(request, DateTimeOffset.UtcNow);
-        await session.DetermineEligibilityAsync(1);
-        if (ProcessingBackgroundService.IsLoggerOnlyNoCitySkip(noCity))
+        var matchedShapes = new[]
         {
-            await session.ReportSkippedAsync();
+            new GeoResult(string.Empty, null, null),
+            new GeoResult("United States", null, null),
+            new GeoResult("United States", "State", null),
+            new GeoResult("United States", null, "City"),
+            new GeoResult("United States", "State", "City")
+        };
+        var compatibilityGuardDispositions = 0;
+
+        foreach (var matched in matchedShapes)
+        {
+            Assert.IsTrue(matched.HasMatch);
+            var afterMandatoryFallback = matched.WithFallbackCity();
+            Assert.IsNotNull(afterMandatoryFallback.City);
+            if (ProcessingBackgroundService.IsLoggerOnlyNoCitySkip(afterMandatoryFallback))
+            {
+                compatibilityGuardDispositions++;
+            }
         }
 
-        Assert.AreEqual(1, reporter.Events.OfType<ProgressChanged>().Count());
-        var progress = reporter.Events.OfType<ProgressChanged>().Single().Progress;
-        Assert.AreEqual(1L, progress.SkippedCount);
-        Assert.AreEqual(0L, progress.UpdatedCount);
-        Assert.AreEqual(0L, progress.FailedCount);
-        Assert.AreEqual(0, reporter.Events.OfType<LogEmitted>().Count());
+        Assert.AreEqual(0, compatibilityGuardDispositions);
     }
 
     [TestMethod]
@@ -368,7 +371,8 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
 
         Assert.IsNotNull(reporter.OpenedSession);
         Assert.IsNotNull(resolverSession);
-        Assert.AreSame(reporter.OpenedSession, resolverSession);
+        Assert.AreNotSame(reporter.OpenedSession, resolverSession, "The executor supplies one guarded session decorator so every nested reporter entry shares the atomic first-failure boundary.");
+        Assert.AreSame(request, reporter.OpenedSession.Request);
         Assert.AreSame(request, resolverSession.Request);
         var resolverLogs = sink.EventsFor(request).OfType<LogEmitted>().ToArray();
         Assert.AreEqual(3, resolverLogs.Length);

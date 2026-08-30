@@ -37,7 +37,7 @@ Execution SHALL own the authoritative eligibility count, zero-work short circuit
 ### Requirement: Per-asset resolution order and outcomes remain compatible
 For each evaluated asset, the system SHALL perform administrative country/area resolution before optional airport infrastructure lookup. Airport geometry containment SHALL override an administrative city; otherwise an airport candidate SHALL be used only when no administrative city exists. The established city fallback SHALL then prefer city, state, and country in that order. The system SHALL not redesign source preference, geometry, cache preparation, or work eligibility.
 
-A successful location write SHALL produce one Updated disposition. Existing no-country, no-administrative-match, and no-writable-city decisions SHALL produce one Skipped disposition with their established skipped-store and diagnostic differences. A handled per-asset exception SHALL produce one Failed disposition and SHALL not fail an otherwise completed pass. An asset interrupted before a disposition SHALL remain uncounted.
+A successful location write SHALL produce one Updated disposition. Existing reachable no-country and no-administrative-match decisions SHALL produce one Skipped disposition with their established skipped-store and diagnostic differences. After `WithFallbackCity`, every matched `GeoResult` SHALL have a non-null city selected from city, state, then country; the retained logger-only no-city conditional is therefore an unreachable compatibility guard and SHALL NOT be claimed as an executable Skipped disposition. A handled per-asset exception SHALL produce one Failed disposition and SHALL not fail an otherwise completed pass. An asset interrupted before a disposition SHALL remain uncounted.
 
 #### Scenario: Airport geometry contains the asset
 - **WHEN** administrative resolution succeeds and enabled airport lookup returns a geometry-containing candidate
@@ -54,6 +54,14 @@ A successful location write SHALL produce one Updated disposition. Existing no-c
 #### Scenario: Resolved location is writable
 - **WHEN** the final location satisfies the current country-and-city write rule and the Immich update succeeds
 - **THEN** one Updated disposition is committed after the write
+
+#### Scenario: Matched location falls back to state
+- **WHEN** a matched result has no city after airport selection but has a state
+- **THEN** fallback selects that state as the city before the write, one Updated disposition follows a successful write, and no skipped-store insert, logger-only no-city warning, or Skipped disposition occurs
+
+#### Scenario: Matched location falls back to country
+- **WHEN** a matched result has neither city nor state after airport selection
+- **THEN** fallback selects its country as the city before the write, one Updated disposition follows a successful write, and no skipped-store insert, logger-only no-city warning, or Skipped disposition occurs
 
 #### Scenario: Asset operation fails but the pass continues
 - **WHEN** an ordinary or unrelated cancellation-like exception is handled at the per-asset boundary

@@ -13,7 +13,7 @@ namespace ImmichReverseGeo.Web.Services;
 /// Tracks asset IDs that had no ADM0 boundary match, preventing endless reprocessing.
 /// Stored in /data/skipped.db (SQLite).
 /// </summary>
-public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, string dataDir)
+public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, string dataDir) : IProcessingSkippedStore
 {
     // DI constructor
     public SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, StorageOptions dirs)

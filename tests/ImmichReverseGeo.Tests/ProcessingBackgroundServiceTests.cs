@@ -7,6 +7,7 @@ namespace ImmichReverseGeo.Tests;
 [TestClass]
 public class ProcessingBackgroundServiceTests
 {
+    private static readonly TimeSpan GateTimeout = TimeSpan.FromSeconds(10);
     [TestMethod]
     public async Task RunOnceAsync_WhenExactEligibilityCountIsZero_CompletesWithoutFurtherOperations()
     {
@@ -66,15 +67,15 @@ public class ProcessingBackgroundServiceTests
         var pass = fixture.QueuePass(PassOutcome.Success);
 
         await service.TriggerRunAsync();
-        await pass.PassEntered.Task;
+        await pass.PassEntered.Task.WaitAsync(GateTimeout);
 
         Assert.IsTrue(fixture.State.IsRunning);
         Assert.IsNull(fixture.State.LastRunStarted);
         Assert.AreEqual(1, fixture.NotificationCount);
 
         pass.CountReleased.SetResult(1);
-        await pass.Active.Task;
-        await pass.BatchEntered.Task;
+        await pass.Active.Task.WaitAsync(GateTimeout);
+        await pass.BatchEntered.Task.WaitAsync(GateTimeout);
 
         Assert.IsTrue(fixture.State.IsRunning);
         Assert.IsNotNull(fixture.State.LastRunStarted);
@@ -181,21 +182,21 @@ public class ProcessingBackgroundServiceTests
         var pass = fixture.QueuePass(PassOutcome.Success);
 
         var scheduledAdmission = service.TryRunScheduledAsync(CancellationToken.None);
-        await pass.PassEntered.Task;
+        await pass.PassEntered.Task.WaitAsync(GateTimeout);
 
         Assert.IsTrue(fixture.State.IsRunning);
         Assert.IsNull(fixture.State.LastRunStarted);
 
         pass.CountReleased.SetResult(1);
-        await pass.Active.Task;
-        await pass.BatchEntered.Task;
+        await pass.Active.Task.WaitAsync(GateTimeout);
+        await pass.BatchEntered.Task.WaitAsync(GateTimeout);
 
         Assert.IsTrue(fixture.State.IsRunning);
         Assert.IsNotNull(fixture.State.LastRunStarted);
 
         pass.BatchReleased.SetResult(true);
         await scheduledAdmission;
-        await pass.Terminal.Task;
+        await pass.Terminal.Task.WaitAsync(GateTimeout);
 
         AssertTerminalSuccess(fixture.State);
     }
@@ -236,7 +237,7 @@ public class ProcessingBackgroundServiceTests
         await ReachActiveAsync(fixture, scheduled);
         scheduled.BatchReleased.SetResult(true);
         await scheduledAdmission;
-        await scheduled.Terminal.Task;
+        await scheduled.Terminal.Task.WaitAsync(GateTimeout);
 
         Assert.AreEqual(2, fixture.PassCount);
         AssertTerminalSuccess(fixture.State);
@@ -319,7 +320,7 @@ public class ProcessingBackgroundServiceTests
     }
 
     [TestMethod]
-    public async Task RunOnceAsync_GeodataOutOfMemoryEscapesAssetAndRunBoundaries()
+    public async Task RunOnceAsync_GeodataOutOfMemoryEscapesAssetBoundaryAndProducesFailedRun()
     {
         var state = new ProcessingState();
         var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
@@ -333,13 +334,14 @@ public class ProcessingBackgroundServiceTests
             _ => throw UnexpectedOperation("skipped-record write"),
             (_, _, _) => throw UnexpectedOperation("location write"));
 
-        await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => ProcessingBackgroundService.RunOnceAsync(
-            NullLogger<ProcessingBackgroundService>.Instance, state, operations, CancellationToken.None));
+        await ProcessingBackgroundService.RunOnceAsync(
+            NullLogger<ProcessingBackgroundService>.Instance, state, operations, CancellationToken.None);
 
-        Assert.AreEqual(0, state.ErrorsThisRun);
+        Assert.AreEqual(1, state.ErrorsThisRun);
         Assert.AreEqual(0, state.SkippedThisRun);
         Assert.IsFalse(state.IsRunning);
-        Assert.IsTrue(state.GetRecentLog().Any(line => line.EndsWith("Run complete. Processed=0 Skipped=0 Errors=0", StringComparison.Ordinal)));
+        Assert.AreEqual("Fatal: controlled geodata memory failure", state.LastError);
+        Assert.IsTrue(state.GetRecentLog().Any(line => line.EndsWith("Run complete. Processed=0 Skipped=0 Errors=1", StringComparison.Ordinal)));
     }
 
     private static async Task<PassPlan> StartActiveManualPassAsync(
@@ -355,10 +357,10 @@ public class ProcessingBackgroundServiceTests
 
     private static async Task ReachActiveAsync(ProcessingFixture fixture, PassPlan pass)
     {
-        await pass.PassEntered.Task;
+        await pass.PassEntered.Task.WaitAsync(GateTimeout);
         pass.CountReleased.SetResult(1);
-        await pass.Active.Task;
-        await pass.BatchEntered.Task;
+        await pass.Active.Task.WaitAsync(GateTimeout);
+        await pass.BatchEntered.Task.WaitAsync(GateTimeout);
         Assert.IsTrue(fixture.State.IsRunning);
         Assert.IsNotNull(fixture.State.LastRunStarted);
     }
@@ -378,7 +380,7 @@ public class ProcessingBackgroundServiceTests
                 throw new ArgumentOutOfRangeException(nameof(pass));
         }
 
-        await pass.Terminal.Task;
+        await pass.Terminal.Task.WaitAsync(GateTimeout);
         await service.WaitForManualAdmissionAsync();
     }
 
@@ -490,7 +492,7 @@ public class ProcessingBackgroundServiceTests
             var plan = _currentPlan!;
             plan.Active.SetResult(true);
             plan.BatchEntered.SetResult(true);
-            await plan.BatchReleased.Task.WaitAsync(cancellationToken);
+            await plan.BatchReleased.Task.WaitAsync(GateTimeout, cancellationToken);
             if (plan.Outcome == PassOutcome.Failure)
             {
                 throw new InvalidOperationException("injected pass failure");

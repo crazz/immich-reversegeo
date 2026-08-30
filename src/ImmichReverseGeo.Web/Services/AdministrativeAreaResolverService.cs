@@ -13,7 +13,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Services;
 
-public class AdministrativeAreaResolverService
+public class AdministrativeAreaResolverService : IProcessingAdministrativeResolver
 {
     private readonly ILogger<AdministrativeAreaResolverService> _logger;
     private readonly CityResolverProfileCatalogService _cityResolverCatalog;
