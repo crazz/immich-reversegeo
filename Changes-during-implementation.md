@@ -505,4 +505,4 @@
 - Implementation CI: commit `8163d18636cadfb1f82233218774a3716f156ccf`, run `33338233763` (`Build and Test`) succeeded in 2m 35s.
 - Main-spec sync created `openspec/specs/processing-run-execution/spec.md`; `openspec validate --specs` passed 11/11, all seven delta requirements and their scenarios are present under `## Requirements`, and no delta operation header remains.
 - Archive completed at 2026-08-30T22:29:41Z at `openspec/changes/archive/2026-08-30-11-extract-processing-run-executor/`. Elapsed from implementation start to archive completion: 2h 23m 07s. Sync/archive elapsed after implementation CI completion: approximately 20m 34s, including one 600-second archive-confirmation wait ceiling.
-- Archive CI duration remains pending until the archive commit is pushed and verified.
+- Archive commit `5e5ce0393184969b8eda0154879dc72b9a0b6376` pushed to `origin/major-redesign`; CI run `33339328497` (`Build and Test`) succeeded in 2m 16s and completed at 2026-08-30T22:32:47Z. End-to-end elapsed from Change-11 start through verified archive CI: 2h 26m 13s.
