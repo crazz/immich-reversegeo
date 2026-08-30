@@ -119,9 +119,9 @@ public class ProcessingBackgroundServiceDelegationTests
         }
     }
 
-    private sealed class FixedConfiguration : IProcessingRunConfiguration
+    private sealed class FixedConfiguration : IProcessingScheduleConfiguration
     {
-        public Task<AppConfig> GetConfigAsync() => Task.FromResult(new AppConfig());
+        public Task<ProcessingScheduleSnapshot> GetSnapshotAsync() => Task.FromResult(new ProcessingScheduleSnapshot(false, "0 * * * *"));
     }
 
     private sealed class RecordingExecutor : IProcessingRunExecutor

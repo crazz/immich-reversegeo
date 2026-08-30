@@ -13,6 +13,7 @@ internal static class ProcessingServiceRegistration
         services.AddSingleton<ProcessingStateEventReporter>();
         services.AddSingleton<IProcessingEventReporter>(sp => sp.GetRequiredService<ProcessingStateEventReporter>());
         services.AddSingleton<IProcessingRunConfiguration>(sp => sp.GetRequiredService<ConfigService>());
+        services.AddSingleton<IProcessingScheduleConfiguration>(sp => sp.GetRequiredService<ConfigService>());
         services.AddSingleton<IProcessingAssetRepository>(sp => sp.GetRequiredService<ImmichDbRepository>());
         services.AddSingleton<IProcessingSkippedStore>(sp => sp.GetRequiredService<SkippedAssetsRepository>());
         services.AddSingleton<IProcessingAdministrativeResolver>(sp => sp.GetRequiredService<AdministrativeAreaResolverService>());
@@ -32,6 +33,7 @@ internal static class ProcessingServiceRegistration
             sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IProcessingRunExecutor>(sp => sp.GetRequiredService<ProcessingRunExecutor>());
         services.AddSingleton<ProcessingBackgroundService>();
+        services.AddSingleton<IScheduledRunTrigger>(sp => sp.GetRequiredService<ProcessingBackgroundService>());
         services.AddHostedService(sp => sp.GetRequiredService<ProcessingBackgroundService>());
         return services;
     }

@@ -2,7 +2,6 @@ using System;
 using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
-using Cronos;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Overture.Models;
@@ -11,21 +10,21 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Services;
 
-public class ProcessingBackgroundService : BackgroundService
+public class ProcessingBackgroundService : BackgroundService, IScheduledRunTrigger
 {
     private readonly ILogger<ProcessingBackgroundService> logger;
     private readonly ProcessingState state;
     private readonly ProcessingStateEventReporter _reporter;
     private readonly IProcessingRunExecutor _executor;
-    private readonly IProcessingRunConfiguration _configuration;
     private readonly Func<Task> _initialiseSkippedAssetsAsync;
+    private readonly ProcessingScheduleLoop _scheduleLoop;
     private CancellationTokenSource? _runCts;
     private Task? _manualRunTask;
     private readonly SemaphoreSlim _runLock = new(1, 1);
 
-    public ProcessingBackgroundService(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingStateEventReporter reporter, IProcessingRunExecutor executor, IProcessingRunConfiguration configuration, SkippedAssetsRepository skipped)
+    public ProcessingBackgroundService(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingStateEventReporter reporter, IProcessingRunExecutor executor, IProcessingScheduleConfiguration configuration, SkippedAssetsRepository skipped, TimeProvider timeProvider)
     {
-        this.logger = logger; this.state = state; _reporter = reporter; _executor = executor; _configuration = configuration; _initialiseSkippedAssetsAsync = skipped.InitialiseAsync;
+        this.logger = logger; this.state = state; _reporter = reporter; _executor = executor; _initialiseSkippedAssetsAsync = skipped.InitialiseAsync; _scheduleLoop = new ProcessingScheduleLoop(configuration, timeProvider, state.AppendLog, this);
     }
 
     internal ProcessingBackgroundService(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingOperations operations)
@@ -33,12 +32,17 @@ public class ProcessingBackgroundService : BackgroundService
 
     internal ProcessingBackgroundService(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingStateEventReporter reporter, ProcessingOperations operations)
     {
-        this.logger = logger; this.state = state; _reporter = reporter; _configuration = operations; _executor = new ProcessingRunExecutor(logger, operations, operations, operations, operations, operations, operations, TimeProvider.System); _initialiseSkippedAssetsAsync = () => Task.CompletedTask;
+        this.logger = logger; this.state = state; _reporter = reporter; _executor = new ProcessingRunExecutor(logger, operations, operations, operations, operations, operations, operations, TimeProvider.System); _initialiseSkippedAssetsAsync = () => Task.CompletedTask; _scheduleLoop = new ProcessingScheduleLoop(operations, TimeProvider.System, state.AppendLog, this);
     }
 
-    internal ProcessingBackgroundService(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingStateEventReporter reporter, IProcessingRunExecutor executor, IProcessingRunConfiguration configuration)
+    internal ProcessingBackgroundService(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingStateEventReporter reporter, IProcessingRunExecutor executor, IProcessingScheduleConfiguration configuration)
+        : this(logger, state, reporter, executor, configuration, () => Task.CompletedTask, TimeProvider.System)
     {
-        this.logger = logger; this.state = state; _reporter = reporter; _executor = executor; _configuration = configuration; _initialiseSkippedAssetsAsync = () => Task.CompletedTask;
+    }
+
+    internal ProcessingBackgroundService(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingStateEventReporter reporter, IProcessingRunExecutor executor, IProcessingScheduleConfiguration configuration, Func<Task> initialiseSkippedAssetsAsync, TimeProvider timeProvider)
+    {
+        this.logger = logger; this.state = state; _reporter = reporter; _executor = executor; _initialiseSkippedAssetsAsync = initialiseSkippedAssetsAsync; _scheduleLoop = new ProcessingScheduleLoop(configuration, timeProvider, state.AppendLog, this);
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -48,19 +52,26 @@ public class ProcessingBackgroundService : BackgroundService
         await _initialiseSkippedAssetsAsync().ConfigureAwait(false);
         logger.LogInformation("ProcessingBackgroundService: skipped-assets db ready in {Elapsed}ms", sw.ElapsedMilliseconds);
         state.AppendLog("Service started. Waiting for next scheduled run.");
-        while (!stoppingToken.IsCancellationRequested)
+        try
         {
-            var cfg = await _configuration.GetConfigAsync().ConfigureAwait(false);
-            if (!cfg.Schedule.Enabled) { await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken).ConfigureAwait(false); continue; }
-            var next = GetNextOccurrence(cfg.Schedule.Cron);
-            if (next is null) { await Task.Delay(TimeSpan.FromMinutes(5), stoppingToken).ConfigureAwait(false); continue; }
-            var delay = next.Value - DateTime.UtcNow;
-            if (delay > TimeSpan.Zero) { state.AppendLog($"Next run scheduled at {next.Value:u}"); await Task.Delay(delay, stoppingToken).ConfigureAwait(false); }
-            if (!stoppingToken.IsCancellationRequested) { await TryRunScheduledAsync(stoppingToken).ConfigureAwait(false); }
+            await _scheduleLoop.RunAsync(stoppingToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException ex) when (stoppingToken.IsCancellationRequested && ex.CancellationToken == stoppingToken)
+        {
         }
     }
 
     internal async Task TryRunScheduledAsync(CancellationToken stoppingToken)
+    {
+        await TriggerScheduledAsync(stoppingToken).ConfigureAwait(false);
+    }
+
+    async Task<ScheduledTriggerResult> IScheduledRunTrigger.TriggerScheduledAsync(CancellationToken stoppingToken)
+    {
+        return await TriggerScheduledAsync(stoppingToken).ConfigureAwait(false);
+    }
+
+    internal async Task<ScheduledTriggerResult> TriggerScheduledAsync(CancellationToken stoppingToken)
     {
         if (await _runLock.WaitAsync(0, stoppingToken).ConfigureAwait(false))
         {
@@ -70,11 +81,14 @@ public class ProcessingBackgroundService : BackgroundService
                 var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Scheduled);
                 if (!_reporter.Arm(request)) { state.ClearPending(); throw new InvalidOperationException("Processing event reporter is already armed."); }
                 await RunOnceAsync(request, stoppingToken).ConfigureAwait(false);
+                return ScheduledTriggerResult.AcceptedAfterTerminal;
             }
             catch { TryClearPending(state); throw; }
             finally { _runLock.Release(); }
         }
-        else { state.AppendLog("Scheduled run skipped because a processing pass is already in progress."); }
+
+        state.AppendLog("Scheduled run skipped because a processing pass is already in progress.");
+        return ScheduledTriggerResult.RejectedAlreadyRunning;
     }
 
     public Task TriggerRunAsync()
@@ -134,10 +148,6 @@ public class ProcessingBackgroundService : BackgroundService
         try { processingState.ClearPending(); } catch { }
     }
 
-    private static DateTime? GetNextOccurrence(string cron)
-    {
-        try { var expression = CronExpression.Parse(cron, CronFormat.Standard); return expression.GetNextOccurrence(DateTime.UtcNow, TimeZoneInfo.Utc); } catch { return null; }
-    }
 
     internal sealed class ProcessingOperations(
         Func<CancellationToken, Task<long>> count, Func<Task<AppConfig>> config, Func<Task<HashSet<Guid>>> getSkipped,
@@ -145,10 +155,15 @@ public class ProcessingBackgroundService : BackgroundService
         Func<double, double, ProcessingConfig, IProcessingRunEventSession, CancellationToken, Task<AdministrativeAreaResolution?>> resolve,
         Func<double, double, string?, CancellationToken, Task<OvertureInfrastructureLookupDiagnostics>> infrastructure,
         Func<Guid, Task> addSkipped, Func<Guid, GeoResult, CancellationToken, Task> write)
-        : IProcessingRunConfiguration, IProcessingAssetRepository, IProcessingSkippedStore, IProcessingAdministrativeResolver, IProcessingInfrastructureLookup, IProcessingRunDelay
+        : IProcessingRunConfiguration, IProcessingScheduleConfiguration, IProcessingAssetRepository, IProcessingSkippedStore, IProcessingAdministrativeResolver, IProcessingInfrastructureLookup, IProcessingRunDelay
     {
         public Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken = default) => count(cancellationToken);
         public Task<AppConfig> GetConfigAsync() => config();
+        async Task<ProcessingScheduleSnapshot> IProcessingScheduleConfiguration.GetSnapshotAsync()
+        {
+            var appConfig = await config().ConfigureAwait(false);
+            return new ProcessingScheduleSnapshot(appConfig.Schedule.Enabled, appConfig.Schedule.Cron);
+        }
         public Task<HashSet<Guid>> GetAllAsync() => getSkipped();
         public Task<List<AssetRecord>> GetUnprocessedBatchAsync(AssetCursor cursor, int batchSize, CancellationToken cancellationToken = default) => getBatch(cursor, batchSize, cancellationToken);
         public Task<AdministrativeAreaResolution?> ResolveAsync(double latitude, double longitude, ProcessingConfig processingConfig, IProcessingRunEventSession session, CancellationToken cancellationToken = default) => resolve(latitude, longitude, processingConfig, session, cancellationToken);

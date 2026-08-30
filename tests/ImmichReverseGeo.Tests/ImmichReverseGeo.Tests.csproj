@@ -24,6 +24,7 @@
   <ItemGroup>
     <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\iso3166.json" Link="data/iso3166.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\defaults\city-resolver-profiles.json" Link="data\city-resolver-profiles.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="change12-verification-evidence.json" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

@@ -7,7 +7,7 @@ using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Services;
 
-public class ConfigService(ILogger<ConfigService> logger, string? configDir = null) : IProcessingRunConfiguration
+public class ConfigService(ILogger<ConfigService> logger, string? configDir = null) : IProcessingRunConfiguration, IProcessingScheduleConfiguration
 {
     private readonly string _configPath = Path.Combine(
         configDir ?? "/config", "settings.json");
@@ -29,6 +29,12 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
         await using var fs = File.OpenRead(_configPath);
         var config = await JsonSerializer.DeserializeAsync<AppConfig>(fs, _json) ?? new AppConfig();
         return EnsureDefaults(config);
+    }
+
+    async Task<ProcessingScheduleSnapshot> IProcessingScheduleConfiguration.GetSnapshotAsync()
+    {
+        var config = await GetConfigAsync().ConfigureAwait(false);
+        return new ProcessingScheduleSnapshot(config.Schedule.Enabled, config.Schedule.Cron);
     }
 
     public async Task SaveConfigAsync(AppConfig config)

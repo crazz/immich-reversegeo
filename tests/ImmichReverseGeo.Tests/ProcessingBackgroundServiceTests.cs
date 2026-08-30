@@ -42,7 +42,7 @@ public class ProcessingBackgroundServiceTests
         Assert.IsFalse(passTask.IsCompleted, "The processing pass must await the exact-count operation.");
 
         countCompletion.SetResult(0);
-        await passTask;
+        await passTask.WaitAsync(GateTimeout);
 
         Assert.AreEqual(1, countCalls);
         Assert.AreEqual(0, state.TotalUnprocessed);
@@ -195,7 +195,7 @@ public class ProcessingBackgroundServiceTests
         Assert.IsNotNull(fixture.State.LastRunStarted);
 
         pass.BatchReleased.SetResult(true);
-        await scheduledAdmission;
+        await scheduledAdmission.WaitAsync(GateTimeout);
         await pass.Terminal.Task.WaitAsync(GateTimeout);
 
         AssertTerminalSuccess(fixture.State);
@@ -236,7 +236,7 @@ public class ProcessingBackgroundServiceTests
         var scheduledAdmission = service.TryRunScheduledAsync(CancellationToken.None);
         await ReachActiveAsync(fixture, scheduled);
         scheduled.BatchReleased.SetResult(true);
-        await scheduledAdmission;
+        await scheduledAdmission.WaitAsync(GateTimeout);
         await scheduled.Terminal.Task.WaitAsync(GateTimeout);
 
         Assert.AreEqual(2, fixture.PassCount);
@@ -381,7 +381,7 @@ public class ProcessingBackgroundServiceTests
         }
 
         await pass.Terminal.Task.WaitAsync(GateTimeout);
-        await service.WaitForManualAdmissionAsync();
+        await service.WaitForManualAdmissionAsync().WaitAsync(GateTimeout);
     }
 
     private static void AssertTerminalSuccess(ProcessingState state)

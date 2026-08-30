@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "change": "12-separate-schedule-calculation-from-execution",
+  "records": [
+    {
+      "taskId": "6.1",
+      "commands": [
+        {
+          "kind": "focused",
+          "command": "dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --no-build --filter \"FullyQualifiedName~ProcessingScheduleChange12|FullyQualifiedName~ProcessingBackgroundServiceTests|FullyQualifiedName~ProcessingBackgroundServiceDelegationTests|FullyQualifiedName~ProcessingBackgroundServiceRoutingCoverageTests|FullyQualifiedName~ProcessingServiceRegistrationTests|FullyQualifiedName~ProcessingRunExecutorTests|FullyQualifiedName~ProcessingRunExecutorChange11Tests|FullyQualifiedName~ConfigServiceTests|FullyQualifiedName~ScheduleEditorStateTests|FullyQualifiedName~ProcessingStateEventReporterTests|FullyQualifiedName~ProcessingStateTests\"",
+          "result": "147/147 passed; 0 failed; 0 skipped; duration 3s 505ms"
+        }
+      ]
+    },
+    {
+      "taskId": "6.2",
+      "commands": [
+        {
+          "kind": "canonical",
+          "command": "npm run test",
+          "result": "376/376 passed; 0 failed; 0 skipped; duration 29s 018ms; default Integration/Performance exclusions"
+        }
+      ]
+    },
+    {
+      "taskId": "6.3",
+      "commands": [
+        {
+          "kind": "strict",
+          "command": "openspec validate 12-separate-schedule-calculation-from-execution --strict",
+          "result": "exit 0; Change '12-separate-schedule-calculation-from-execution' is valid"
+        },
+        {
+          "kind": "status",
+          "command": "openspec status --change 12-separate-schedule-calculation-from-execution --json",
+          "result": "exit 0; isComplete true; proposal/specs/design/tasks status done"
+        },
+        {
+          "kind": "apply",
+          "command": "openspec instructions apply --change 12-separate-schedule-calculation-from-execution --json",
+          "result": "exit 0; state all_done; total 29; complete 29; remaining 0"
+        }
+      ]
+    }
+  ]
+}
