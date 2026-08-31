@@ -524,4 +524,7 @@ Turn-5 evidence is historical only. Turn-6 evidence is valid only after the last
 - Implementation commit: `c1059b9ed02c1f2e061e0d39e4c047cc57b608fc` (`feat: introduce processing run coordinator`). Implementation CI run `33390164414`, job `99481719886`, succeeded in **2m 28s**.
 - Delta sync created `openspec/specs/processing-run-coordination/spec.md` with canonical `## Requirements`; `openspec validate --specs` passed **13/13**.
 - Archived under the user's standing authorization at `openspec/changes/archive/2026-08-31-13-introduce-processing-run-coordinator/`. Readiness: all artifacts done, 24/24 tasks, zero unchecked. Archive move/validation UTC: **2026-08-31T12:12:31Z**. Archive commit preparation UTC: **2026-08-31T12:13:22Z**.
-- Archive commit, archive CI, final verification record, and loop trace remain pending.
+- Archive commit: `5985f4fd0b7690dabddd2e5fc5ac11af55d536f9` (`chore(openspec): archive change 13`). Archive CI run `33390779269`, job `99483653082`, succeeded in **2m 21s** and completed at 2026-08-31T12:16:58Z.
+- End-to-end wall time from implementation start through successful archive CI: **12h 06m 11s**. Implementation and archive CI occupied **4m 49s**; approval-to-archive-CI finalization occupied **13m 05s**.
+- The durable loop analysis is `performance-trace.md`. Change 13 is implemented, approved, synced, archived, pushed, and archive-CI-verified. No Change 14 work was started.
+- Final performance-record commit and its CI remain pending.
