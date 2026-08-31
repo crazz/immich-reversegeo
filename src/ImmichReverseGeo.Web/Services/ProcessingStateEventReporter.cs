@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
@@ -14,11 +15,13 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
     private readonly object _projectionGate = new();
     private readonly Dictionary<Guid, IDisposable> _activities = [];
     private ProcessingRunRequest? _armedRequest;
+    private ProcessingRunRequest? _lastReleasedRequest;
     private bool _terminal;
     private ProcessingProgress? _lastProgress;
     private ProcessingState.ProgressSnapshot? _armedProgress;
     private bool _eligibilityProjected;
     private readonly Action<ProcessingEvent>? _beforeProjection;
+    private readonly Action<string, ProcessingRunRequest>? _controlObserver;
 
     public ProcessingStateEventReporter(ProcessingState state)
         : this(state, null)
@@ -26,9 +29,18 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
     }
 
     internal ProcessingStateEventReporter(ProcessingState state, Action<ProcessingEvent>? beforeProjection)
+        : this(state, beforeProjection, null)
+    {
+    }
+
+    internal ProcessingStateEventReporter(
+        ProcessingState state,
+        Action<ProcessingEvent>? beforeProjection,
+        Action<string, ProcessingRunRequest>? controlObserver)
     {
         _state = state;
         _beforeProjection = beforeProjection;
+        _controlObserver = controlObserver;
     }
 
     internal bool Arm(ProcessingRunRequest request)
@@ -43,10 +55,12 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
             }
 
             _armedRequest = request;
+            _lastReleasedRequest = null;
             _terminal = false;
             _lastProgress = null;
             _armedProgress = _state.ReadProgressSnapshot();
             _eligibilityProjected = false;
+            _controlObserver?.Invoke("arm", request);
             return true;
         }
     }
@@ -63,41 +77,69 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
                 return false;
             }
 
-            foreach (var activity in _activities.Values)
-            {
-                try
-                {
-                    activity.Dispose();
-                }
-                catch
-                {
-                    // Recovery must finish even when a synchronous state observer is the fault source.
-                }
-            }
-
-            _activities.Clear();
-            var progress = _lastProgress;
-            var fallback = _eligibilityProjected
-                ? ProcessingState.ProgressSnapshot.Empty
-                : _armedProgress ?? _state.ReadProgressSnapshot();
-            var updated = progress?.UpdatedCount ?? fallback.Processed;
-            var skipped = progress?.SkippedCount ?? fallback.Skipped;
-            var failed = progress?.FailedCount ?? fallback.Errors;
             try
             {
-                _state.RestoreFatalFailureSnapshot(updated, skipped, failed, $"Fatal: {failure.Message}");
+                _controlObserver?.Invoke("abandon", request);
+                foreach (var activity in _activities.Values)
+                {
+                    try
+                    {
+                        activity.Dispose();
+                    }
+                    catch
+                    {
+                        // Recovery must finish even when a synchronous state observer is the fault source.
+                    }
+                }
+
+                _activities.Clear();
+                RestoreFailureSnapshot(failure);
+                return true;
             }
-            catch
+            finally
             {
-                // The snapshot is committed before notification; never recurse through the broken session.
+                ReleaseArm();
+            }
+        }
+    }
+
+    internal bool RollbackPendingAfterArmRejection(ProcessingRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+
+        lock (_projectionGate)
+        {
+            if (ReferenceEquals(_armedRequest, request) || ReferenceEquals(_lastReleasedRequest, request))
+            {
+                return false;
             }
 
-            _terminal = true;
-            _armedRequest = null;
-            _lastProgress = null;
-            _armedProgress = null;
-            _eligibilityProjected = false;
+            _state.ClearPending();
             return true;
+        }
+    }
+
+    internal bool AbandonPending(ProcessingRunRequest request, Exception failure)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(failure);
+
+        lock (_projectionGate)
+        {
+            if (_armedRequest is not null || ReferenceEquals(_lastReleasedRequest, request))
+            {
+                return false;
+            }
+
+            try
+            {
+                RestoreFailureSnapshot(failure);
+                return true;
+            }
+            finally
+            {
+                ReleaseArm();
+            }
         }
     }
 
@@ -181,28 +223,85 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
             return;
         }
 
-        if (result.Outcome == ProcessingRunOutcome.Cancelled)
+        ExceptionDispatchInfo? firstFailure = null;
+
+        void Attempt(Action mutation)
         {
-            _state.AppendLog("Run cancelled.");
-        }
-        else if (result.Outcome == ProcessingRunOutcome.Failed)
-        {
-            _state.IncrementError($"Fatal: {result.FailureMessage}");
+            try
+            {
+                mutation();
+            }
+            catch (Exception failure)
+            {
+                firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+            }
         }
 
-        foreach (var activity in _activities.Values)
+        try
         {
-            activity.Dispose();
+            if (result.Outcome == ProcessingRunOutcome.Cancelled)
+            {
+                Attempt(() => _state.AppendLog("Run cancelled."));
+            }
+            else if (result.Outcome == ProcessingRunOutcome.Failed)
+            {
+                Attempt(() => _state.IncrementError($"Fatal: {result.FailureMessage}"));
+            }
+
+            foreach (var activity in _activities.Values)
+            {
+                Attempt(activity.Dispose);
+            }
+
+            _activities.Clear();
+            Attempt(_state.CompleteRun);
+            Attempt(() => _state.AppendLog($"Run complete. Processed={_state.ProcessedThisRun} Skipped={_state.SkippedThisRun} Errors={_state.ErrorsThisRun}"));
+
+            if (firstFailure is not null)
+            {
+                RestoreFailureSnapshot(firstFailure.SourceException);
+            }
+        }
+        finally
+        {
+            ReleaseArm();
         }
 
-        _activities.Clear();
-        _state.CompleteRun();
-        _state.AppendLog($"Run complete. Processed={_state.ProcessedThisRun} Skipped={_state.SkippedThisRun} Errors={_state.ErrorsThisRun}");
+        firstFailure?.Throw();
+    }
+
+    private void RestoreFailureSnapshot(Exception failure)
+    {
+        var progress = _lastProgress;
+        var fallback = _eligibilityProjected
+            ? ProcessingState.ProgressSnapshot.Empty
+            : _armedProgress ?? _state.ReadProgressSnapshot();
+        var updated = progress?.UpdatedCount ?? fallback.Processed;
+        var skipped = progress?.SkippedCount ?? fallback.Skipped;
+        var failed = progress?.FailedCount ?? fallback.Errors;
+        try
+        {
+            _state.RestoreFatalFailureSnapshot(updated, skipped, failed, $"Fatal: {failure.Message}");
+        }
+        catch
+        {
+            // The snapshot is committed before notification; never recurse through the broken session.
+        }
+    }
+
+    private void ReleaseArm()
+    {
+        var releasedRequest = _armedRequest;
         _terminal = true;
+        _lastReleasedRequest = releasedRequest;
         _armedRequest = null;
         _lastProgress = null;
         _armedProgress = null;
         _eligibilityProjected = false;
+        if (releasedRequest is not null)
+        {
+            _controlObserver?.Invoke("release", releasedRequest);
+        }
     }
 
     private void EndActivity(Guid activityId)

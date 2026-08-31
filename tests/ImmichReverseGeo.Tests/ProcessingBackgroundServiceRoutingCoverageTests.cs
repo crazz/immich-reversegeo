@@ -28,7 +28,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             }
 
             var operations = Operations(_ => Task.FromException<long>(failure));
-            await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
+            await ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
 
             Assert.IsFalse(state.IsRunning);
             Assert.AreEqual(priorStart, state.LastRunStarted);
@@ -53,7 +53,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             [new(suppressed, 1, 1, DateTime.UtcNow), new(written, 2, 2, DateTime.UtcNow), new(noCountry, 3, 3, DateTime.UtcNow), new(failing, 4, 4, DateTime.UtcNow)],
             []]);
         var writes = 0;
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(4L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, VerboseLogging = true, UseAirportInfrastructure = false } }),
             () => Task.FromResult(new HashSet<Guid> { suppressed }),
@@ -77,7 +77,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
                 throw new InvalidOperationException("write failed");
             });
 
-        await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
+        await ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
 
         Assert.AreEqual(1, writes);
         Assert.AreEqual(1L, state.ProcessedThisRun);
@@ -94,7 +94,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         var firstBatch = true;
         var writeAccepted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var releaseCancellation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        operations = new ProcessingBackgroundService.ProcessingOperations(
+        operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(1L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false } }),
             () => Task.FromResult(new HashSet<Guid>()),
@@ -113,7 +113,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             (_, _, _, _) => throw new AssertFailedException("airport lookup was not expected"),
             _ => Task.CompletedTask,
             async (_, _, _) => { writeAccepted.TrySetResult(); await releaseCancellation.Task.WaitAsync(TestTimeout); });
-        var pass = ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
+        var pass = ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
         await writeAccepted.Task.WaitAsync(TestTimeout);
         releaseCancellation.SetResult();
         cancellation.Cancel();
@@ -142,7 +142,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             Assert.IsTrue(matched.HasMatch);
             var afterMandatoryFallback = matched.WithFallbackCity();
             Assert.IsNotNull(afterMandatoryFallback.City);
-            if (ProcessingBackgroundService.IsLoggerOnlyNoCitySkip(afterMandatoryFallback))
+            if (ProcessingRunExecution.IsLoggerOnlyNoCitySkip(afterMandatoryFallback))
             {
                 compatibilityGuardDispositions++;
             }
@@ -162,7 +162,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         };
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
 
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingBackgroundService.RunOnceAsync(
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingRunExecution.RunOnceAsync(
             NullLogger<ProcessingBackgroundService>.Instance,
             new ProcessingState(),
             reporter,
@@ -209,7 +209,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         var batches = new Queue<List<AssetRecord>>([[asset], []]);
         var sideEffects = 0;
         var requiresAsset = faultStage is "log" or "progress-updated" or "progress-skipped" or "progress-failed";
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(requiresAsset ? 1L : 0L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false } }),
             () => Task.FromResult(faultStage == "log" ? new HashSet<Guid> { asset.Id } : new HashSet<Guid>()),
@@ -224,7 +224,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             _ => { sideEffects++; return Task.CompletedTask; },
             (_, _, _) => { sideEffects++; return Task.CompletedTask; });
 
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingBackgroundService.RunOnceAsync(
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingRunExecution.RunOnceAsync(
             NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, CancellationToken.None));
 
         var expectedProcessed = faultStage is "start" or "eligibility" ? 1L : faultStage == "progress-updated" ? 1L : 0L;
@@ -266,12 +266,12 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         Assert.IsTrue(reporter.Arm(request));
         throwNotification = true;
 
-        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingBackgroundService.RunOnceAsync(
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingRunExecution.RunOnceAsync(
             NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, Operations(_ => Task.FromResult(0L)), CancellationToken.None));
 
         Assert.IsFalse(state.IsRunning);
         Assert.AreEqual("Fatal: notification failed", state.LastError);
-        var service = new ProcessingBackgroundService(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
+        var service = new ProcessingRunCoordinatorTestHost(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
         await service.TryRunScheduledAsync(CancellationToken.None);
         Assert.IsFalse(state.IsRunning);
         await service.TriggerRunAsync();
@@ -295,7 +295,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             }
         };
         var reporter = new ProcessingStateEventReporter(state);
-        var service = new ProcessingBackgroundService(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
+        var service = new ProcessingRunCoordinatorTestHost(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
 
         if (trigger == "manual")
         {
@@ -320,7 +320,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         var state = new ProcessingState();
         var reporter = new ProcessingStateEventReporter(state);
         Assert.IsTrue(reporter.Arm(new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual)));
-        var service = new ProcessingBackgroundService(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
+        var service = new ProcessingRunCoordinatorTestHost(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
 
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.TryRunScheduledAsync(CancellationToken.None));
         Assert.IsFalse(state.IsRunning);
@@ -334,7 +334,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         var state = new ProcessingState();
         var reporter = new ProcessingStateEventReporter(state);
         Assert.IsTrue(reporter.Arm(new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Scheduled)));
-        var service = new ProcessingBackgroundService(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
+        var service = new ProcessingRunCoordinatorTestHost(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, Operations(_ => Task.FromResult(0L)));
 
         await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.TriggerRunAsync());
         Assert.IsFalse(state.IsRunning);
@@ -352,7 +352,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
         var batches = new Queue<List<AssetRecord>>([[asset], []]);
         IProcessingRunEventSession? resolverSession = null;
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(1L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1 } }),
             () => Task.FromResult(new HashSet<Guid>()),
@@ -367,7 +367,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             _ => Task.CompletedTask,
             (_, _, _) => throw new AssertFailedException("write was not expected"));
 
-        await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, CancellationToken.None);
+        await ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, CancellationToken.None);
 
         Assert.IsNotNull(reporter.OpenedSession);
         Assert.IsNotNull(resolverSession);
@@ -405,8 +405,8 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             });
             state.MarkPending(); Assert.IsTrue(reporter.Arm(request));
             var batches = new Queue<List<AssetRecord>>([[new(Guid.NewGuid(), 38.9, -77.0, DateTime.UtcNow)], []]);
-            var operations = new ProcessingBackgroundService.ProcessingOperations(_ => Task.FromResult(1L), () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false, UseGadmAdministrativeAreas = gadm, PreferGadmAdministrativeAreas = gadm } }), () => Task.FromResult(new HashSet<Guid>()), (_, _, _) => Task.FromResult(batches.Dequeue()), (_, _, c, s, ct) => fixture.ResolveAsync(c.UseGadmAdministrativeAreas, s, ct), (_, _, _, _) => throw new AssertFailedException("airport lookup was not expected"), _ => Task.CompletedTask, (_, _, _) => Task.CompletedTask);
-            var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, CancellationToken.None));
+            var operations = new ProcessingRunExecution.ProcessingOperations(_ => Task.FromResult(1L), () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false, UseGadmAdministrativeAreas = gadm, PreferGadmAdministrativeAreas = gadm } }), () => Task.FromResult(new HashSet<Guid>()), (_, _, _) => Task.FromResult(batches.Dequeue()), (_, _, c, s, ct) => fixture.ResolveAsync(c.UseGadmAdministrativeAreas, s, ct), (_, _, _, _) => throw new AssertFailedException("airport lookup was not expected"), _ => Task.CompletedTask, (_, _, _) => Task.CompletedTask);
+            var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, CancellationToken.None));
             Assert.AreSame(sinkFailure, failure); Assert.IsTrue(faulted);
             var common = new[]
             {
@@ -445,7 +445,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             }
             Assert.AreEqual(0L, state.ProcessedThisRun); Assert.AreEqual(0L, state.SkippedThisRun); Assert.AreEqual(1L, state.ErrorsThisRun); Assert.IsFalse(state.IsRunning);
             var recovery = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Scheduled); state.MarkPending(); Assert.IsTrue(reporter.Arm(recovery));
-            await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, recovery, Operations(_ => Task.FromResult(0L)), CancellationToken.None);
+            await ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, recovery, Operations(_ => Task.FromResult(0L)), CancellationToken.None);
 
             var recoveryEvents = attempts.Where(processingEvent => ReferenceEquals(processingEvent.Request, recovery)).ToArray();
             CollectionAssert.AreEqual(new[] { typeof(RunStarted), typeof(EligibilityDetermined), typeof(RunFinished) }, recoveryEvents.Select(processingEvent => processingEvent.GetType()).ToArray());
@@ -493,7 +493,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
         var asset = new AssetRecord(Guid.NewGuid(), 38.9, -77.0, DateTime.UtcNow);
         var batches = new Queue<List<AssetRecord>>([[asset], []]);
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(1L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false } }),
             () => Task.FromResult(new HashSet<Guid>()),
@@ -503,7 +503,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
             _ => Task.CompletedTask,
             (_, _, _) => throw new AssertFailedException("Write must not be reached after admission cancellation."));
 
-        await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
+        await ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, request, operations, cancellation.Token);
 
         Assert.IsTrue(cancelledAtAdmission);
         Assert.IsTrue(cancellation.IsCancellationRequested);
@@ -572,7 +572,7 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         return state;
     }
 
-    private static ProcessingBackgroundService.ProcessingOperations Operations(Func<CancellationToken, Task<long>> count) => new(
+    private static ProcessingRunExecution.ProcessingOperations Operations(Func<CancellationToken, Task<long>> count) => new(
         count,
         () => throw new AssertFailedException("configuration read was not expected"),
         () => throw new AssertFailedException("skipped records were not expected"),

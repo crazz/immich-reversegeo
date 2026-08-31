@@ -32,8 +32,25 @@ internal static class ProcessingServiceRegistration
             sp.GetRequiredService<IProcessingRunDelay>(),
             sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IProcessingRunExecutor>(sp => sp.GetRequiredService<ProcessingRunExecutor>());
-        services.AddSingleton<ProcessingBackgroundService>();
-        services.AddSingleton<IScheduledRunTrigger>(sp => sp.GetRequiredService<ProcessingBackgroundService>());
+        services.AddSingleton(sp => new ProcessingRunCoordinator(
+            sp.GetRequiredService<ProcessingState>(),
+            sp.GetRequiredService<ProcessingStateEventReporter>(),
+            sp.GetRequiredService<IProcessingRunExecutor>(),
+            sp.GetService<Microsoft.Extensions.Logging.ILogger<ProcessingRunCoordinator>>()
+                ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ProcessingRunCoordinator>.Instance,
+            Guid.NewGuid,
+            sp.GetService<IProcessingRunCoordinatorObserver>(),
+            sp.GetService<IHostApplicationLifetime>()));
+        services.AddSingleton<IManualProcessingRunCoordinator>(sp => sp.GetRequiredService<ProcessingRunCoordinator>());
+        services.AddSingleton<IScheduledRunTrigger>(sp => sp.GetRequiredService<ProcessingRunCoordinator>());
+        services.AddHostedService(sp => sp.GetRequiredService<ProcessingRunCoordinator>());
+        services.AddSingleton(sp => new ProcessingBackgroundService(
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<ProcessingBackgroundService>>(),
+            sp.GetRequiredService<ProcessingState>(),
+            sp.GetRequiredService<IProcessingScheduleConfiguration>(),
+            sp.GetRequiredService<SkippedAssetsRepository>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<IScheduledRunTrigger>()));
         services.AddHostedService(sp => sp.GetRequiredService<ProcessingBackgroundService>());
         return services;
     }

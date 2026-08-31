@@ -22,7 +22,7 @@ public class ProcessingBackgroundServiceTests
             return countCompletion.Task;
         }
 
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             GetUnprocessedCountAsync,
             () => throw UnexpectedOperation("configuration read"),
             () => throw UnexpectedOperation("skipped-record loading"),
@@ -32,7 +32,7 @@ public class ProcessingBackgroundServiceTests
             _ => throw UnexpectedOperation("skipped-record write"),
             (_, _, _) => throw UnexpectedOperation("location write"));
 
-        var passTask = ProcessingBackgroundService.RunOnceAsync(
+        var passTask = ProcessingRunExecution.RunOnceAsync(
             NullLogger<ProcessingBackgroundService>.Instance,
             state,
             operations,
@@ -251,7 +251,7 @@ public class ProcessingBackgroundServiceTests
         var skipped = 0;
         var writes = 0;
         var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(1L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0 } }),
             () => Task.FromResult(new HashSet<Guid>()),
@@ -275,7 +275,7 @@ public class ProcessingBackgroundServiceTests
                 return Task.CompletedTask;
             });
 
-        await ProcessingBackgroundService.RunOnceAsync(
+        await ProcessingRunExecution.RunOnceAsync(
             NullLogger<ProcessingBackgroundService>.Instance,
             state,
             operations,
@@ -298,7 +298,7 @@ public class ProcessingBackgroundServiceTests
     {
         var state = new ProcessingState();
         var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(1L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0 } }),
             () => Task.FromResult(new HashSet<Guid>()),
@@ -308,7 +308,7 @@ public class ProcessingBackgroundServiceTests
             _ => throw UnexpectedOperation("skipped-record write"),
             (_, _, _) => throw UnexpectedOperation("location write"));
 
-        await ProcessingBackgroundService.RunOnceAsync(
+        await ProcessingRunExecution.RunOnceAsync(
             NullLogger<ProcessingBackgroundService>.Instance,
             state,
             operations,
@@ -324,7 +324,7 @@ public class ProcessingBackgroundServiceTests
     {
         var state = new ProcessingState();
         var asset = new AssetRecord(Guid.NewGuid(), 1, 2, DateTime.UtcNow);
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             _ => Task.FromResult(1L),
             () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0 } }),
             () => Task.FromResult(new HashSet<Guid>()),
@@ -334,7 +334,7 @@ public class ProcessingBackgroundServiceTests
             _ => throw UnexpectedOperation("skipped-record write"),
             (_, _, _) => throw UnexpectedOperation("location write"));
 
-        await ProcessingBackgroundService.RunOnceAsync(
+        await ProcessingRunExecution.RunOnceAsync(
             NullLogger<ProcessingBackgroundService>.Instance, state, operations, CancellationToken.None);
 
         Assert.AreEqual(1, state.ErrorsThisRun);
@@ -346,7 +346,7 @@ public class ProcessingBackgroundServiceTests
 
     private static async Task<PassPlan> StartActiveManualPassAsync(
         ProcessingFixture fixture,
-        ProcessingBackgroundService service,
+        ProcessingRunCoordinatorTestHost service,
         PassOutcome outcome)
     {
         var pass = fixture.QueuePass(outcome);
@@ -365,7 +365,7 @@ public class ProcessingBackgroundServiceTests
         Assert.IsNotNull(fixture.State.LastRunStarted);
     }
 
-    private static async Task CompletePassAsync(ProcessingBackgroundService service, PassPlan pass)
+    private static async Task CompletePassAsync(ProcessingRunCoordinatorTestHost service, PassPlan pass)
     {
         switch (pass.Outcome)
         {
@@ -449,12 +449,12 @@ public class ProcessingBackgroundServiceTests
         public int PassCount { get; private set; }
         public int NotificationCount => Volatile.Read(ref _notificationCount);
 
-        public ProcessingBackgroundService CreateService()
+        public ProcessingRunCoordinatorTestHost CreateService()
         {
-            return new ProcessingBackgroundService(
+            return new ProcessingRunCoordinatorTestHost(
                 NullLogger<ProcessingBackgroundService>.Instance,
                 State,
-                new ProcessingBackgroundService.ProcessingOperations(
+                new ProcessingRunExecution.ProcessingOperations(
                     GetUnprocessedCountAsync,
                     () => Task.FromResult(new AppConfig
                     {

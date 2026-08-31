@@ -52,7 +52,8 @@ public class ProcessingBackgroundServiceDelegationTests
         Assert.AreEqual(1, fixture.Executor.CallCount);
         Assert.AreEqual(ProcessingRunTrigger.Scheduled, invocation.Request.Trigger);
         Assert.AreSame(fixture.Reporter, invocation.Reporter);
-        Assert.AreEqual(stopping.Token, invocation.Token);
+        Assert.IsTrue(invocation.Token.CanBeCanceled);
+        Assert.IsFalse(invocation.Token.IsCancellationRequested);
 
         plan.Release.SetResult();
         await admission.WaitAsync(Bound);
@@ -110,12 +111,12 @@ public class ProcessingBackgroundServiceDelegationTests
         public ProcessingState State { get; } = new();
         public ProcessingStateEventReporter Reporter { get; }
         public RecordingExecutor Executor { get; } = new();
-        public ProcessingBackgroundService Service { get; }
+        public ProcessingRunCoordinatorTestHost Service { get; }
 
         public HostFixture()
         {
             Reporter = new ProcessingStateEventReporter(State);
-            Service = new ProcessingBackgroundService(NullLogger<ProcessingBackgroundService>.Instance, State, Reporter, Executor, new FixedConfiguration());
+            Service = new ProcessingRunCoordinatorTestHost(NullLogger<ProcessingBackgroundService>.Instance, State, Reporter, Executor, new FixedConfiguration());
         }
     }
 

@@ -294,7 +294,7 @@ public class AdministrativeAreaResolverTerritoryTests
                 GeoResult? writtenGeo = null;
                 var asset = new AssetRecord(Guid.NewGuid(), territory.Latitude, territory.Longitude, DateTime.UtcNow);
                 var batches = new Queue<List<AssetRecord>>([[asset], []]);
-                var operations = new ProcessingBackgroundService.ProcessingOperations(
+                var operations = new ProcessingRunExecution.ProcessingOperations(
                     _ => Task.FromResult(1L),
                     () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false, UseGadmAdministrativeAreas = true, PreferGadmAdministrativeAreas = preferGadm, UseGadmTerritoryFallbacks = false } }),
                     () => Task.FromResult(new HashSet<Guid>()),
@@ -306,7 +306,7 @@ public class AdministrativeAreaResolverTerritoryTests
                 var reporter = new RecordingProcessingEventReporter();
                 var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
 
-                await ProcessingBackgroundService.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, new ProcessingState(), reporter, request, operations, CancellationToken.None);
+                await ProcessingRunExecution.RunOnceAsync(NullLogger<ProcessingBackgroundService>.Instance, new ProcessingState(), reporter, request, operations, CancellationToken.None);
 
                 Assert.IsNotNull(writtenGeo, territory.Label);
                 Assert.AreEqual(territory.DisplayName, writtenGeo.Country, territory.Label);
@@ -337,11 +337,11 @@ public class AdministrativeAreaResolverTerritoryTests
             var stateReporter = new ProcessingStateEventReporter(state, attempts.Enqueue);
             var asset = new AssetRecord(Guid.NewGuid(), territory.Latitude, territory.Longitude, DateTime.UtcNow);
             var batches = new Queue<List<AssetRecord>>([[asset], []]);
-            var processing = new ProcessingBackgroundService(
+            var processing = new ProcessingRunCoordinatorTestHost(
                 NullLogger<ProcessingBackgroundService>.Instance,
                 state,
                 stateReporter,
-                new ProcessingBackgroundService.ProcessingOperations(
+                new ProcessingRunExecution.ProcessingOperations(
                     _ => Task.FromResult(1L),
                     () => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1, UseAirportInfrastructure = false } }),
                     () => Task.FromResult(new HashSet<Guid>()),

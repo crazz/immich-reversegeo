@@ -196,7 +196,8 @@ public sealed class ProcessingScheduleChange12Tests
         await fixture.Time.TimerCreated(0).WaitAsync(Bound);
         fixture.Time.Advance(TimeSpan.FromMinutes(26));
         var invocation = await fixture.Executor.Entered.Task.WaitAsync(Bound);
-        Assert.AreEqual(stopping.Token, invocation.Token);
+        Assert.IsTrue(invocation.Token.CanBeCanceled);
+        Assert.IsFalse(invocation.Token.IsCancellationRequested);
         await fixture.Executor.TokenArmed.Task.WaitAsync(Bound);
         Assert.AreEqual(1, fixture.Config.CallCount);
         stopping.Cancel();
@@ -279,9 +280,10 @@ public sealed class ProcessingScheduleChange12Tests
     {
         var fixture = LoopFixture.Create(Start, Disabled());
         using var cancellation = new CancellationTokenSource();
-        var accepted = ((IScheduledRunTrigger)fixture.Service).TriggerScheduledAsync(cancellation.Token);
+        var accepted = fixture.Service.TriggerScheduledAsync(cancellation.Token);
         var invocation = await fixture.Executor.Entered.Task.WaitAsync(Bound);
-        Assert.AreEqual(cancellation.Token, invocation.Token);
+        Assert.IsTrue(invocation.Token.CanBeCanceled);
+        Assert.IsFalse(invocation.Token.IsCancellationRequested);
         Assert.AreEqual(ProcessingRunTrigger.Scheduled, invocation.Request.Trigger);
         Assert.IsFalse(accepted.IsCompleted);
         fixture.Executor.Release.TrySetResult();
@@ -385,10 +387,48 @@ public sealed class ProcessingScheduleChange12Tests
         public Task StopAsync() => Service.StopAsync(CancellationToken.None).WaitAsync(Bound);
     }
 
-    private sealed class TestHost(ProcessingState state, ProcessingStateEventReporter reporter, IProcessingRunExecutor executor, IProcessingScheduleConfiguration configuration, Func<Task> initialize, TimeProvider timeProvider)
-        : ProcessingBackgroundService(NullLogger<ProcessingBackgroundService>.Instance, state, reporter, executor, configuration, initialize, timeProvider)
+    private sealed class TestHost : ProcessingBackgroundService
     {
+        private readonly ProcessingRunCoordinator _coordinator;
+
+        public TestHost(
+            ProcessingState state,
+            ProcessingStateEventReporter reporter,
+            IProcessingRunExecutor executor,
+            IProcessingScheduleConfiguration configuration,
+            Func<Task> initialize,
+            TimeProvider timeProvider)
+            : this(state, configuration, initialize, timeProvider, CreateCoordinator(state, reporter, executor))
+        {
+        }
+
+        private TestHost(
+            ProcessingState state,
+            IProcessingScheduleConfiguration configuration,
+            Func<Task> initialize,
+            TimeProvider timeProvider,
+            ProcessingRunCoordinator coordinator)
+            : base(NullLogger<ProcessingBackgroundService>.Instance, state, configuration, initialize, timeProvider, coordinator)
+        {
+            _coordinator = coordinator;
+        }
+
         public Task RunLoopAsync(CancellationToken stoppingToken) => ExecuteAsync(stoppingToken);
+        public async Task TriggerRunAsync() => await _coordinator.TriggerManualAsync().ConfigureAwait(false);
+        public Task WaitForManualAdmissionAsync() => _coordinator.WaitForActiveRunAsync();
+
+        private static ProcessingRunCoordinator CreateCoordinator(
+            ProcessingState state,
+            ProcessingStateEventReporter reporter,
+            IProcessingRunExecutor executor)
+        {
+            return new ProcessingRunCoordinator(
+                state,
+                reporter,
+                executor,
+                NullLogger<ProcessingRunCoordinator>.Instance,
+                Guid.NewGuid);
+        }
     }
 
     private sealed class RecordingConfiguration(AppConfig current) : IProcessingScheduleConfiguration

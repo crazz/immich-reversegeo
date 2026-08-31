@@ -64,7 +64,7 @@ public sealed class ProcessingScheduleChange12AuditTests
         var fixture = HostFixture.Create(new SnapshotConfiguration(Enabled("0 * * * *")), executor, time);
         var execution = fixture.Host.RunLoopAsync(stopping.Token);
         var invocation = await executor.Entered.Task.WaitAsync(Bound);
-        Assert.AreEqual(stopping.Token, invocation.Token);
+        Assert.IsTrue(invocation.Token.CanBeCanceled);
         stopping.Cancel();
         executor.Release.TrySetResult();
         var actual = await Assert.ThrowsExactlyAsync<OperationCanceledException>(() => execution.WaitAsync(Bound));
@@ -294,7 +294,7 @@ public sealed class ProcessingScheduleChange12AuditTests
         fixture.Time.Advance(TimeSpan.FromMinutes(26));
         var invocation = await executor.Entered(0).WaitAsync(Bound);
         Assert.AreEqual(ProcessingRunTrigger.Scheduled, invocation.Request.Trigger);
-        Assert.AreEqual(stopping.Token, invocation.Token);
+        Assert.IsTrue(invocation.Token.CanBeCanceled);
         Assert.AreEqual(1, config.CallCount);
         Assert.IsTrue(fixture.State.IsRunning);
         executor.Release(0);
@@ -401,7 +401,7 @@ public sealed class ProcessingScheduleChange12AuditTests
     public async Task ScheduledZeroWork_RealExecutorPublishesExactEventsAndTouchesNoPostCountDependency()
     {
         var calls = new ConcurrentQueue<string>();
-        var operations = new ProcessingBackgroundService.ProcessingOperations(
+        var operations = new ProcessingRunExecution.ProcessingOperations(
             token => { calls.Enqueue("count"); return Task.FromResult(0L); },
             () => throw Unexpected("processing config"),
             () => throw Unexpected("skipped snapshot"),
@@ -462,17 +462,24 @@ public sealed class ProcessingScheduleChange12AuditTests
     public void Architecture_DIIdentityIsExactAndHasNoTriggerToHostConstructorBackEdge()
     {
         using var provider = BuildProvider();
-        var host = provider.GetRequiredService<ProcessingBackgroundService>();
+        var scheduler = provider.GetRequiredService<ProcessingBackgroundService>();
+        var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
         var config = provider.GetRequiredService<ConfigService>();
         Assert.AreSame(config, provider.GetRequiredService<IProcessingRunConfiguration>());
         Assert.AreSame(config, provider.GetRequiredService<IProcessingScheduleConfiguration>());
-        Assert.AreSame(host, provider.GetRequiredService<IHostedService>());
-        Assert.AreSame(host, provider.GetRequiredService<IScheduledRunTrigger>());
-        Assert.AreEqual(1, provider.GetServices<IHostedService>().Count());
-        Assert.IsFalse(typeof(ProcessingBackgroundService).GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance).SelectMany(constructor => constructor.GetParameters()).Any(parameter => parameter.ParameterType == typeof(IScheduledRunTrigger)));
+        Assert.AreSame(coordinator, provider.GetRequiredService<IManualProcessingRunCoordinator>());
+        Assert.AreSame(coordinator, provider.GetRequiredService<IScheduledRunTrigger>());
+        var hosted = provider.GetServices<IHostedService>().ToArray();
+        Assert.AreEqual(2, hosted.Length);
+        Assert.IsTrue(hosted.Any(item => ReferenceEquals(item, coordinator)));
+        Assert.IsTrue(hosted.Any(item => ReferenceEquals(item, scheduler)));
+        Assert.IsFalse(ReferenceEquals(coordinator, scheduler));
+        Assert.IsFalse(typeof(ProcessingRunCoordinator).GetConstructors(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance)
+            .SelectMany(constructor => constructor.GetParameters())
+            .Any(parameter => parameter.ParameterType == typeof(ProcessingBackgroundService)));
         AssertExactFieldTypes(typeof(ProcessingBackgroundService),
-            typeof(ILogger<ProcessingBackgroundService>), typeof(ProcessingState), typeof(ProcessingStateEventReporter), typeof(IProcessingRunExecutor),
-            typeof(Func<Task>), typeof(ProcessingScheduleLoop), typeof(CancellationTokenSource), typeof(Task), typeof(SemaphoreSlim));
+            typeof(ILogger<ProcessingBackgroundService>), typeof(ProcessingState), typeof(Func<Task>),
+            typeof(ProcessingScheduleLoop), typeof(IScheduledRunTrigger));
     }
 
     [TestMethod]
@@ -907,10 +914,51 @@ public sealed class ProcessingScheduleChange12AuditTests
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static AssertFailedException Unexpected(string operation) => new($"Unexpected {operation} after authoritative zero count.");
 
-    private sealed class TestHost(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingStateEventReporter reporter, IProcessingRunExecutor executor, IProcessingScheduleConfiguration configuration, Func<Task> initialize, TimeProvider timeProvider)
-        : ProcessingBackgroundService(logger, state, reporter, executor, configuration, initialize, timeProvider)
+    private sealed class TestHost : ProcessingBackgroundService
     {
+        private readonly ProcessingRunCoordinator _coordinator;
+
+        public TestHost(
+            ILogger<ProcessingBackgroundService> logger,
+            ProcessingState state,
+            ProcessingStateEventReporter reporter,
+            IProcessingRunExecutor executor,
+            IProcessingScheduleConfiguration configuration,
+            Func<Task> initialize,
+            TimeProvider timeProvider)
+            : this(logger, state, configuration, initialize, timeProvider, CreateCoordinator(state, reporter, executor))
+        {
+        }
+
+        private TestHost(
+            ILogger<ProcessingBackgroundService> logger,
+            ProcessingState state,
+            IProcessingScheduleConfiguration configuration,
+            Func<Task> initialize,
+            TimeProvider timeProvider,
+            ProcessingRunCoordinator coordinator)
+            : base(logger, state, configuration, initialize, timeProvider, coordinator)
+        {
+            _coordinator = coordinator;
+        }
+
         public Task RunLoopAsync(CancellationToken token) => ExecuteAsync(token);
+        public async Task TriggerRunAsync() => await _coordinator.TriggerManualAsync().ConfigureAwait(false);
+        public Task WaitForManualAdmissionAsync() => _coordinator.WaitForActiveRunAsync();
+        public void CancelRun() => _coordinator.CancelActiveRun();
+
+        private static ProcessingRunCoordinator CreateCoordinator(
+            ProcessingState state,
+            ProcessingStateEventReporter reporter,
+            IProcessingRunExecutor executor)
+        {
+            return new ProcessingRunCoordinator(
+                state,
+                reporter,
+                executor,
+                NullLogger<ProcessingRunCoordinator>.Instance,
+                Guid.NewGuid);
+        }
     }
 
     private sealed class HostFixture

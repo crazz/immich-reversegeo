@@ -61,6 +61,6 @@ public class ProcessingServiceRegistrationTests
         var concreteService = provider.GetRequiredService<ProcessingBackgroundService>();
         var hostedService = provider.GetRequiredService<IHostedService>();
         Assert.AreSame(concreteService, hostedService);
-        Assert.AreEqual(1, services.Count(descriptor => descriptor.ServiceType == typeof(IHostedService)));
+        Assert.AreEqual(2, services.Count(descriptor => descriptor.ServiceType == typeof(IHostedService)));
     }
 }
