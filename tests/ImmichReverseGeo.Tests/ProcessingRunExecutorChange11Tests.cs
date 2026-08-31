@@ -10,10 +10,11 @@ using Microsoft.Extensions.Logging;
 namespace ImmichReverseGeo.Tests;
 
 [TestClass]
+[TestCategory("Change14")]
 public class ProcessingRunExecutorChange11Tests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
-    private static readonly DateTimeOffset Epoch = new(2026, 8, 30, 20, 30, 0, TimeSpan.Zero);
+    private static readonly DateTimeOffset Epoch = new(2026, 8, 31, 13, 52, 20, TimeSpan.Zero);
 
     [TestMethod]
     [DataRow("eligibility")]
@@ -65,17 +66,21 @@ public class ProcessingRunExecutorChange11Tests
     [TestMethod]
     public async Task ExecuteAsync_MatchedLocationFallsBackToState_WritesExactStateCityAndOnlyUpdated()
     {
-        await AssertMatchedFallbackWriteAsync(
+        var result = await AssertMatchedFallbackWriteAsync(
+            "fallback-state",
             new GeoResult("Country", "FallbackState", null),
             new GeoResult("Country", "FallbackState", "FallbackState"));
+        Assert.AreEqual(ProcessingRunOutcome.Completed, result.Outcome);
     }
 
     [TestMethod]
     public async Task ExecuteAsync_MatchedLocationFallsBackToCountry_WritesExactCountryCityAndOnlyUpdated()
     {
-        await AssertMatchedFallbackWriteAsync(
+        var result = await AssertMatchedFallbackWriteAsync(
+            "country-fallback-update",
             new GeoResult("FallbackCountry", null, null),
             new GeoResult("FallbackCountry", null, "FallbackCountry"));
+        Assert.AreEqual(ProcessingRunOutcome.Completed, result.Outcome);
     }
 
     [TestMethod]
@@ -194,9 +199,17 @@ public class ProcessingRunExecutorChange11Tests
                 _ => Task.FromResult(EmptyDiagnostics())
             }
         });
+        var dispositionOrder = new[] { containing, preserveAdmin, airportFallback, stateFallback, countryFallback, noCountry, noAdmin, handledFailure };
         var reporter = new Change11Reporter((processingEvent, token) =>
         {
-            fixture.RecordEvent(processingEvent);
+            if (processingEvent is ProgressChanged progress)
+            {
+                fixture.RecordDisposition(dispositionOrder[checked((int)progress.Progress.ProcessedCount - 1)].Id, processingEvent);
+            }
+            else
+            {
+                fixture.RecordEvent(processingEvent);
+            }
             return ValueTask.CompletedTask;
         });
         var request = Request();
@@ -227,7 +240,7 @@ public class ProcessingRunExecutorChange11Tests
         Assert.AreEqual(8, fixture.ResolverSessions.Count);
         Assert.AreEqual(1, fixture.ResolverSessions.Distinct(ReferenceEqualityComparer.Instance).Count());
         Assert.IsTrue(fixture.ResolverSessions.All(session => ReferenceEquals(request, session.Request)));
-        Assert.IsFalse(fixture.Operations.Any(operation => operation.Contains(suppressed.Id.ToString(), StringComparison.Ordinal)));
+        Assert.IsFalse(fixture.Calls.Any(operation => operation.Call.AssetId == suppressed.Id));
 
         var eventShape = reporter.Events.Select(processingEvent => processingEvent switch
         {
@@ -258,7 +271,10 @@ public class ProcessingRunExecutorChange11Tests
         Assert.AreSame(result, reporter.Events.OfType<RunFinished>().Single().Result);
         Assert.AreEqual(8, reporter.Events.OfType<ProgressChanged>().Select(item => item.Progress.ProcessedCount).Distinct().Count());
 
-        var operations = fixture.Operations.ToArray();
+        var timeline = fixture.Timeline.ToArray();
+        long Call(ExecutorCallKind kind, Guid assetId) => timeline.Single(item => item.Call?.Kind == kind && item.AssetId == assetId).Sequence;
+        long Event(ProcessingLogLevel level, string message) => timeline.Single(item => item.Event == ExecutorEventKind.LogEmitted && item.Level == level && item.Message == message).Sequence;
+        long Disposition(Guid assetId, string outcome) => timeline.Single(item => item.Kind == RetainedTimelineKind.Disposition && item.AssetId == assetId && item.Outcome == outcome).Sequence;
         var expectedTraces = new Dictionary<Guid, string>
         {
             [containing.Id] = $"Asset {containing.Id}: ContainingAirport, State, Country",
@@ -269,36 +285,28 @@ public class ProcessingRunExecutorChange11Tests
         };
         foreach (var asset in new[] { containing, preserveAdmin, airportFallback, stateFallback, countryFallback })
         {
-            var trace = $"event:Trace:{expectedTraces[asset.Id]}";
-            var disposition = $"event:Disposition:{asset.Id}:Updated";
-            Assert.IsTrue(IndexOfExact(operations, $"admin:{asset.Id}") < IndexOfExact(operations, $"airport:{asset.Id}"));
-            Assert.IsTrue(IndexOfExact(operations, trace) < IndexOfExact(operations, $"write-start:{asset.Id}"));
-            Assert.IsTrue(IndexOfExact(operations, $"write-start:{asset.Id}") < IndexOfExact(operations, $"write-end:{asset.Id}"));
-            Assert.IsTrue(IndexOfExact(operations, $"write-end:{asset.Id}") < IndexOfExact(operations, disposition));
-            Assert.AreEqual(1, operations.Count(item => item == disposition));
+            Assert.IsTrue(Call(ExecutorCallKind.Admin, asset.Id) < Call(ExecutorCallKind.Airport, asset.Id));
+            Assert.IsTrue(Event(ProcessingLogLevel.Trace, expectedTraces[asset.Id]) < Call(ExecutorCallKind.WriteAttempt, asset.Id));
+            Assert.IsTrue(Call(ExecutorCallKind.WriteAttempt, asset.Id) < Call(ExecutorCallKind.WriteAccepted, asset.Id));
+            Assert.IsTrue(Call(ExecutorCallKind.WriteAccepted, asset.Id) < Disposition(asset.Id, "Updated"));
         }
 
         var noCountryWarning = $"Asset {noCountry.Id}: no country found at (7.0000, 7.0000), skipping.";
         var noAdminWarning = $"Asset {noAdmin.Id}: country=Country but no admin match, skipping.";
         foreach (var pair in new[] { (Asset: noCountry, Warning: noCountryWarning), (Asset: noAdmin, Warning: noAdminWarning) })
         {
-            var warning = $"event:Warning:{pair.Warning}";
-            var disposition = $"event:Disposition:{pair.Asset.Id}:Skipped";
             Assert.AreEqual(pair.Warning, reporter.Events.OfType<LogEmitted>().Single(log => log.Message == pair.Warning).Message);
-            Assert.IsTrue(IndexOfExact(operations, warning) < IndexOfExact(operations, $"skip-start:{pair.Asset.Id}"));
-            Assert.IsTrue(IndexOfExact(operations, $"skip-start:{pair.Asset.Id}") < IndexOfExact(operations, $"skip-end:{pair.Asset.Id}"));
-            Assert.IsTrue(IndexOfExact(operations, $"skip-end:{pair.Asset.Id}") < IndexOfExact(operations, disposition));
-            Assert.AreEqual(1, operations.Count(item => item == disposition));
+            Assert.IsTrue(Event(ProcessingLogLevel.Warning, pair.Warning) < Call(ExecutorCallKind.SkipAttempt, pair.Asset.Id));
+            Assert.IsTrue(Call(ExecutorCallKind.SkipAttempt, pair.Asset.Id) < Call(ExecutorCallKind.SkipAccepted, pair.Asset.Id));
+            Assert.IsTrue(Call(ExecutorCallKind.SkipAccepted, pair.Asset.Id) < Disposition(pair.Asset.Id, "Skipped"));
         }
 
-        var failedDisposition = $"event:Disposition:{handledFailure.Id}:Failed";
-        Assert.IsTrue(IndexOfExact(operations, $"event:Error:Asset {handledFailure.Id} [FindCountry]: resolver exploded") < IndexOfExact(operations, failedDisposition));
-        Assert.AreEqual(1, operations.Count(item => item == failedDisposition));
-        var dispositions = operations.Where(item => item.StartsWith("event:Disposition:", StringComparison.Ordinal)).ToArray();
+        Assert.IsTrue(Event(ProcessingLogLevel.Error, $"Asset {handledFailure.Id} [FindCountry]: resolver exploded") < Disposition(handledFailure.Id, "Failed"));
+        var dispositions = timeline.Where(item => item.Kind == RetainedTimelineKind.Disposition).ToArray();
         Assert.AreEqual(8, dispositions.Length);
-        Assert.AreEqual(8, dispositions.Distinct(StringComparer.Ordinal).Count());
-        Assert.AreEqual("event:Finished", operations.Last());
-        Assert.AreEqual(IndexOfExact(operations, "event:Finished"), operations.Length - 1);
+        Assert.AreEqual(8, dispositions.Select(item => item.AssetId).Distinct().Count());
+        var finished = timeline.Single(item => item.Event == ExecutorEventKind.RunFinished);
+        Assert.AreEqual(timeline.Max(item => item.Sequence), finished.Sequence);
 
         var error = reporter.Events.OfType<LogEmitted>().Single(log => log.Level == ProcessingLogLevel.Error);
         Assert.AreEqual($"Asset {handledFailure.Id} [FindCountry]: resolver exploded", error.Message);
@@ -317,7 +325,9 @@ public class ProcessingRunExecutorChange11Tests
         var peer = Asset(2);
         var failingEntered = Signal();
         var peerEntered = Signal();
-        var release = Signal();
+        using var foreignCancellation = new CancellationTokenSource();
+        var failingRelease = Signal();
+        var peerRelease = Signal();
         var fixture = TwoAssetFixture(
             failing,
             peer,
@@ -326,20 +336,33 @@ public class ProcessingRunExecutorChange11Tests
             async (asset, session, token) =>
             {
                 (asset.Id == failing.Id ? failingEntered : peerEntered).TrySetResult();
-                await release.Task.WaitAsync(Bound, token).ConfigureAwait(false);
+                await (asset.Id == failing.Id ? failingRelease.Task : peerRelease.Task).WaitAsync(Bound, token).ConfigureAwait(false);
                 if (asset.Id == failing.Id)
                 {
-                    throw new OperationCanceledException("foreign owner cancelled");
+                    throw new OperationCanceledException("foreign owner cancelled", null, foreignCancellation.Token);
                 }
 
                 return Resolution(new GeoResult("Country", "State", "PeerCity"));
             });
-        var reporter = new Change11Reporter();
+        var peerAccepted = Signal();
+        var dispositionOrder = new ConcurrentQueue<Guid>([peer.Id, failing.Id]);
+        var reporter = new Change11Reporter((processingEvent, token) =>
+        {
+            if (processingEvent is ProgressChanged)
+            {
+                Assert.IsTrue(dispositionOrder.TryDequeue(out var assetId));
+                fixture.RecordDisposition(assetId, processingEvent);
+                peerAccepted.TrySetResult();
+            }
+            return ValueTask.CompletedTask;
+        });
         var request = Request();
         var execution = fixture.Executor.ExecuteAsync(request, reporter, CancellationToken.None);
         await failingEntered.Task.WaitAsync(Bound);
         await peerEntered.Task.WaitAsync(Bound);
-        release.TrySetResult();
+        peerRelease.TrySetResult();
+        await peerAccepted.Task.WaitAsync(Bound);
+        failingRelease.TrySetResult();
         var result = await execution.WaitAsync(Bound);
 
         Assert.AreEqual(ProcessingRunOutcome.Completed, result.Outcome);
@@ -357,6 +380,7 @@ public class ProcessingRunExecutorChange11Tests
         Assert.AreEqual(1L, progress[1].Progress.FailedCount);
         Assert.AreEqual(1, fixture.Logger.Entries.Count(entry => ReferenceEquals(entry.Exception, fixture.ForeignFailure)));
         Assert.AreEqual(1, reporter.Events.OfType<RunFinished>().Count());
+        VerifyLegacyCase("foreign-oce-asset", request, result, null, fixture, reporter, expectedForeignToken: foreignCancellation.Token);
     }
 
     [TestMethod]
@@ -581,7 +605,8 @@ public class ProcessingRunExecutorChange11Tests
             }
         });
         var fixture = new Change11ExecutorProbe(new Change11Scenario());
-        var execution = fixture.Executor.ExecuteAsync(Request(), reporter, CancellationToken.None);
+        var request = Request();
+        var execution = fixture.Executor.ExecuteAsync(request, reporter, CancellationToken.None);
         await terminalEntered.Task.WaitAsync(Bound);
         releaseTerminal.TrySetResult();
         var observed = await Assert.ThrowsExactlyAsync<TestSinkException>(() => execution.WaitAsync(Bound));
@@ -591,6 +616,7 @@ public class ProcessingRunExecutorChange11Tests
         Assert.AreEqual(0, reporter.Events.OfType<RunFinished>().Count());
         Assert.AreEqual(0, reporter.Attempts.OfType<ProgressChanged>().Count());
         Assert.AreEqual(2, reporter.Events.Count);
+        VerifyLegacyCase("reporter-finish-rejection", request, null, observed, fixture, reporter);
     }
 
     [TestMethod]
@@ -630,15 +656,16 @@ public class ProcessingRunExecutorChange11Tests
         Assert.AreSame(result, terminal.Result);
         Assert.IsInstanceOfType<RunFinished>(reporter.Events.Last());
         Assert.AreEqual(3, reporter.Events.Count);
-        Assert.AreEqual("event:Finished", fixture.Operations.Last());
+        Assert.AreEqual(ExecutorEventKind.RunFinished, fixture.Timeline.Last().Event);
     }
 
     [TestMethod]
     public async Task ExecuteAsync_BatchFetchForeignOceAndOrdinaryFailure_AreExactFatalPassFailuresWithoutAssetDisposition()
     {
+        using var foreignCancellation = new CancellationTokenSource();
         foreach (var failure in new Exception[]
         {
-            new OperationCanceledException("foreign batch cancellation"),
+            new OperationCanceledException("foreign batch cancelled", null, foreignCancellation.Token),
             new InvalidOperationException("ordinary batch failure")
         })
         {
@@ -673,7 +700,11 @@ public class ProcessingRunExecutorChange11Tests
             Assert.AreSame(result, terminal.Result);
             Assert.IsInstanceOfType<RunFinished>(reporter.Events.Last());
             Assert.AreEqual(3, reporter.Events.Count);
-            Assert.AreEqual("event:Finished", fixture.Operations.Last());
+            Assert.AreEqual(ExecutorEventKind.RunFinished, fixture.Timeline.Last().Event);
+            if (failure is OperationCanceledException)
+            {
+                VerifyLegacyCase("foreign-oce-pass", request, result, null, fixture, reporter, expectedForeignToken: foreignCancellation.Token);
+            }
         }
     }
 
@@ -694,7 +725,14 @@ public class ProcessingRunExecutorChange11Tests
             });
         var reporter = new Change11Reporter((processingEvent, token) =>
         {
-            fixture.RecordEvent(processingEvent);
+            if (processingEvent is ProgressChanged)
+            {
+                fixture.RecordDisposition(asset.Id, processingEvent);
+            }
+            else
+            {
+                fixture.RecordEvent(processingEvent);
+            }
             return ValueTask.CompletedTask;
         });
         var request = Request();
@@ -707,13 +745,12 @@ public class ProcessingRunExecutorChange11Tests
         Assert.AreEqual(ProcessingRunOutcome.Cancelled, result.Outcome);
         AssertCounts(result, 1, 1, 0, 0);
         Assert.AreEqual((asset.Id, new GeoResult("Country", "State", "City")), fixture.Writes.Single());
-        var operations = fixture.Operations.ToArray();
-        var writeEnd = IndexOfExact(operations, $"write-end:{asset.Id}");
-        var updated = IndexOfExact(operations, $"event:Disposition:{asset.Id}:Updated");
-        var finished = IndexOfExact(operations, "event:Finished");
+        var timeline = fixture.Timeline.ToArray();
+        var writeEnd = timeline.Single(item => item.Call?.Kind == ExecutorCallKind.WriteAccepted && item.AssetId == asset.Id).Sequence;
+        var updated = timeline.Single(item => item.Kind == RetainedTimelineKind.Disposition && item.AssetId == asset.Id && item.Outcome == "Updated").Sequence;
+        var finished = timeline.Single(item => item.Event == ExecutorEventKind.RunFinished).Sequence;
         Assert.IsTrue(writeEnd < updated && updated < finished);
-        Assert.AreEqual(operations.Length - 1, finished);
-        Assert.AreEqual(1, operations.Count(item => item == $"event:Disposition:{asset.Id}:Updated"));
+        Assert.AreEqual(timeline.Max(item => item.Sequence), finished);
         Assert.AreEqual(1, reporter.Events.OfType<ProgressChanged>().Count());
         Assert.AreEqual(1, reporter.Events.OfType<RunFinished>().Count());
         Assert.AreSame(result, reporter.Events.OfType<RunFinished>().Single().Result);
@@ -743,12 +780,21 @@ public class ProcessingRunExecutorChange11Tests
                 await release.Task.WaitAsync(Bound, token).ConfigureAwait(false);
                 return Resolution(new GeoResult("Country", "State", asset.Id == first.Id ? "First" : "Second"));
             });
+        Guid? explicitlyReleasedAsset = null;
         var reporter = new Change11Reporter((processingEvent, token) =>
         {
-            fixture.RecordEvent(processingEvent);
-            if (fixture.Operations.LastOrDefault() == $"event:Disposition:{second.Id}:Updated")
+            if (processingEvent is ProgressChanged)
             {
-                secondDisposition.TrySetResult();
+                Assert.IsNotNull(explicitlyReleasedAsset, "A per-asset gate release must authorize each accepted disposition.");
+                fixture.RecordDisposition(explicitlyReleasedAsset.Value, processingEvent);
+                if (explicitlyReleasedAsset.Value == second.Id)
+                {
+                    secondDisposition.TrySetResult();
+                }
+            }
+            else
+            {
+                fixture.RecordEvent(processingEvent);
             }
 
             return ValueTask.CompletedTask;
@@ -757,37 +803,43 @@ public class ProcessingRunExecutorChange11Tests
         var execution = fixture.Executor.ExecuteAsync(request, reporter, CancellationToken.None);
         await firstEntered.Task.WaitAsync(Bound);
         await secondEntered.Task.WaitAsync(Bound);
+        explicitlyReleasedAsset = second.Id;
         releaseSecond.TrySetResult();
         await secondDisposition.Task.WaitAsync(Bound);
+        explicitlyReleasedAsset = first.Id;
         releaseFirst.TrySetResult();
         var result = await execution.WaitAsync(Bound);
 
         Assert.AreEqual(ProcessingRunOutcome.Completed, result.Outcome);
         AssertCounts(result, 2, 2, 0, 0);
-        CollectionAssert.AreEqual(new[] { second.Id, first.Id }, fixture.Writes.Select(item => item.AssetId).ToArray());
-        var dispositions = fixture.Operations.Where(item => item.StartsWith("event:Disposition:", StringComparison.Ordinal)).ToArray();
-        CollectionAssert.AreEqual(
-            new[]
-            {
-                $"event:Disposition:{second.Id}:Updated",
-                $"event:Disposition:{first.Id}:Updated"
-            },
-            dispositions);
-        Assert.AreEqual(2, dispositions.Distinct(StringComparer.Ordinal).Count());
+        var timeline = fixture.Timeline.ToArray();
+        var dispositions = timeline.Where(item => item.Kind == RetainedTimelineKind.Disposition).ToArray();
+        CollectionAssert.AreEquivalent(new[] { first.Id, second.Id }, dispositions.Select(item => item.AssetId!.Value).ToArray());
+        Assert.IsTrue(dispositions.All(item => item.Outcome == "Updated"));
+        CollectionAssert.AreEquivalent(new[] { first.Id, second.Id }, fixture.Writes.Select(item => item.AssetId).ToArray());
+        foreach (var asset in new[] { first, second })
+        {
+            var admin = timeline.Single(item => item.Call?.Kind == ExecutorCallKind.Admin && item.AssetId == asset.Id).Sequence;
+            var writeStart = timeline.Single(item => item.Call?.Kind == ExecutorCallKind.WriteAttempt && item.AssetId == asset.Id).Sequence;
+            var writeEnd = timeline.Single(item => item.Call?.Kind == ExecutorCallKind.WriteAccepted && item.AssetId == asset.Id).Sequence;
+            var disposition = dispositions.Single(item => item.AssetId == asset.Id).Sequence;
+            Assert.IsTrue(admin < writeStart && writeStart < writeEnd && writeEnd < disposition);
+        }
         Assert.AreEqual(2, reporter.Events.OfType<ProgressChanged>().Count());
         Assert.AreEqual(1, reporter.Events.OfType<RunFinished>().Count());
         Assert.AreSame(result, reporter.Events.OfType<RunFinished>().Single().Result);
         Assert.AreSame(request, result.Request);
         Assert.IsTrue(reporter.Events.All(item => ReferenceEquals(request, item.Request)));
-        Assert.AreEqual("event:Finished", fixture.Operations.Last());
+        Assert.AreEqual(ExecutorEventKind.RunFinished, fixture.Timeline.Last().Event);
+        VerifyLegacyCase("reverse-two-updates", request, result, null, fixture, reporter, maximumActive: 2);
     }
 
     [TestMethod]
     public async Task ExecuteAsync_SettingsProviderMutationAfterCapturedSnapshot_RetainsExactRunPolicyAcrossEveryPage()
     {
-        var first = Asset(1);
-        var second = Asset(2);
-        var third = Asset(3);
+        var first = Asset(4);
+        var second = Asset(3);
+        var third = Asset(1);
         var initial = new AppConfig
         {
             Processing = new ProcessingConfig
@@ -802,13 +854,15 @@ public class ProcessingRunExecutorChange11Tests
             }
         };
         var provider = new Change11GatedSettingsProvider(initial);
+        var skippedBacking = new HashSet<Guid> { second.Id };
         var firstResolverEntered = Signal();
         var releaseFirstResolver = Signal();
-        var secondResolverEntered = Signal();
+        var thirdResolverEntered = Signal();
         var fixture = new Change11ExecutorProbe(new Change11Scenario
         {
             Eligible = 3,
             Configuration = provider,
+            SkippedSnapshot = () => Task.FromResult(new HashSet<Guid>(skippedBacking)),
             Pages = [new[] { first, second }, new[] { third }, Array.Empty<AssetRecord>()],
             Resolve = async (asset, session, token) =>
             {
@@ -817,20 +871,26 @@ public class ProcessingRunExecutorChange11Tests
                     firstResolverEntered.TrySetResult();
                     await releaseFirstResolver.Task.WaitAsync(Bound, token).ConfigureAwait(false);
                 }
-                else if (asset.Id == second.Id)
+                else if (asset.Id == third.Id)
                 {
-                    secondResolverEntered.TrySetResult();
+                    thirdResolverEntered.TrySetResult();
                 }
 
                 return Resolution(new GeoResult("Country", "State", $"City-{asset.Latitude}"));
             },
             Infrastructure = (asset, token) => Task.FromResult(EmptyDiagnostics())
         });
-        var reporter = new Change11Reporter();
+        var reporter = new Change11Reporter((processingEvent, token) =>
+        {
+            fixture.RecordEvent(processingEvent);
+            return ValueTask.CompletedTask;
+        });
         var request = Request();
         var execution = fixture.Executor.ExecuteAsync(request, reporter, CancellationToken.None);
         var captured = await provider.SnapshotCaptured.Task.WaitAsync(Bound);
 
+        skippedBacking.Clear();
+        skippedBacking.Add(first.Id);
         provider.Update(processing =>
         {
             processing.BatchSize = 99;
@@ -843,13 +903,13 @@ public class ProcessingRunExecutorChange11Tests
         });
         provider.ReleaseSnapshot.TrySetResult();
         await firstResolverEntered.Task.WaitAsync(Bound);
-        Assert.IsFalse(secondResolverEntered.Task.IsCompleted, "Configured zero must clamp to one active asset.");
+        Assert.IsFalse(thirdResolverEntered.Task.IsCompleted, "Configured zero must clamp to one active asset.");
         releaseFirstResolver.TrySetResult();
-        await secondResolverEntered.Task.WaitAsync(Bound);
+        await thirdResolverEntered.Task.WaitAsync(Bound);
         var result = await execution.WaitAsync(Bound);
 
         Assert.AreEqual(ProcessingRunOutcome.Completed, result.Outcome);
-        AssertCounts(result, 3, 3, 0, 0);
+        AssertCounts(result, 2, 2, 0, 0);
         Assert.AreEqual(1, provider.Calls);
         Assert.AreEqual(0, fixture.ConfigCalls);
         Assert.AreEqual(1, fixture.SkippedSnapshotCalls);
@@ -862,34 +922,51 @@ public class ProcessingRunExecutorChange11Tests
                 new AssetCursor(third.CreatedAt, third.Id)
             },
             fixture.Cursors.ToArray());
-        Assert.AreEqual(3, fixture.ResolverConfigs.Count);
+        Assert.AreEqual(2, fixture.ResolverConfigs.Count);
         Assert.IsTrue(fixture.ResolverConfigs.All(item => ReferenceEquals(captured.Processing, item)));
+        CollectionAssert.AreEquivalent(new[] { first.Id, third.Id }, fixture.Writes.Select(item => item.AssetId).ToArray());
+        Assert.IsFalse(fixture.Writes.Any(item => item.AssetId == second.Id));
         Assert.IsTrue(fixture.ResolverConfigs.All(item => item.BatchSize == 7
             && item.MaxDegreeOfParallelism == 0
             && item.UseGadmAdministrativeAreas
             && item.PreferGadmAdministrativeAreas
             && item.UseAirportInfrastructure
             && item.VerboseLogging));
-        Assert.AreEqual(3, fixture.InfrastructureCalls);
-        Assert.AreEqual(3, reporter.Events.OfType<LogEmitted>().Count(log => log.Level == ProcessingLogLevel.Trace));
+        Assert.AreEqual(2, fixture.InfrastructureCalls);
+        Assert.AreEqual(2, reporter.Events.OfType<LogEmitted>().Count(log => log.Level == ProcessingLogLevel.Trace));
         CollectionAssert.AreEqual(
             new[] { TimeSpan.FromMilliseconds(11), TimeSpan.FromMilliseconds(11) },
             fixture.Delays.ToArray());
-        var operations = fixture.Operations.ToArray();
-        Assert.IsTrue(IndexOf(operations, "delay:11", 0) < IndexOfPrefix(operations, "batch:", 1));
-        Assert.IsTrue(IndexOf(operations, "delay:11", 1) < IndexOfPrefix(operations, "batch:", 2));
-        Assert.IsTrue(IndexOfPrefix(operations, "batch:", 2) > IndexOf(operations, "delay:11", 1));
+        var calls = fixture.Calls.ToArray();
+        var delays = calls.Where(item => item.Call.Kind == ExecutorCallKind.Delay).OrderBy(item => item.Sequence).ToArray();
+        var batches = calls.Where(item => item.Call.Kind == ExecutorCallKind.Batch).OrderBy(item => item.Call.Ordinal).ToArray();
+        Assert.IsTrue(delays[0].Sequence < batches[1].Sequence);
+        Assert.IsTrue(delays[1].Sequence < batches[2].Sequence);
         Assert.IsTrue(reporter.Events.All(item => ReferenceEquals(request, item.Request)));
+        VerifyLegacyCase("both-snapshot-sources-mutate", request, result, null, fixture, reporter, maximumActive: 1);
     }
 
     [TestMethod]
+    [DataRow(-7, 1)]
     [DataRow(0, 1)]
     [DataRow(99, 32)]
     public async Task ExecuteAsync_ParallelismClamp_UsesExactLowerAndUpperBoundary(int configured, int expected)
     {
+        var caseId = configured switch
+        {
+            -7 => "parallelism-negative",
+            0 => "parallelism-zero",
+            99 => "parallelism-above-maximum",
+            _ => throw new AssertFailedException($"Unexpected clamp row {configured}.")
+        };
         var assets = Enumerable.Range(1, expected + 1).Select(Asset).ToArray();
-        var entered = assets.Select(_ => Signal()).ToArray();
-        var releases = assets.Select(_ => Signal()).ToArray();
+        var entered = new ConcurrentDictionary<Guid, byte>();
+        var releases = assets.ToDictionary(asset => asset.Id, _ => Signal());
+        var configuredEntered = Signal();
+        var additionalEntered = Signal<Guid>();
+        var accepted = new ConcurrentDictionary<Guid, byte>();
+        var acceptedSignals = assets.ToDictionary(asset => asset.Id, _ => Signal());
+        var authorizations = new ConcurrentQueue<Guid>();
         var active = 0;
         var maximum = 0;
         var config = DefaultConfig();
@@ -901,36 +978,63 @@ public class ProcessingRunExecutorChange11Tests
             Pages = [assets, Array.Empty<AssetRecord>()],
             Resolve = async (asset, session, token) =>
             {
-                var index = (int)asset.Latitude - 1;
                 var now = Interlocked.Increment(ref active);
                 SetMaximum(ref maximum, now);
-                entered[index].TrySetResult();
-                await releases[index].Task.WaitAsync(Bound, token).ConfigureAwait(false);
+                Assert.IsTrue(entered.TryAdd(asset.Id, 0));
+                if (entered.Count == expected)
+                {
+                    configuredEntered.TrySetResult();
+                }
+                else if (entered.Count == expected + 1)
+                {
+                    additionalEntered.TrySetResult(asset.Id);
+                }
+                await releases[asset.Id].Task.WaitAsync(Bound, token).ConfigureAwait(false);
                 Interlocked.Decrement(ref active);
-                return Resolution(new GeoResult("Country", "State", $"City-{index}"));
+                return Resolution(new GeoResult("Country", "State", $"City-{asset.Latitude}"));
             }
         });
-        var execution = fixture.Executor.ExecuteAsync(Request(), new Change11Reporter(), CancellationToken.None);
-
-        for (var index = 0; index < expected; index++)
+        var reporter = new Change11Reporter((processingEvent, token) =>
         {
-            await entered[index].Task.WaitAsync(Bound);
-        }
-
-        Assert.IsFalse(entered[expected].Task.IsCompleted);
-        releases[0].TrySetResult();
-        await entered[expected].Task.WaitAsync(Bound);
-        for (var index = 1; index < releases.Length; index++)
+            if (processingEvent is ProgressChanged)
+            {
+                Assert.IsTrue(authorizations.TryDequeue(out var assetId));
+                fixture.RecordDisposition(assetId, processingEvent);
+                Assert.IsTrue(accepted.TryAdd(assetId, 0));
+                acceptedSignals[assetId].TrySetResult();
+            }
+            else
+            {
+                fixture.RecordEvent(processingEvent);
+            }
+            return ValueTask.CompletedTask;
+        });
+        var request = Request();
+        var execution = fixture.Executor.ExecuteAsync(request, reporter, CancellationToken.None);
+        await configuredEntered.Task.WaitAsync(Bound);
+        Assert.AreEqual(expected, entered.Count);
+        Assert.IsFalse(additionalEntered.Task.IsCompleted);
+        var firstReleased = entered.Keys.First();
+        authorizations.Enqueue(firstReleased);
+        releases[firstReleased].TrySetResult();
+        var additional = await additionalEntered.Task.WaitAsync(Bound);
+        await acceptedSignals[firstReleased].Task.WaitAsync(Bound);
+        Assert.AreNotEqual(firstReleased, additional);
+        foreach (var assetId in entered.Keys.Where(assetId => assetId != firstReleased).OrderBy(assetId => assetId))
         {
-            releases[index].TrySetResult();
+            authorizations.Enqueue(assetId);
+            releases[assetId].TrySetResult();
+            await acceptedSignals[assetId].Task.WaitAsync(Bound);
         }
-
         var result = await execution.WaitAsync(Bound);
         Assert.AreEqual(expected, maximum);
         AssertCounts(result, assets.Length, assets.Length, 0, 0);
-        Assert.AreEqual(assets.Length, fixture.Writes.Count);
+        CollectionAssert.AreEquivalent(assets.Select(asset => asset.Id).ToArray(), entered.Keys.ToArray());
+        CollectionAssert.AreEquivalent(assets.Select(asset => asset.Id).ToArray(), accepted.Keys.ToArray());
+        CollectionAssert.AreEquivalent(assets.Select(asset => asset.Id).ToArray(), fixture.Writes.Select(item => item.AssetId).ToArray());
+        CollectionAssert.AreEquivalent(Enumerable.Range(1, assets.Length).Select(value => (long)value).ToArray(), reporter.Events.OfType<ProgressChanged>().Select(item => item.Progress.ProcessedCount).ToArray());
+        VerifyLegacyCase(caseId, request, result, null, fixture, reporter, maximumActive: maximum);
     }
-
     [TestMethod]
     public async Task ExecuteAsync_ConcurrentIndependentRuns_ShareNoMutableInvocationStateOrEvents()
     {
@@ -962,35 +1066,29 @@ public class ProcessingRunExecutorChange11Tests
         Assert.AreEqual(0, firstReporter.Events.Count(item => ReferenceEquals(secondRequest, item.Request)));
         Assert.AreEqual(0, secondReporter.Events.Count(item => ReferenceEquals(firstRequest, item.Request)));
         CollectionAssert.AreEquivalent(new[] { firstAsset.Id, secondAsset.Id }, fixture.Writes.ToArray());
+        fixture.CompleteCorrelation();
+        firstReporter.Correlation.Complete();
+        secondReporter.Correlation.Complete();
+        Assert.AreEqual(0, firstReporter.Correlation.PendingCount + secondReporter.Correlation.PendingCount);
     }
 
     [TestMethod]
     public void WithFallbackCity_MakesLoggerOnlyNoCityExecutorBranchUnreachableForEveryHasMatchShape()
     {
-        var inputs = new[]
+        const string caseId = "unreachable-no-city-guard";
+        var authority = ExecutorContractAuthority.Cases[caseId];
+        var observations = authority.FallbackShapes.Select(row =>
         {
-            new GeoResult(string.Empty, null, null),
-            new GeoResult("Country", null, null),
-            new GeoResult("Country", "State", null),
-            new GeoResult("Country", null, "City"),
-            new GeoResult("Country", "State", "City")
-        };
-        var compatibilityGuardDispositions = 0;
+            var input = new GeoResult(row.InputCountry, row.InputState, row.InputCity);
+            var output = input.WithFallbackCity();
+            var guardMatched = ProcessingRunExecutor.IsLoggerOnlyNoCitySkip(output);
+            return new ExecutorFallbackShapeContract(
+                input.Country, input.State, input.City, input.HasMatch,
+                output.Country, output.State, output.City, output.HasMatch,
+                guardMatched);
+        }).ToArray();
 
-        foreach (var input in inputs)
-        {
-            Assert.IsTrue(input.HasMatch);
-            var afterFallback = input.WithFallbackCity();
-            Assert.IsNotNull(afterFallback.City);
-            if (ProcessingRunExecutor.IsLoggerOnlyNoCitySkip(afterFallback))
-            {
-                compatibilityGuardDispositions++;
-            }
-        }
-
-        Assert.AreEqual(0, compatibilityGuardDispositions);
-        Assert.IsFalse(new GeoResult(null, null, null).HasMatch);
-        Assert.IsFalse(new GeoResult(null, "State", "City").HasMatch);
+        ExecutorCaseContractEngine.VerifyStructural(caseId, observations);
     }
 
     [TestMethod]
@@ -1076,10 +1174,10 @@ public class ProcessingRunExecutorChange11Tests
         return admission switch
         {
             "eligibility" => processingEvent is EligibilityDetermined,
-            "skipped-information" => processingEvent is LogEmitted { Level: ProcessingLogLevel.Information, Message: var message }
-                && message.StartsWith("Skipping ", StringComparison.Ordinal),
-            "batch-information" => processingEvent is LogEmitted { Level: ProcessingLogLevel.Information, Message: var message }
-                && message.StartsWith("Batch ", StringComparison.Ordinal),
+            "skipped-information" => processingEvent is LogEmitted
+                { Level: ProcessingLogLevel.Information, Message: "Skipping 1 previously unresolvable assets." },
+            "batch-information" => processingEvent is LogEmitted
+                { Level: ProcessingLogLevel.Information, Message: "Batch 1: fetched 1 assets (total processed so far: 0)." },
             "warning" => processingEvent is LogEmitted { Level: ProcessingLogLevel.Warning },
             "trace" => processingEvent is LogEmitted { Level: ProcessingLogLevel.Trace },
             "error" => processingEvent is LogEmitted { Level: ProcessingLogLevel.Error },
@@ -1087,7 +1185,7 @@ public class ProcessingRunExecutorChange11Tests
         };
     }
 
-    private static async Task AssertMatchedFallbackWriteAsync(GeoResult resolved, GeoResult expectedWrite)
+    private static async Task<ProcessingRunResult> AssertMatchedFallbackWriteAsync(string caseId, GeoResult resolved, GeoResult expectedWrite)
     {
         var asset = Asset(1);
         var fixture = OneAssetFixture(
@@ -1095,7 +1193,14 @@ public class ProcessingRunExecutorChange11Tests
             resolve: (current, session, token) => Task.FromResult<AdministrativeAreaResolution?>(Resolution(resolved)));
         var reporter = new Change11Reporter((processingEvent, token) =>
         {
-            fixture.RecordEvent(processingEvent);
+            if (processingEvent is ProgressChanged)
+            {
+                fixture.RecordDisposition(asset.Id, processingEvent);
+            }
+            else
+            {
+                fixture.RecordEvent(processingEvent);
+            }
             return ValueTask.CompletedTask;
         });
         var request = Request();
@@ -1140,25 +1245,9 @@ public class ProcessingRunExecutorChange11Tests
         Assert.IsTrue(reporter.Events.All(item => ReferenceEquals(request, item.Request)));
         Assert.AreSame(result, reporter.Events.OfType<RunFinished>().Single().Result);
 
-        CollectionAssert.AreEqual(
-            new[]
-            {
-                "event:Started",
-                "count",
-                "event:Eligibility",
-                "skipped-snapshot",
-                "config",
-                $"batch:1:{AssetCursor.Initial.CreatedAt:O}:{AssetCursor.Initial.Id}:50",
-                "event:Information:Batch 1: fetched 1 assets (total processed so far: 0).",
-                $"admin:{asset.Id}",
-                $"write-start:{asset.Id}",
-                $"write-end:{asset.Id}",
-                $"event:Disposition:{asset.Id}:Updated",
-                $"batch:2:{asset.CreatedAt:O}:{asset.Id}:50",
-                "event:Finished"
-            },
-            fixture.Operations.ToArray());
-        Assert.AreEqual(0, fixture.Operations.Count(item => item.Contains(":Skipped", StringComparison.Ordinal)));
+        Assert.AreEqual(0, fixture.Timeline.Count(item => item.Kind == RetainedTimelineKind.Disposition && item.Outcome == "Skipped"));
+        VerifyLegacyCase(caseId, request, result, null, fixture, reporter);
+        return result;
     }
 
     private static Change11ExecutorProbe OneAssetFixture(
@@ -1218,8 +1307,8 @@ public class ProcessingRunExecutorChange11Tests
         }
     };
 
-    private static ProcessingRunRequest Request() => new(Guid.NewGuid(), ProcessingRunTrigger.Manual);
-    private static AssetRecord Asset(int index) => new(Guid.NewGuid(), index, index, DateTime.UnixEpoch.AddSeconds(index));
+    private static ProcessingRunRequest Request() => new(Guid.Parse("11111111-1111-1111-1111-111111111111"), ProcessingRunTrigger.Manual);
+    private static AssetRecord Asset(int index) => ExecutorFixture.Asset(index);
     private static AdministrativeAreaResolution Resolution(GeoResult geo) => new("USA", "US", "Country", geo, null, null);
     private static OvertureInfrastructureLookupDiagnostics EmptyDiagnostics() => new(null, [], "release");
     private static OvertureInfrastructureLookupDiagnostics Diagnostics(string name, bool contains) => new(
@@ -1227,22 +1316,66 @@ public class ProcessingRunExecutorChange11Tests
         [],
         "release");
 
-    private static string EventOperation(ProcessingEvent processingEvent)
-    {
-        return processingEvent switch
-        {
-            RunStarted => "event:Started",
-            EligibilityDetermined => "event:Eligibility",
-            LogEmitted log => $"event:{log.Level}:{log.Message}",
-            ProgressChanged progress => $"event:Progress:{progress.Progress.UpdatedCount}/{progress.Progress.SkippedCount}/{progress.Progress.FailedCount}",
-            ActivityStarted activity => $"event:ActivityStarted:{activity.ActivityId}",
-            ActivityEnded activity => $"event:ActivityEnded:{activity.ActivityId}",
-            RunFinished => "event:Finished",
-            _ => $"event:{processingEvent.GetType().Name}"
-        };
-    }
     private static TaskCompletionSource Signal() => new(TaskCreationOptions.RunContinuationsAsynchronously);
     private static TaskCompletionSource<T> Signal<T>() => new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    private static void VerifyLegacyCase(
+        string caseId,
+        ProcessingRunRequest request,
+        ProcessingRunResult? result,
+        Exception? escapedException,
+        Change11ExecutorProbe fixture,
+        Change11Reporter reporter,
+        int maximumActive = 0,
+        CancellationToken? expectedForeignToken = null)
+    {
+        Guid? CorrelateAsset(RecordedReporterEvent item)
+        {
+            if (item.AssetId.HasValue)
+            {
+                return item.AssetId;
+            }
+            var identities = fixture.Calls.Where(call => call.Token.HasValue && call.Token.Value == item.Token && call.Call.AssetId.HasValue)
+                .Select(call => call.Call.AssetId!.Value).Distinct().ToArray();
+            return identities.Length == 1 ? identities[0] : null;
+        }
+        var attempts = reporter.AttemptObservations.Select(item => new ExecutorEventObservation(
+            reporter.Correlation.Create(item.Event, request, result), item.Token, CorrelateAsset(item), item.Sequence)).ToArray();
+        var events = reporter.EventObservations.Select(item => new ExecutorEventObservation(
+            reporter.Correlation.Create(item.Event, request, result), item.Token, CorrelateAsset(item), item.Sequence)).ToArray();
+        var effects = fixture.Writes.Select(item => new ExecutorEffectContract(ExecutorEffectKind.Write, item.AssetId,
+                item.Geo.Country, item.Geo.State, item.Geo.City))
+            .Concat(fixture.SkippedWrites.Select(id => new ExecutorEffectContract(ExecutorEffectKind.Skip, id, null, null, null))).ToArray();
+        var dispositions = fixture.Dispositions.ToArray();
+        if (dispositions.Length == 0)
+        {
+            var writes = new Queue<Guid>(fixture.Writes.Select(item => item.AssetId));
+            var skips = new Queue<Guid>(fixture.SkippedWrites);
+            long updated = 0, skipped = 0, failed = 0;
+            dispositions = events.Where(item => item.Event.Kind == ExecutorEventKind.ProgressChanged).Select(item =>
+            {
+                var state = item.Event;
+                var outcome = state.UpdatedCount > updated ? "Updated" : state.SkippedCount > skipped ? "Skipped" : "Failed";
+                updated = state.UpdatedCount!.Value;
+                skipped = state.SkippedCount!.Value;
+                failed = state.FailedCount!.Value;
+                var assetId = outcome == "Updated" ? writes.Dequeue() : outcome == "Skipped" ? skips.Dequeue()
+                    : throw new AssertFailedException($"{caseId}: failed disposition requires explicit asset correlation.");
+                return new ExecutorDispositionObservation(assetId, outcome, state.ProcessedCount!.Value, updated, skipped, failed);
+            }).ToArray();
+        }
+        var observation = new ExecutorCaseObservation(request, result, escapedException, escapedException,
+            fixture.Calls.ToArray(), effects, attempts, events,
+            fixture.Logger.Entries.Select(entry => new ExecutorLogContract("ILogger", entry.Level.ToString(), entry.Message,
+                entry.Exception?.GetType().FullName, entry.Exception?.Message)).ToArray(), fixture.FetchedAssets.ToArray(),
+            dispositions, fixture.SeamExceptions.ToArray(), CancellationToken.None, expectedForeignToken, maximumActive,
+            new ExecutorCleanupObservation(reporter.SessionConstructed, reporter.SessionReturned, reporter.TerminalAttempted,
+                reporter.TerminalAccepted, reporter.ActivitiesBalanced));
+        ExecutorCaseContractEngine.Verify(caseId, observation);
+        reporter.Correlation.Complete();
+        Assert.AreEqual(0, reporter.Correlation.PendingCount, caseId);
+        fixture.CompleteCorrelation();
+    }
 
     private static void AssertCounts(ProcessingRunResult result, long processed, long updated, long skipped, long failed)
     {
@@ -1267,39 +1400,87 @@ public class ProcessingRunExecutorChange11Tests
         }
     }
 
-    private static int IndexOfExact(string[] values, string value)
-    {
-        return Array.IndexOf(values, value);
-    }
-
-    private static int IndexOf(string[] values, string value, int occurrence)
-    {
-        return values.Select((item, index) => (item, index)).Where(pair => pair.item == value).ElementAt(occurrence).index;
-    }
-
-    private static int IndexOfPrefix(string[] values, string prefix, int occurrence)
-    {
-        return values.Select((item, index) => (item, index)).Where(pair => pair.item.StartsWith(prefix, StringComparison.Ordinal)).ElementAt(occurrence).index;
-    }
-
     private sealed class TestSinkException(string message) : Exception(message);
 
-    private sealed class Change11Reporter(
-        Func<ProcessingEvent, CancellationToken, ValueTask>? behavior = null) : ProcessingEventReporter
+    private sealed class Change11Reporter : IProcessingEventReporter
     {
+        private sealed class Adapter(Change11Reporter owner) : ProcessingEventReporter
+        {
+            protected override ValueTask AcceptAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken) =>
+                owner.AcceptCoreAsync(processingEvent, cancellationToken);
+        }
+        private readonly Func<ProcessingEvent, CancellationToken, ValueTask>? _behavior;
+        private readonly ProcessingEventReporter _adapter;
+        private int _acceptedActivities;
+
+        internal Change11Reporter(Func<ProcessingEvent, CancellationToken, ValueTask>? behavior = null)
+        {
+            _behavior = behavior;
+            _adapter = new Adapter(this);
+        }
+
+        public bool SessionConstructed { get; private set; }
+        public bool SessionReturned { get; private set; }
+        public bool TerminalAttempted { get; private set; }
+        public bool TerminalAccepted { get; private set; }
+        public bool ActivitiesBalanced => Volatile.Read(ref _acceptedActivities) == 0;
+        public async ValueTask<IProcessingRunEventSession> OpenRunAsync(ProcessingRunRequest request, DateTimeOffset startedAtUtc, CancellationToken cancellationToken = default)
+        {
+            try
+            {
+                var session = await _adapter.OpenRunAsync(request, startedAtUtc, cancellationToken).ConfigureAwait(false);
+                SessionReturned = true;
+                return session;
+            }
+            finally
+            {
+                SessionConstructed = true;
+            }
+        }
         public ConcurrentQueue<ProcessingEvent> Attempts { get; } = new();
         public ConcurrentQueue<ProcessingEvent> Events { get; } = new();
+        public ConcurrentQueue<RecordedReporterEvent> AttemptObservations { get; } = new();
+        public ConcurrentQueue<RecordedReporterEvent> EventObservations { get; } = new();
+        public ExecutorEventCorrelation Correlation { get; } = new();
 
-        protected override async ValueTask AcceptAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken)
+        private async ValueTask AcceptCoreAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken)
         {
-            Attempts.Enqueue(processingEvent);
-            if (behavior is not null)
+            if (processingEvent is RunFinished)
             {
-                await behavior(processingEvent, cancellationToken).ConfigureAwait(false);
+                TerminalAttempted = true;
             }
+            Correlation.ObserveActivity(processingEvent);
+            var observation = new RecordedReporterEvent(processingEvent, cancellationToken, null, 0);
+            Attempts.Enqueue(processingEvent);
+            AttemptObservations.Enqueue(observation);
+            try
+            {
+                if (_behavior is not null)
+                {
+                    await _behavior(processingEvent, cancellationToken).ConfigureAwait(false);
+                }
 
-            cancellationToken.ThrowIfCancellationRequested();
-            Events.Enqueue(processingEvent);
+                cancellationToken.ThrowIfCancellationRequested();
+                Events.Enqueue(processingEvent);
+                if (processingEvent is RunFinished)
+                {
+                    TerminalAccepted = true;
+                }
+                else if (processingEvent is ActivityStarted)
+                {
+                    Interlocked.Increment(ref _acceptedActivities);
+                }
+                else if (processingEvent is ActivityEnded)
+                {
+                    Interlocked.Decrement(ref _acceptedActivities);
+                }
+                EventObservations.Enqueue(observation with { AssetId = Correlation.TakeCorrelatedAsset(processingEvent) ?? observation.AssetId });
+            }
+            catch
+            {
+                Correlation.Reject(processingEvent);
+                throw;
+            }
         }
     }
 
@@ -1399,6 +1580,7 @@ public class ProcessingRunExecutorChange11Tests
         public AppConfig Config { get; init; } = DefaultConfig();
         public IProcessingRunConfiguration? Configuration { get; init; }
         public IReadOnlySet<Guid> SkippedIds { get; init; } = new HashSet<Guid>();
+        public Func<Task<HashSet<Guid>>>? SkippedSnapshot { get; init; }
         public IReadOnlyList<IReadOnlyList<AssetRecord>> Pages { get; init; } = [];
         public Func<AssetCursor, int, int, CancellationToken, Task<List<AssetRecord>>>? Batch { get; init; }
         public Func<AssetRecord, IProcessingRunEventSession, CancellationToken, Task<AdministrativeAreaResolution?>>? Resolve { get; init; }
@@ -1407,6 +1589,17 @@ public class ProcessingRunExecutorChange11Tests
         public Func<Guid, GeoResult, CancellationToken, Task>? Write { get; init; }
         public Func<TimeSpan, CancellationToken, Task>? Delay { get; init; }
     }
+
+    private enum RetainedTimelineKind { Call, Event, Disposition }
+    private sealed record RetainedTimelinePoint(
+        long Sequence,
+        RetainedTimelineKind Kind,
+        ExecutorCallContract? Call = null,
+        ExecutorEventKind? Event = null,
+        Guid? AssetId = null,
+        string? Outcome = null,
+        ProcessingLogLevel? Level = null,
+        string? Message = null);
 
     private sealed class Change11ExecutorProbe :
         IProcessingRunConfiguration,
@@ -1419,7 +1612,7 @@ public class ProcessingRunExecutorChange11Tests
         private readonly Change11Scenario _plan;
         private readonly ConcurrentQueue<List<AssetRecord>> _pages = new();
         private readonly ConcurrentDictionary<double, AssetRecord> _activeAssets = new();
-        private readonly ConcurrentQueue<(Guid AssetId, string Disposition)> _pendingDispositions = new();
+        private readonly ConcurrentDictionary<Guid, string> _pendingDispositions = new();
 
         public Change11ExecutorProbe(Change11Scenario? plan = null)
         {
@@ -1430,12 +1623,17 @@ public class ProcessingRunExecutorChange11Tests
             }
         }
 
-        public ConcurrentQueue<string> Operations { get; } = new();
+        private long _timelineSequence;
+        public ConcurrentQueue<RetainedTimelinePoint> Timeline { get; } = new();
+        public ConcurrentQueue<ExecutorCallObservation> Calls { get; } = new();
+        public ConcurrentQueue<ExecutorDispositionObservation> Dispositions { get; } = new();
+        public ConcurrentQueue<SeamExceptionObservation> SeamExceptions { get; } = new();
         public ConcurrentQueue<AssetCursor> Cursors { get; } = new();
         public ConcurrentQueue<int> BatchSizes { get; } = new();
         public ConcurrentQueue<TimeSpan> Delays { get; } = new();
         public ConcurrentQueue<(Guid AssetId, GeoResult Geo)> Writes { get; } = new();
         public ConcurrentQueue<Guid> SkippedWrites { get; } = new();
+        public ConcurrentQueue<Guid> FetchedAssets { get; } = new();
         public ConcurrentQueue<ProcessingConfig> ResolverConfigs { get; } = new();
         public ConcurrentQueue<IProcessingRunEventSession> ResolverSessions { get; } = new();
         public Change11CaptureLogger Logger { get; } = new();
@@ -1450,12 +1648,48 @@ public class ProcessingRunExecutorChange11Tests
         {
             if (processingEvent is ProgressChanged)
             {
-                Assert.IsTrue(_pendingDispositions.TryDequeue(out var pending), "Every accepted disposition must correlate to one completed asset operation.");
-                Operations.Enqueue($"event:Disposition:{pending.AssetId}:{pending.Disposition}");
+                Assert.AreEqual(1, _pendingDispositions.Count, "Generic progress requires one exact pending asset.");
+                RecordDisposition(_pendingDispositions.Keys.Single(), processingEvent);
                 return;
             }
 
-            Operations.Enqueue(EventOperation(processingEvent));
+            var point = processingEvent switch
+            {
+                RunStarted => new RetainedTimelinePoint(NextSequence(), RetainedTimelineKind.Event, Event: ExecutorEventKind.RunStarted),
+                EligibilityDetermined => new RetainedTimelinePoint(NextSequence(), RetainedTimelineKind.Event, Event: ExecutorEventKind.EligibilityDetermined),
+                LogEmitted log => new RetainedTimelinePoint(NextSequence(), RetainedTimelineKind.Event, Event: ExecutorEventKind.LogEmitted, Level: log.Level, Message: log.Message),
+                ActivityStarted => new RetainedTimelinePoint(NextSequence(), RetainedTimelineKind.Event, Event: ExecutorEventKind.ActivityStarted),
+                ActivityEnded => new RetainedTimelinePoint(NextSequence(), RetainedTimelineKind.Event, Event: ExecutorEventKind.ActivityEnded),
+                RunFinished => new RetainedTimelinePoint(NextSequence(), RetainedTimelineKind.Event, Event: ExecutorEventKind.RunFinished),
+                _ => throw new AssertFailedException($"Unknown retained event {processingEvent.GetType().FullName}.")
+            };
+            Timeline.Enqueue(point);
+        }
+
+        public void RecordDisposition(Guid assetId, ProcessingEvent processingEvent)
+        {
+            Assert.IsInstanceOfType<ProgressChanged>(processingEvent);
+            Assert.IsTrue(_pendingDispositions.TryRemove(assetId, out var disposition), $"No explicit pending disposition exists for asset {assetId}.");
+            var sequence = NextSequence();
+            Timeline.Enqueue(new RetainedTimelinePoint(sequence, RetainedTimelineKind.Disposition, AssetId: assetId, Outcome: disposition));
+            var progress = (ProgressChanged)processingEvent;
+            Dispositions.Enqueue(new ExecutorDispositionObservation(assetId, disposition, progress.Progress.ProcessedCount,
+                progress.Progress.UpdatedCount, progress.Progress.SkippedCount, progress.Progress.FailedCount, sequence));
+        }
+
+        public void CompleteCorrelation()
+        {
+            Assert.AreEqual(0, _activeAssets.Count, "Retained asset correlation leaked beyond run.");
+            Assert.AreEqual(0, _pendingDispositions.Count, "Retained disposition correlation leaked beyond run.");
+        }
+
+        private long NextSequence() => Interlocked.Increment(ref _timelineSequence);
+
+        private void RecordCall(ExecutorCallContract call, CancellationToken? token = null)
+        {
+            var sequence = NextSequence();
+            Calls.Enqueue(new ExecutorCallObservation(call, token, sequence));
+            Timeline.Enqueue(new RetainedTimelinePoint(sequence, RetainedTimelineKind.Call, Call: call, AssetId: call.AssetId));
         }
 
         public ProcessingRunExecutor Executor => new(
@@ -1470,22 +1704,22 @@ public class ProcessingRunExecutorChange11Tests
 
         public Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken = default)
         {
-            Operations.Enqueue("count");
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.Count), cancellationToken);
             return Task.FromResult(_plan.Eligible);
         }
 
         public Task<AppConfig> GetConfigAsync()
         {
             Interlocked.Increment(ref ConfigCalls);
-            Operations.Enqueue("config");
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.ConfigurationSnapshot));
             return Task.FromResult(_plan.Config);
         }
 
         public Task<HashSet<Guid>> GetAllAsync()
         {
             Interlocked.Increment(ref SkippedSnapshotCalls);
-            Operations.Enqueue("skipped-snapshot");
-            return Task.FromResult(_plan.SkippedIds.ToHashSet());
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.SkippedSnapshot));
+            return _plan.SkippedSnapshot?.Invoke() ?? Task.FromResult(_plan.SkippedIds.ToHashSet());
         }
 
         public async Task<List<AssetRecord>> GetUnprocessedBatchAsync(AssetCursor cursor, int batchSize, CancellationToken cancellationToken = default)
@@ -1493,13 +1727,24 @@ public class ProcessingRunExecutorChange11Tests
             var call = Interlocked.Increment(ref BatchCalls);
             Cursors.Enqueue(cursor);
             BatchSizes.Enqueue(batchSize);
-            Operations.Enqueue($"batch:{call}:{cursor.CreatedAt:O}:{cursor.Id}:{batchSize}");
-            var page = _plan.Batch is null
-                ? (_pages.TryDequeue(out var queued) ? queued : [])
-                : await _plan.Batch(cursor, batchSize, call, cancellationToken).ConfigureAwait(false);
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.Batch, call, cursor.CreatedAt, cursor.Id, batchSize), cancellationToken);
+            _activeAssets.Clear();
+            List<AssetRecord> page;
+            try
+            {
+                page = _plan.Batch is null
+                    ? (_pages.TryDequeue(out var queued) ? queued : [])
+                    : await _plan.Batch(cursor, batchSize, call, cancellationToken).ConfigureAwait(false);
+            }
+            catch (Exception exception)
+            {
+                SeamExceptions.Enqueue(new SeamExceptionObservation(ExecutorCallKind.Batch, null, exception));
+                throw;
+            }
             foreach (var asset in page)
             {
                 _activeAssets[asset.Latitude] = asset;
+                FetchedAssets.Enqueue(asset.Id);
             }
 
             return page;
@@ -1510,39 +1755,51 @@ public class ProcessingRunExecutorChange11Tests
             var asset = _activeAssets[latitude];
             ResolverConfigs.Enqueue(config);
             ResolverSessions.Enqueue(session);
-            Operations.Enqueue($"admin:{asset.Id}");
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.Admin, AssetId: asset.Id), cancellationToken);
+            var resolutionCompleted = false;
             try
             {
-                return _plan.Resolve is null
+                var resolution = _plan.Resolve is null
                     ? Resolution(new GeoResult("Country", "State", "City"))
                     : await _plan.Resolve(asset, session, cancellationToken).ConfigureAwait(false);
+                resolutionCompleted = true;
+                return resolution;
             }
             catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 ForeignFailure = ex;
                 HandledFailure = ex;
-                _pendingDispositions.Enqueue((asset.Id, "Failed"));
+                SeamExceptions.Enqueue(new SeamExceptionObservation(ExecutorCallKind.Admin, asset.Id, ex));
+                Assert.IsTrue(_pendingDispositions.TryAdd(asset.Id, "Failed"));
                 throw;
             }
             catch (Exception ex) when (ex is not OutOfMemoryException && ex is not ProcessingEventReportingException)
             {
                 HandledFailure = ex;
-                _pendingDispositions.Enqueue((asset.Id, "Failed"));
+                SeamExceptions.Enqueue(new SeamExceptionObservation(ExecutorCallKind.Admin, asset.Id, ex));
+                Assert.IsTrue(_pendingDispositions.TryAdd(asset.Id, "Failed"));
                 throw;
+            }
+            finally
+            {
+                if (!resolutionCompleted || !config.UseAirportInfrastructure)
+                {
+                    _activeAssets.TryRemove(latitude, out _);
+                }
             }
         }
 
         public Task<OvertureInfrastructureLookupDiagnostics> FindNearestInfrastructureAsync(double latitude, double longitude, string? iso3, CancellationToken cancellationToken = default)
         {
             Interlocked.Increment(ref InfrastructureCalls);
-            var asset = _activeAssets[latitude];
-            Operations.Enqueue($"airport:{asset.Id}");
-            return _plan.Infrastructure?.Invoke(asset, cancellationToken) ?? Task.FromResult(EmptyDiagnostics());
+            Assert.IsTrue(_activeAssets.TryRemove(latitude, out var asset));
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.Airport, AssetId: asset!.Id), cancellationToken);
+            return _plan.Infrastructure?.Invoke(asset!, cancellationToken) ?? Task.FromResult(EmptyDiagnostics());
         }
 
         public async Task AddAsync(Guid assetId)
         {
-            Operations.Enqueue($"skip-start:{assetId}");
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.SkipAttempt, AssetId: assetId));
             try
             {
                 if (_plan.AddSkipped is not null)
@@ -1552,18 +1809,18 @@ public class ProcessingRunExecutorChange11Tests
             }
             catch
             {
-                _pendingDispositions.Enqueue((assetId, "Failed"));
+                Assert.IsTrue(_pendingDispositions.TryAdd(assetId, "Failed"));
                 throw;
             }
 
             SkippedWrites.Enqueue(assetId);
-            Operations.Enqueue($"skip-end:{assetId}");
-            _pendingDispositions.Enqueue((assetId, "Skipped"));
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.SkipAccepted, AssetId: assetId));
+            Assert.IsTrue(_pendingDispositions.TryAdd(assetId, "Skipped"));
         }
 
         public async Task WriteLocationAsync(Guid assetId, GeoResult geoResult, CancellationToken cancellationToken = default)
         {
-            Operations.Enqueue($"write-start:{assetId}");
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.WriteAttempt, AssetId: assetId), cancellationToken);
             try
             {
                 if (_plan.Write is not null)
@@ -1573,18 +1830,18 @@ public class ProcessingRunExecutorChange11Tests
             }
             catch
             {
-                _pendingDispositions.Enqueue((assetId, "Failed"));
+                Assert.IsTrue(_pendingDispositions.TryAdd(assetId, "Failed"));
                 throw;
             }
 
             Writes.Enqueue((assetId, geoResult));
-            Operations.Enqueue($"write-end:{assetId}");
-            _pendingDispositions.Enqueue((assetId, "Updated"));
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.WriteAccepted, AssetId: assetId));
+            Assert.IsTrue(_pendingDispositions.TryAdd(assetId, "Updated"));
         }
 
         public async Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken)
         {
-            Operations.Enqueue($"delay:{delay.TotalMilliseconds}");
+            RecordCall(new ExecutorCallContract(ExecutorCallKind.Delay, DelayMs: delay.TotalMilliseconds), cancellationToken);
             Delays.Enqueue(delay);
             if (_plan.Delay is not null)
             {
@@ -1625,13 +1882,24 @@ public class ProcessingRunExecutorChange11Tests
             Executor = new ProcessingRunExecutor(new Change11CaptureLogger(), this, this, this, this, this, this, new Change11TimeProvider());
         }
 
+        public void CompleteCorrelation()
+        {
+            Assert.AreEqual(0, _assets.Count + _pages.Count, "Concurrent run token correlations leaked beyond both runs.");
+        }
+
         public Task<AppConfig> GetConfigAsync() => Task.FromResult(new AppConfig { Processing = new ProcessingConfig { BatchDelayMs = 0, MaxDegreeOfParallelism = 1 } });
         public Task<HashSet<Guid>> GetAllAsync() => Task.FromResult(new HashSet<Guid>());
         public Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken = default) => Task.FromResult(1L);
         public Task<List<AssetRecord>> GetUnprocessedBatchAsync(AssetCursor cursor, int batchSize, CancellationToken cancellationToken = default)
         {
             var page = _pages.AddOrUpdate(cancellationToken, 1, (_, current) => current + 1);
-            return Task.FromResult(page == 1 ? new List<AssetRecord> { _assets[cancellationToken] } : []);
+            if (page == 1)
+            {
+                return Task.FromResult(new List<AssetRecord> { _assets[cancellationToken] });
+            }
+            _pages.TryRemove(cancellationToken, out _);
+            _assets.TryRemove(cancellationToken, out _);
+            return Task.FromResult(new List<AssetRecord>());
         }
 
         public async Task<AdministrativeAreaResolution?> ResolveAsync(double latitude, double longitude, ProcessingConfig config, IProcessingRunEventSession session, CancellationToken cancellationToken = default)

@@ -9,43 +9,52 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ImmichReverseGeo.Tests;
 
 [TestClass]
+[TestCategory("Change14")]
 public class ProcessingRunExecutorTests
 {
+    private enum EligibilityOperation { RunStarted, CountEntered, RunFinished }
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
 
     [TestMethod]
     public async Task ExecuteAsync_ZeroEligibility_UsesOneSessionBeforeCountAndReturnsExactCompletedResult()
     {
-        var operations = new GatedZeroOperations();
-        var reporter = new ImmutableRecordingReporter();
-        var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
-        var executor = operations.CreateExecutor();
+        var countEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var countRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var fixture = new ExecutorFixture().EnableReporter().EnableCount(0);
+        fixture.CountBehavior = async token =>
+        {
+            countEntered.TrySetResult();
+            await countRelease.Task.WaitAsync(token).ConfigureAwait(false);
+            return 0;
+        };
 
-        var execution = executor.ExecuteAsync(request, reporter, CancellationToken.None);
-        await operations.CountEntered.Task.WaitAsync(Bound);
-        CollectionAssert.AreEqual(new[] { typeof(RunStarted) }, reporter.Events.Select(item => item.GetType()).ToArray());
-        operations.CountRelease.TrySetResult(0);
+        var execution = fixture.Executor.ExecuteAsync(fixture.Request, fixture.Reporter, CancellationToken.None);
+        await countEntered.Task.WaitAsync(Bound);
+        CollectionAssert.AreEqual(new[] { typeof(RunStarted) }, fixture.Reporter.Events.Select(item => item.GetType()).ToArray());
+        countRelease.TrySetResult();
         var result = await execution.WaitAsync(Bound);
+        fixture.AssertTerminal(result);
+        fixture.Verify("zero-eligibility", result, runToken: CancellationToken.None);
 
-        Assert.AreSame(request, result.Request);
+        Assert.AreSame(fixture.Request, result.Request);
         Assert.AreEqual(ProcessingRunOutcome.Completed, result.Outcome);
         Assert.AreEqual(0L, result.ProcessedCount);
         Assert.AreEqual(0L, result.UpdatedCount);
         Assert.AreEqual(0L, result.SkippedCount);
         Assert.AreEqual(0L, result.FailedCount);
-        CollectionAssert.AreEqual(new[] { "count" }, operations.Calls.ToArray());
+        CollectionAssert.AreEqual(new[] { ExecutorCallKind.Count }, fixture.Calls.Select(item => item.Call.Kind).ToArray());
         CollectionAssert.AreEqual(
             new[] { typeof(RunStarted), typeof(EligibilityDetermined), typeof(RunFinished) },
-            reporter.Events.Select(item => item.GetType()).ToArray());
-        Assert.IsTrue(reporter.Events.All(item => ReferenceEquals(request, item.Request)));
-        Assert.AreSame(result, reporter.Events.OfType<RunFinished>().Single().Result);
+            fixture.Reporter.Events.Select(item => item.GetType()).ToArray());
+        Assert.IsTrue(fixture.Reporter.Events.All(item => ReferenceEquals(fixture.Request, item.Request)));
+        Assert.AreSame(result, fixture.Reporter.Events.OfType<RunFinished>().Single().Result);
     }
 
     [TestMethod]
     public async Task ExecuteAsync_ActiveCancellationDuringEligibility_ReturnsCancelledWithoutEligibility()
     {
         using var cancellation = new CancellationTokenSource();
-        var operations = new ConcurrentQueue<string>();
+        var operations = new ConcurrentQueue<EligibilityOperation>();
         var dependencies = new GatedEligibilityCancellationOperations(operations);
         var reporter = new EligibilityBoundaryReporter(operations);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual);
@@ -69,7 +78,7 @@ public class ProcessingRunExecutorTests
             new[] { typeof(RunStarted), typeof(RunFinished) },
             reporter.Events.Select(item => item.GetType()).ToArray());
         CollectionAssert.AreEqual(
-            new[] { "event:Started", "count-enter", "event:Finished" },
+            new[] { EligibilityOperation.RunStarted, EligibilityOperation.CountEntered, EligibilityOperation.RunFinished },
             operations.ToArray());
     }
 
@@ -77,7 +86,7 @@ public class ProcessingRunExecutorTests
     public async Task ExecuteAsync_EligibilityFailure_ReturnsFailedWithoutFabricatedEligibility()
     {
         var failure = new InvalidOperationException("eligibility count failed");
-        var operations = new ConcurrentQueue<string>();
+        var operations = new ConcurrentQueue<EligibilityOperation>();
         var logger = new EligibilityBoundaryLogger();
         var dependencies = new FailingEligibilityOperations(operations, failure, logger);
         var reporter = new EligibilityBoundaryReporter(operations);
@@ -104,7 +113,7 @@ public class ProcessingRunExecutorTests
         Assert.AreEqual("Fatal error during processing run", fatal.Message);
         Assert.AreSame(failure, fatal.Exception);
         CollectionAssert.AreEqual(
-            new[] { "event:Started", "count-enter", "event:Finished" },
+            new[] { EligibilityOperation.RunStarted, EligibilityOperation.CountEntered, EligibilityOperation.RunFinished },
             operations.ToArray());
     }
 
@@ -116,7 +125,7 @@ public class ProcessingRunExecutorTests
         Assert.AreEqual(0L, result.FailedCount);
     }
 
-    private sealed class EligibilityBoundaryReporter(ConcurrentQueue<string> operations) : ProcessingEventReporter
+    private sealed class EligibilityBoundaryReporter(ConcurrentQueue<EligibilityOperation> operations) : ProcessingEventReporter
     {
         public ConcurrentQueue<ProcessingEvent> Events { get; } = new();
 
@@ -126,9 +135,9 @@ public class ProcessingRunExecutorTests
             Events.Enqueue(processingEvent);
             operations.Enqueue(processingEvent switch
             {
-                RunStarted => "event:Started",
-                RunFinished => "event:Finished",
-                _ => $"event:{processingEvent.GetType().Name}"
+                RunStarted => EligibilityOperation.RunStarted,
+                RunFinished => EligibilityOperation.RunFinished,
+                _ => throw new AssertFailedException($"Unexpected eligibility-boundary event {processingEvent.GetType().Name}.")
             });
             return ValueTask.CompletedTask;
         }
@@ -162,9 +171,9 @@ public class ProcessingRunExecutorTests
         IProcessingRunDelay
     {
         private readonly ILogger _logger;
-        protected ConcurrentQueue<string> Operations { get; }
+        protected ConcurrentQueue<EligibilityOperation> Operations { get; }
 
-        protected EligibilityBoundaryOperations(ConcurrentQueue<string> operations, ILogger logger)
+        protected EligibilityBoundaryOperations(ConcurrentQueue<EligibilityOperation> operations, ILogger logger)
         {
             Operations = operations;
             _logger = logger;
@@ -180,7 +189,7 @@ public class ProcessingRunExecutorTests
                 this,
                 this,
                 this,
-                TimeProvider.System);
+                new FixedUtcTimeProvider());
         }
 
         public abstract Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken = default);
@@ -196,7 +205,7 @@ public class ProcessingRunExecutorTests
         private static AssertFailedException Unexpected(string operation) => new($"Unexpected {operation} operation.");
     }
 
-    private sealed class GatedEligibilityCancellationOperations(ConcurrentQueue<string> operations)
+    private sealed class GatedEligibilityCancellationOperations(ConcurrentQueue<EligibilityOperation> operations)
         : EligibilityBoundaryOperations(operations, NullLogger.Instance)
     {
         public TaskCompletionSource CountEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -204,20 +213,20 @@ public class ProcessingRunExecutorTests
 
         public override async Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken = default)
         {
-            Operations.Enqueue("count-enter");
+            Operations.Enqueue(EligibilityOperation.CountEntered);
             CountEntered.TrySetResult();
             return await NeverRelease.Task.WaitAsync(Bound, cancellationToken).ConfigureAwait(false);
         }
     }
 
     private sealed class FailingEligibilityOperations(
-        ConcurrentQueue<string> operations,
+        ConcurrentQueue<EligibilityOperation> operations,
         Exception failure,
         ILogger logger) : EligibilityBoundaryOperations(operations, logger)
     {
         public override Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken = default)
         {
-            Operations.Enqueue("count-enter");
+            Operations.Enqueue(EligibilityOperation.CountEntered);
             return Task.FromException<long>(failure);
         }
     }
@@ -244,7 +253,7 @@ public class ProcessingRunExecutorTests
     {
         public TaskCompletionSource CountEntered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource<long> CountRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        public ConcurrentQueue<string> Calls { get; } = new();
+        public ConcurrentQueue<ExecutorCallKind> Calls { get; } = new();
 
         public ProcessingRunExecutor CreateExecutor()
         {
@@ -256,12 +265,12 @@ public class ProcessingRunExecutorTests
                 this,
                 this,
                 this,
-                TimeProvider.System);
+                new FixedUtcTimeProvider());
         }
 
         public async Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken = default)
         {
-            Calls.Enqueue("count");
+            Calls.Enqueue(ExecutorCallKind.Count);
             CountEntered.TrySetResult();
             return await CountRelease.Task.WaitAsync(Bound, cancellationToken).ConfigureAwait(false);
         }

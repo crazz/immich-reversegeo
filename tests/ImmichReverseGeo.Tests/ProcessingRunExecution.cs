@@ -8,20 +8,20 @@ namespace ImmichReverseGeo.Tests;
 
 internal static class ProcessingRunExecution
 {
-    internal static async Task RunOnceAsync(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingOperations operations, CancellationToken cancellationToken)
+    internal static async Task<ProcessingRunResult> RunOnceAsync(ILogger<ProcessingBackgroundService> logger, ProcessingState state, ProcessingOperations operations, CancellationToken cancellationToken)
     {
         var reporter = new ProcessingStateEventReporter(state);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         reporter.Arm(request);
-        await RunOnceAsync(logger, state, reporter, request, operations, cancellationToken).ConfigureAwait(false);
+        return await RunOnceAsync(logger, state, reporter, request, operations, cancellationToken).ConfigureAwait(false);
     }
 
-    internal static async Task RunOnceAsync(ILogger<ProcessingBackgroundService> logger, ProcessingState state, IProcessingEventReporter reporter, ProcessingRunRequest request, ProcessingOperations operations, CancellationToken cancellationToken)
+    internal static async Task<ProcessingRunResult> RunOnceAsync(ILogger<ProcessingBackgroundService> logger, ProcessingState state, IProcessingEventReporter reporter, ProcessingRunRequest request, ProcessingOperations operations, CancellationToken cancellationToken)
     {
-        var executor = new ProcessingRunExecutor(logger, operations, operations, operations, operations, operations, operations, TimeProvider.System);
+        var executor = new ProcessingRunExecutor(logger, operations, operations, operations, operations, operations, operations, new FixedUtcTimeProvider());
         try
         {
-            await executor.ExecuteAsync(request, reporter, cancellationToken).ConfigureAwait(false);
+            return await executor.ExecuteAsync(request, reporter, cancellationToken).ConfigureAwait(false);
         }
         catch (Exception failure)
         {

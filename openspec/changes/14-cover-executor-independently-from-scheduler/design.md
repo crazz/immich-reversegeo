@@ -37,7 +37,7 @@ Create one direct-executor fixture around the finalized block 11 constructor. It
 - the finalized recording/fault-injection reporter support from block 8/11;
 - asynchronous gates created with continuations run asynchronously and a concurrency probe.
 
-Fail-fast defaults reject unexpected collaborator calls. Builders may make scenario setup concise, but assertions use observable histories/results rather than fake implementation details.
+Fail-fast defaults reject unexpected collaborator calls. Builders may make scenario setup concise, but assertions use observable histories/results rather than fake implementation details. The shared fixture must migrate inherited direct-executor tests away from `TimeProvider.System` to the fixed UTC seam. Planned architecture and manifest TestMethods—not the existing executor lifetime-reflection test alone—must prove fixed-clock use, forbidden-dependency absence, direct executor construction, and gate-only ordering.
 
 Alternative: a mocking framework or real SQLite fixture. Rejected because a small stateful pipeline fake makes cursor, order, snapshots, committed effects, and gates explicit without infrastructure timing or brittle mock choreography.
 
@@ -57,11 +57,28 @@ The fixture records fake persistence success immediately when the update/insert 
 Alternative: infer persistence from Updated/Skipped events. Rejected because it cannot detect an incorrect disposition-before-write order or preserve the distinction between a durable effect and a subsequently broken reporter.
 
 ### Use boundary tables for cancellation and failures
-Cancellation rows cover before/during count, snapshot loading, batch retrieval, resolution, airport lookup, during update/skipped persistence, after successful persistence, after committed no-city Skipped or handled Failed decisions, and between batches/during delay. Each row states whether eligibility exists, which effects/counts survive, and whether another batch may begin. A separate foreign-OCE row keeps active-token cancellation distinct.
+Cancellation rows cover a token already cancelled when count is called, cancellation during count, snapshot loading, batch retrieval, resolution, airport lookup, update/skipped persistence, after successful persistence, after a reachable committed handled Failed decision, and between batches/during delay. There is no checkpoint before the count call: the pre-cancelled row must prove the fake receives the cancelled token and aborts before/during count, not claim zero count calls. Each row states whether eligibility exists, which effects/counts survive, and whether another batch may begin. A separate foreign-OCE row keeps active-token cancellation distinct.
 
 Failure rows distinguish pass-level count/snapshot/batch/delay failures, handled per-asset source/airport/update/skipped-insert failures, nested resolver reporter failures, critical `OutOfMemoryException` from non-reporter execution layers, and reporter-origin faults. Reporter rows follow the actual API boundaries: combined open/start failure leaves no session; midstream failure breaks the session with no terminal attempt; finish-acceptance failure means a validated result was attempted but `ExecuteAsync` throws and returns none. Healthy-session pass failures return Failed results; every reporter-origin failure, including OOM, propagates its original infrastructure exception.
 
 Alternative: assert only one cancellation and one generic exception. Rejected because it misses the persistence/accounting boundary and the executor’s intentionally different local versus outer catches.
+
+### Make fallback and effect boundaries executable without fabricating a no-city branch
+Administrative resolution always precedes enabled airport lookup. When airport lookup is disabled it has zero calls. After any airport decision, fallback is mandatory and exact: preserve City; otherwise assign State to City; otherwise, for a matched result, assign Country to City. That Country row takes the normal write/Updated path. Because `HasMatch` means Country exists, the logger-only no-city guard remains structurally unreachable after fallback; no test may fabricate a skipped insert, Skipped disposition, or warning at that guard.
+
+The causal/effect model is:
+
+| Reachable case | Required causal sequence | Effect/accounting state |
+|---|---|---|
+| existing City | admin → optional airport decision → preserve City → write commits → Updated accepted | `EffectCommitted/DispositionAccepted(Updated)` |
+| absent City, present State | admin → optional airport decision → State assigned to City → write commits → Updated accepted | `EffectCommitted/DispositionAccepted(Updated)` |
+| absent City and State, matched Country | admin → optional airport decision → Country assigned to City → write commits → Updated accepted | `EffectCommitted/DispositionAccepted(Updated)`; zero skipped insert/Skipped/warning |
+| no country/admin match | warning accepted → skipped insert commits → Skipped accepted | `EffectCommitted/DispositionAccepted(Skipped)` |
+| handled per-asset failure | Error accepted → Failed accepted | `NoEffect/DispositionAccepted(Failed)` unless an earlier independent effect already committed |
+| cancellation after committed handled failure, before Failed acceptance | committed Failed decision → cancellation → non-cancelled Failed acceptance → Cancelled finish | no persistence is invented; Failed count is retained |
+| logger-only no-city guard | structural `WithFallbackCity` proof only | unreachable; no executable persistence/disposition row |
+
+For parallel batches, histories carry asset identity. Each asset independently satisfies `batch(a) < admin(a) < airport?(a) < fallback(a) < effect-or-decision(a) < disposition(a)`. Tests compare the complete asset/effect/disposition identity sets and these per-asset edges. They must not use a global FIFO pending-disposition queue or assert accidental order between distinct assets.
 
 ### Reassert invariants through produced values, not constructor tests
 Every healthy scenario uses a common terminal assertion for exact request identity, fixed zero-offset UTC timestamps, `EndedAtUtc >= StartedAtUtc`, `Processed = Updated + Skipped + Failed`, outcome/detail rules, exactly one accepted finish, and equality between returned and reported terminal results. Scenario-specific assertions cover eligibility divergence and partial counts. This consumes block 7 without repeating its invalid-construction matrix.
