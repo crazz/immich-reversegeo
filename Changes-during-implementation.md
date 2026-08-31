@@ -763,4 +763,7 @@
 - Focused/prerequisite/dedicated test invocations: **12**. Canonical full-suite invocations: **6**. Subagent wait ceilings: **2 at 600 seconds each (20m total)**. No nested delegation or production-versus-test partial handoff occurred.
 - Blocker-analysis time: **0**; no condition reached the three-attempt blocker threshold. All audit/review findings were attributable implementation/proof defects.
 - Catchability: the initial matrix/preflight should have rejected broad OCE suppression, wrapper/meta evidence, incomplete UTC/config/log/zero-work/dependency proofs, the full-config schedule dependency, and duplicated external-gate knowledge before first completion.
-- Implementation CI, archive completion, and archive CI remain pending.
+- Implementation commit: `1792bdc0b7abbeef463b332834bed3b81a3f7b52` (`refactor: separate schedule orchestration`). Implementation CI run `33343188985`, job `99342403719`, succeeded in **2m 18s**.
+- Delta sync created `openspec/specs/processing-schedule-orchestration/spec.md` with canonical `## Requirements`; `openspec validate --specs` passed **12/12**.
+- Archived without an extra confirmation prompt under the user's standing authorization at `openspec/changes/archive/2026-08-31-12-separate-schedule-calculation-from-execution/`. Readiness was complete with 29/29 tasks and zero unchecked items. Archive move/validation UTC: **2026-08-31T00:02:14Z**. Archive commit preparation UTC: **2026-08-31T00:03:25Z**.
+- Archive commit, archive CI, and final recorded verification remain pending.
