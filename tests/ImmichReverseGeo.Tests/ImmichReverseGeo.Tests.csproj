@@ -25,6 +25,7 @@
     <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\iso3166.json" Link="data/iso3166.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\defaults\city-resolver-profiles.json" Link="data\city-resolver-profiles.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="change12-verification-evidence.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="WorkerProtocol\Compatibility\Fixtures\v1\**\*" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="processing-run-executor-contracts.json" LogicalName="ImmichReverseGeo.Tests.processing-run-executor-contracts.json" />
   </ItemGroup>
 

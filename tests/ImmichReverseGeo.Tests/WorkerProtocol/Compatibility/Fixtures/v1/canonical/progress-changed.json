@@ -1,0 +1,1 @@
+{"protocol":"immich-reversegeo.worker","version":1,"direction":"worker-to-controller","category":"progress","type":"progress-changed","sequence":4,"timestampUtc":"2026-08-29T12:00:02.0000000Z","runId":"01234567-89ab-cdef-0123-456789abcdef","payload":{"processedCount":3,"updatedCount":1,"skippedCount":1,"failedCount":1}}
