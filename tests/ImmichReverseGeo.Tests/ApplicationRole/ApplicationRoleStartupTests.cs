@@ -1,0 +1,115 @@
+using System.IO;
+using ImmichReverseGeo.Web.ApplicationRole;
+using PublicRole = ImmichReverseGeo.Core.ApplicationRole.PublicApplicationRole;
+
+namespace ImmichReverseGeo.Tests.ApplicationRole;
+
+[TestClass]
+public sealed class ApplicationRoleStartupTests
+{
+    [TestMethod]
+    public void DefaultOperation_InvalidSelection_WritesSafeDiagnosticSetsExitTwoOnceAndDoesNotEnterWebContinuation()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+
+        ApplicationRoleStartup.Begin(
+            ["--internal-worker=credential-4912"],
+            errorWriter,
+            ThrowIfWebContinuationIsReached,
+            exitCodes.Add);
+
+        CollectionAssert.AreEqual(new[] { 2 }, exitCodes);
+        Assert.AreEqual(
+            $"Application role selection failed: invalid-internal-worker-syntax. Supported private syntax: --internal-worker.{Environment.NewLine}",
+            errorWriter.ToString());
+    }
+
+    [TestMethod]
+    public void DefaultOperation_ExactInternalWorker_DoesNotEnterWebContinuationOrSetExitCode()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+
+        ApplicationRoleStartup.Begin(
+            ["--internal-worker"],
+            errorWriter,
+            ThrowIfWebContinuationIsReached,
+            exitCodes.Add);
+
+        CollectionAssert.AreEqual(Array.Empty<int>(), exitCodes);
+        Assert.AreEqual(string.Empty, errorWriter.ToString());
+    }
+
+    [TestMethod]
+    public void TypedCandidateOperation_RunOnce_DoesNotEnterWebContinuationOrSetExitCode()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+
+        ApplicationRoleStartup.Begin(
+            [],
+            PublicRole.RunOnce,
+            errorWriter,
+            ThrowIfWebContinuationIsReached,
+            exitCodes.Add);
+
+        CollectionAssert.AreEqual(Array.Empty<int>(), exitCodes);
+        Assert.AreEqual(string.Empty, errorWriter.ToString());
+    }
+
+    [TestMethod]
+    public void DefaultOperation_NoArguments_InvokesWebContinuationOnceWithEmptyArgumentsAndNoExitCode()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+        var invocationCount = 0;
+        string[]? receivedArguments = null;
+
+        ApplicationRoleStartup.Begin(
+            [],
+            errorWriter,
+            arguments =>
+            {
+                invocationCount++;
+                receivedArguments = arguments.ToArray();
+            },
+            exitCodes.Add);
+
+        Assert.AreEqual(1, invocationCount);
+        CollectionAssert.AreEqual(Array.Empty<string>(), receivedArguments);
+        CollectionAssert.AreEqual(Array.Empty<int>(), exitCodes);
+        Assert.AreEqual(string.Empty, errorWriter.ToString());
+    }
+
+    [TestMethod]
+    public void DefaultOperation_OrdinaryArguments_InvokesWebContinuationOnceUnchangedInOrderAndNoExitCode()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+        var invocationCount = 0;
+        string[]? receivedArguments = null;
+
+        ApplicationRoleStartup.Begin(
+            ["--urls", "http://127.0.0.1:5122", "--help", "--urls", "http://127.0.0.1:5123"],
+            errorWriter,
+            arguments =>
+            {
+                invocationCount++;
+                receivedArguments = arguments.ToArray();
+            },
+            exitCodes.Add);
+
+        Assert.AreEqual(1, invocationCount);
+        CollectionAssert.AreEqual(
+            new[] { "--urls", "http://127.0.0.1:5122", "--help", "--urls", "http://127.0.0.1:5123" },
+            receivedArguments);
+        CollectionAssert.AreEqual(Array.Empty<int>(), exitCodes);
+        Assert.AreEqual(string.Empty, errorWriter.ToString());
+    }
+
+    private static void ThrowIfWebContinuationIsReached(IReadOnlyList<string> arguments)
+    {
+        throw new AssertFailedException($"The Web continuation must not be reached: {string.Join(",", arguments)}");
+    }
+}
