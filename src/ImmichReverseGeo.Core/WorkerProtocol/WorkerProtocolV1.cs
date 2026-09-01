@@ -8,6 +8,11 @@ public static class WorkerProtocolV1
     public const string Protocol = "immich-reversegeo.worker";
     public const int Version = 1;
     public const string Direction = "worker-to-controller";
+    public const string ControllerToWorkerDirection = "controller-to-worker";
+    public const string RequestCategory = "request";
+    public const string ControlCategory = "control";
+    public const string ExecuteType = "execute";
+    public const string CancelType = "cancel";
     public const int MaxMessageBytes = 1_048_576;
 
     public const string LifecycleCategory = "lifecycle";

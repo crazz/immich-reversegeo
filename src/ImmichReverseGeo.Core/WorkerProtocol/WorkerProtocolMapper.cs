@@ -66,6 +66,25 @@ internal static class WorkerProtocolConversions
         _ => throw new ArgumentOutOfRangeException(nameof(level))
     };
 
-    public static bool IsTrigger(string value) => value is "manual" or "scheduled" or "run-once";
+    public static bool IsTrigger(string value) => TryTrigger(value, out _);
+
+    public static bool TryTrigger(string value, out ProcessingRunTrigger trigger)
+    {
+        switch (value)
+        {
+            case "manual":
+                trigger = ProcessingRunTrigger.Manual;
+                return true;
+            case "scheduled":
+                trigger = ProcessingRunTrigger.Scheduled;
+                return true;
+            case "run-once":
+                trigger = ProcessingRunTrigger.RunOnce;
+                return true;
+            default:
+                trigger = default;
+                return false;
+        }
+    }
     public static bool IsLogLevel(string value) => value is "trace" or "information" or "warning" or "error";
 }

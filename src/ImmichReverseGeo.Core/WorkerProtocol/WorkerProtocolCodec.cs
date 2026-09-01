@@ -4,6 +4,7 @@ using System.Collections.Generic;
 using System.Globalization;
 using System.Text;
 using System.Text.Json;
+using ImmichReverseGeo.Core.Models;
 
 namespace ImmichReverseGeo.Core.WorkerProtocol;
 
@@ -48,33 +49,66 @@ public static class WorkerProtocolCodec
         return message;
     }
 
-    public static WorkerProtocolParseResult Parse(ReadOnlySpan<byte> frame)
+    public static byte[] SerializeControllerInput(WorkerProtocolControllerMessage message)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        var buffer = new ArrayBufferWriter<byte>();
+        using (var writer = new Utf8JsonWriter(buffer))
+        {
+            writer.WriteStartObject();
+            writer.WriteString("protocol", WorkerProtocolV1.Protocol);
+            writer.WriteNumber("version", WorkerProtocolV1.Version);
+            writer.WriteString("direction", WorkerProtocolV1.ControllerToWorkerDirection);
+            writer.WriteString("category", message.Category);
+            writer.WriteString("type", message.Type);
+            writer.WriteNumber("sequence", message.Sequence);
+            writer.WriteString("timestampUtc", WorkerProtocolV1.FormatTimestamp(message.TimestampUtc));
+            writer.WriteString("runId", message.RunId.ToString("D"));
+            writer.WritePropertyName("payload");
+            WriteControllerPayload(writer, message.Payload);
+            writer.WriteEndObject();
+        }
+
+        var serialized = buffer.WrittenSpan.ToArray();
+        if (serialized.Length > WorkerProtocolV1.MaxMessageBytes)
+        {
+            throw new ArgumentException("The serialized protocol message exceeds the configured byte limit.", nameof(message));
+        }
+
+        return serialized;
+    }
+
+    public static WorkerProtocolParseResult Parse(ReadOnlySpan<byte> frame) => ParseFrame(frame, ParseEnvelope, Fail);
+
+    public static WorkerProtocolControllerParseResult ParseControllerInput(ReadOnlySpan<byte> frame) => ParseFrame(frame, ParseControllerEnvelope, ControllerFail);
+
+    private static T ParseFrame<T>(ReadOnlySpan<byte> frame, Func<JsonElement, T> parseEnvelope, Func<WorkerProtocolFailureCode, string, T> fail)
     {
         if (!TryGetContent(frame, out var content, out var framingFailure))
         {
-            return framingFailure!;
+            return fail(framingFailure!.Code, framingFailure.Diagnostic);
         }
 
         if (content.Length > WorkerProtocolV1.MaxMessageBytes)
         {
-            return Fail(WorkerProtocolFailureCode.MessageTooLarge, "Message exceeds the configured byte limit.");
+            return fail(WorkerProtocolFailureCode.MessageTooLarge, "Message exceeds the configured byte limit.");
         }
 
         if (content.Length == 0)
         {
-            return Fail(WorkerProtocolFailureCode.InvalidFraming, "Message content must not be empty.");
+            return fail(WorkerProtocolFailureCode.InvalidFraming, "Message content must not be empty.");
         }
 
         if (content.Length >= 3 && content[0] == 0xef && content[1] == 0xbb && content[2] == 0xbf)
         {
-            return Fail(WorkerProtocolFailureCode.InvalidEncoding, "UTF-8 byte-order marks are not permitted.");
+            return fail(WorkerProtocolFailureCode.InvalidEncoding, "UTF-8 byte-order marks are not permitted.");
         }
 
         foreach (var value in content)
         {
             if (value is (byte)'\r' or (byte)'\n')
             {
-                return Fail(WorkerProtocolFailureCode.InvalidFraming, "Message content must be one line.");
+                return fail(WorkerProtocolFailureCode.InvalidFraming, "Message content must be one line.");
             }
         }
 
@@ -84,7 +118,7 @@ public static class WorkerProtocolCodec
         }
         catch (DecoderFallbackException)
         {
-            return Fail(WorkerProtocolFailureCode.InvalidEncoding, "Message is not valid UTF-8.");
+            return fail(WorkerProtocolFailureCode.InvalidEncoding, "Message is not valid UTF-8.");
         }
 
         try
@@ -92,19 +126,19 @@ public static class WorkerProtocolCodec
             using var document = JsonDocument.Parse(content.ToArray());
             if (document.RootElement.ValueKind != JsonValueKind.Object)
             {
-                return Fail(WorkerProtocolFailureCode.InvalidEnvelope, "The envelope must be a JSON object.");
+                return fail(WorkerProtocolFailureCode.InvalidEnvelope, "The envelope must be a JSON object.");
             }
 
             if (HasDuplicateProperties(document.RootElement))
             {
-                return Fail(WorkerProtocolFailureCode.InvalidEnvelope, "Duplicate JSON properties are not permitted.");
+                return fail(WorkerProtocolFailureCode.InvalidEnvelope, "Duplicate JSON properties are not permitted.");
             }
 
-            return ParseEnvelope(document.RootElement);
+            return parseEnvelope(document.RootElement);
         }
         catch (JsonException)
         {
-            return Fail(WorkerProtocolFailureCode.MalformedJson, "Message is not valid JSON.");
+            return fail(WorkerProtocolFailureCode.MalformedJson, "Message is not valid JSON.");
         }
     }
 
@@ -175,6 +209,74 @@ public static class WorkerProtocolCodec
         }
     }
 
+    private static WorkerProtocolControllerParseResult ParseControllerEnvelope(JsonElement envelope)
+    {
+        if (!TryString(envelope, "protocol", out var protocol))
+        {
+            return ControllerFail(WorkerProtocolFailureCode.InvalidEnvelope, "Envelope protocol is required.");
+        }
+
+        if (protocol != WorkerProtocolV1.Protocol)
+        {
+            return ControllerFail(WorkerProtocolFailureCode.UnsupportedProtocol, "Protocol identifier is not supported.");
+        }
+
+        if (!TryInteger(envelope, "version", out var version))
+        {
+            return ControllerFail(WorkerProtocolFailureCode.InvalidEnvelope, "Envelope version is required.");
+        }
+
+        if (version != WorkerProtocolV1.Version)
+        {
+            return ControllerFail(WorkerProtocolFailureCode.UnsupportedVersion, "Protocol version is not supported.");
+        }
+
+        if (!TryString(envelope, "direction", out var direction) || direction != WorkerProtocolV1.ControllerToWorkerDirection)
+        {
+            return ControllerFail(WorkerProtocolFailureCode.UnsupportedType, "Direction is not supported.");
+        }
+
+        if (!TryString(envelope, "category", out var category) || !TryString(envelope, "type", out var type) || !WorkerProtocolControllerMessage.IsKnown(category, type))
+        {
+            return ControllerFail(WorkerProtocolFailureCode.UnsupportedType, "Category and type are not supported.");
+        }
+
+        if (!TryInteger(envelope, "sequence", out var sequence) || sequence < 1)
+        {
+            return ControllerFail(WorkerProtocolFailureCode.InvalidEnvelope, "Sequence must be a positive canonical integer.");
+        }
+
+        if (!TryTimestamp(envelope, "timestampUtc", out var timestampUtc))
+        {
+            return ControllerFail(WorkerProtocolFailureCode.InvalidEnvelope, "Timestamp must be canonical UTC text.");
+        }
+
+        if (!envelope.TryGetProperty("runId", out var runIdElement) || !TryGuidValue(runIdElement, out var runId))
+        {
+            return ControllerFail(WorkerProtocolFailureCode.InvalidEnvelope, "Run ID must be a non-empty canonical GUID.");
+        }
+
+        if (!envelope.TryGetProperty("payload", out var payloadElement) || payloadElement.ValueKind != JsonValueKind.Object)
+        {
+            return ControllerFail(WorkerProtocolFailureCode.InvalidEnvelope, "Payload must be an object.");
+        }
+
+        try
+        {
+            WorkerProtocolControllerPayload payload = type switch
+            {
+                WorkerProtocolV1.ExecuteType when TryString(payloadElement, "trigger", out var trigger) && WorkerProtocolConversions.TryTrigger(trigger, out var processingTrigger) => new ExecuteRequestPayload(new ProcessingRunRequest(runId, processingTrigger)),
+                WorkerProtocolV1.CancelType => new CancelControlPayload(),
+                _ => throw new ArgumentException("The payload is missing a required property.")
+            };
+            return WorkerProtocolControllerParseResult.Success(new WorkerProtocolControllerMessage(category, type, sequence, timestampUtc, runId, payload));
+        }
+        catch (ArgumentException)
+        {
+            return ControllerFail(WorkerProtocolFailureCode.InvalidPayload, "Payload values violate a protocol invariant.");
+        }
+    }
+
     private static WorkerProtocolPayload ParsePayload(string type, JsonElement payload)
     {
         return type switch
@@ -191,6 +293,23 @@ public static class WorkerProtocolCodec
             WorkerProtocolV1.FailedType when TryTerminalValues(payload, out var failed) && failed.FailureMessage is not null => new FailedPayload(failed.Trigger, failed.Started, failed.Ended, failed.Processed, failed.Updated, failed.Skipped, failed.Failed, failed.FailureMessage),
             _ => throw new ArgumentException("The payload is missing a required property.")
         };
+    }
+
+    private static void WriteControllerPayload(Utf8JsonWriter writer, WorkerProtocolControllerPayload payload)
+    {
+        writer.WriteStartObject();
+        switch (payload)
+        {
+            case ExecuteRequestPayload execute:
+                writer.WriteString("trigger", WorkerProtocolConversions.Trigger(execute.Request.Trigger));
+                break;
+            case CancelControlPayload:
+                break;
+            default:
+                throw new ArgumentException("The payload is not supported by protocol v1.", nameof(payload));
+        }
+
+        writer.WriteEndObject();
     }
 
     private static void WritePayload(Utf8JsonWriter writer, WorkerProtocolPayload payload)
@@ -250,7 +369,7 @@ public static class WorkerProtocolCodec
         writer.WriteNumber("failedCount", failed);
     }
 
-    private static bool TryGetContent(ReadOnlySpan<byte> frame, out ReadOnlySpan<byte> content, out WorkerProtocolParseResult? failure)
+    private static bool TryGetContent(ReadOnlySpan<byte> frame, out ReadOnlySpan<byte> content, out WorkerProtocolFailure? failure)
     {
         content = frame;
         failure = null;
@@ -264,7 +383,7 @@ public static class WorkerProtocolCodec
         }
         else if (content.Length > 0 && content[^1] == (byte)'\r')
         {
-            failure = Fail(WorkerProtocolFailureCode.InvalidFraming, "A bare carriage return is not a valid delimiter.");
+            failure = new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidFraming, "A bare carriage return is not a valid delimiter.");
             return false;
         }
 
@@ -376,6 +495,24 @@ public static class WorkerProtocolCodec
         return true;
     }
 
+    private static bool TryGuidValue(JsonElement element, out Guid value)
+    {
+        value = Guid.Empty;
+        return element.ValueKind == JsonValueKind.String && TryCanonicalGuid(element.GetString(), out value);
+    }
+
+    private static bool TryProcessingRunTrigger(string value, out ProcessingRunTrigger trigger)
+    {
+        trigger = value switch
+        {
+            "manual" => ProcessingRunTrigger.Manual,
+            "scheduled" => ProcessingRunTrigger.Scheduled,
+            "run-once" => ProcessingRunTrigger.RunOnce,
+            _ => default
+        };
+        return WorkerProtocolConversions.IsTrigger(value);
+    }
+
     private static bool TryGuid(JsonElement element, string name, out Guid value)
     {
         value = Guid.Empty;
@@ -420,4 +557,5 @@ public static class WorkerProtocolCodec
     }
 
     private static WorkerProtocolParseResult Fail(WorkerProtocolFailureCode code, string diagnostic) => WorkerProtocolParseResult.Failed(code, diagnostic);
+    private static WorkerProtocolControllerParseResult ControllerFail(WorkerProtocolFailureCode code, string diagnostic) => WorkerProtocolControllerParseResult.Failed(code, diagnostic);
 }
