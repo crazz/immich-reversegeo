@@ -42,6 +42,65 @@ public sealed class ApplicationRoleStartupTests
     }
 
     [TestMethod]
+    public void DualContinuationOperation_InvalidSelection_InvokesNeitherContinuation()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+
+        ApplicationRoleStartup.Begin(
+            ["--internal-worker=invalid"],
+            errorWriter,
+            ThrowIfWebContinuationIsReached,
+            ThrowIfWebContinuationIsReached,
+            exitCodes.Add);
+
+        CollectionAssert.AreEqual(new[] { 2 }, exitCodes, "dual-invalid-exit-code");
+    }
+
+    [TestMethod]
+    public void DualContinuationOperation_TypedRunOnce_InvokesNeitherContinuation()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+
+        ApplicationRoleStartup.Begin(
+            [],
+            PublicRole.RunOnce,
+            errorWriter,
+            ThrowIfWebContinuationIsReached,
+            ThrowIfWebContinuationIsReached,
+            exitCodes.Add);
+
+        CollectionAssert.AreEqual(Array.Empty<int>(), exitCodes, "dual-runonce-exit-code");
+        Assert.AreEqual(string.Empty, errorWriter.ToString(), "dual-runonce-diagnostic");
+    }
+
+    [TestMethod]
+    public void InternalWorkerOperation_ExactSelector_InvokesWorkerOnceWithNoForwardedArguments()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+        var workerCalls = 0;
+        IReadOnlyList<string>? workerArguments = null;
+
+        ApplicationRoleStartup.Begin(
+            ["--internal-worker"],
+            errorWriter,
+            ThrowIfWebContinuationIsReached,
+            arguments =>
+            {
+                workerCalls++;
+                workerArguments = arguments;
+            },
+            exitCodes.Add);
+
+        Assert.AreEqual(1, workerCalls, "internal-worker-call-count");
+        CollectionAssert.AreEqual(Array.Empty<string>(), workerArguments?.ToArray(), "internal-worker-forwarded-arguments");
+        CollectionAssert.AreEqual(Array.Empty<int>(), exitCodes, "internal-worker-exit-codes");
+        Assert.AreEqual(string.Empty, errorWriter.ToString(), "internal-worker-diagnostic");
+    }
+
+    [TestMethod]
     public void TypedCandidateOperation_RunOnce_DoesNotEnterWebContinuationOrSetExitCode()
     {
         using var errorWriter = new StringWriter();
@@ -74,6 +133,7 @@ public sealed class ApplicationRoleStartupTests
                 invocationCount++;
                 receivedArguments = arguments.ToArray();
             },
+            ThrowIfWebContinuationIsReached,
             exitCodes.Add);
 
         Assert.AreEqual(1, invocationCount);
@@ -98,6 +158,7 @@ public sealed class ApplicationRoleStartupTests
                 invocationCount++;
                 receivedArguments = arguments.ToArray();
             },
+            ThrowIfWebContinuationIsReached,
             exitCodes.Add);
 
         Assert.AreEqual(1, invocationCount);

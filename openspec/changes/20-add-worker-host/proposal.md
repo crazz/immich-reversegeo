@@ -8,7 +8,8 @@ The internal worker role can now be selected and composed without Web dependenci
 - Add one hosted worker-lifecycle service that creates one execution scope, completes required asynchronous worker startup, crosses a readiness hook, waits for one execute-request lease, invokes the finalized processing executor once, coordinates terminal completion, and stops the host.
 - Link accepted-request cancellation with Generic Host shutdown so valid control cancellation, SIGTERM/SIGINT-driven shutdown, and explicit host stop cooperatively cancel the same execution.
 - Define pre-request EOF/startup/request-acquisition failure, accepted-request completion/failure, one-request-only behavior, resource-disposal ordering, and stdout/stderr ownership boundaries without implementing stdin framing, NDJSON emission, or process exit-code mapping.
-- Add deterministic host tests using in-memory lifecycle, request, executor, terminal, and disposable collaborators; bind no ports and use no database, geodata, scheduler, UI, or real console pipes.
+- Supply a stable fail-closed transitional production boundary: until blocks 21 and 22 replace the missing reporter/readiness and request collaborators, the selected worker host starts and stops without publishing readiness, accepting a request, or registering a no-op worker reporter. The safe `worker-transport-not-configured` pre-request outcome remains transport-neutral for block 23 to map later.
+- Add deterministic host tests using explicit in-memory lifecycle, request, reporter, terminal, and disposable collaborators; bind no ports and use no database, geodata, scheduler, UI, or real console pipes.
 
 ## Capabilities
 

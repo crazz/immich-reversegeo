@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using Microsoft.Data.Sqlite;
@@ -25,12 +26,18 @@ public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, st
     // callers to ClearAllPools() before deleting the file on Windows (global side-effect).
     private string ConnectionString => $"Data Source={_dbPath};Pooling=false";
 
-    public async Task InitialiseAsync()
+    public Task InitialiseAsync()
     {
+        return InitialiseAsync(CancellationToken.None);
+    }
+
+    public async Task InitialiseAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
         logger.LogInformation("Initialising skipped assets database at {Path}", _dbPath);
         Directory.CreateDirectory(Path.GetDirectoryName(_dbPath)!);
         await using var conn = new SqliteConnection(ConnectionString);
-        await conn.OpenAsync();
+        await conn.OpenAsync(cancellationToken);
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = """
             CREATE TABLE IF NOT EXISTS skipped_assets (
@@ -38,7 +45,7 @@ public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, st
                 skipped_at TEXT NOT NULL
             )
             """;
-        await cmd.ExecuteNonQueryAsync();
+        await cmd.ExecuteNonQueryAsync(cancellationToken);
     }
 
     public async Task AddAsync(Guid assetId)

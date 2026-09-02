@@ -1,5 +1,7 @@
 using System;
+using ImmichReverseGeo.Web.WorkerHost;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
 
 namespace ImmichReverseGeo.Web.Composition;
 
@@ -17,6 +19,20 @@ internal static class InternalWorkerServiceCollectionExtensions
 
         services.AddSharedComposition(context);
         services.AddReusableHeavyComposition();
+        return services;
+    }
+
+    internal static IServiceCollection AddInternalWorkerHostServices(this IServiceCollection services)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddSingleton<SkippedAssetsWorkerStartupInitializer>();
+        services.AddSingleton<IWorkerStartupInitializer>(sp => sp.GetRequiredService<SkippedAssetsWorkerStartupInitializer>());
+        services.AddSingleton<WorkerTransportNotConfigured>();
+        services.AddSingleton<IWorkerTransportAvailability>(sp => sp.GetRequiredService<WorkerTransportNotConfigured>());
+        services.AddSingleton<TransitionalWorkerPreRequestFinality>();
+        services.AddSingleton<IWorkerPreRequestFinality>(sp => sp.GetRequiredService<TransitionalWorkerPreRequestFinality>());
+        services.AddHostedService<InternalWorkerLifecycleService>();
         return services;
     }
 }

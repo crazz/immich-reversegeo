@@ -14,7 +14,17 @@ public static class ApplicationRoleStartup
         Action<IReadOnlyList<string>> webContinuation,
         Action<int> exitCodeSink)
     {
-        Begin(arguments, PublicApplicationRole.Web, errorWriter, webContinuation, exitCodeSink);
+        Begin(arguments, PublicApplicationRole.Web, errorWriter, webContinuation, _ => { }, exitCodeSink);
+    }
+
+    public static void Begin(
+        IReadOnlyList<string> arguments,
+        TextWriter errorWriter,
+        Action<IReadOnlyList<string>> webContinuation,
+        Action<IReadOnlyList<string>> internalWorkerContinuation,
+        Action<int> exitCodeSink)
+    {
+        Begin(arguments, PublicApplicationRole.Web, errorWriter, webContinuation, internalWorkerContinuation, exitCodeSink);
     }
 
     public static void Begin(
@@ -22,6 +32,17 @@ public static class ApplicationRoleStartup
         PublicApplicationRole publicRoleCandidate,
         TextWriter errorWriter,
         Action<IReadOnlyList<string>> webContinuation,
+        Action<int> exitCodeSink)
+    {
+        Begin(arguments, publicRoleCandidate, errorWriter, webContinuation, _ => { }, exitCodeSink);
+    }
+
+    public static void Begin(
+        IReadOnlyList<string> arguments,
+        PublicApplicationRole publicRoleCandidate,
+        TextWriter errorWriter,
+        Action<IReadOnlyList<string>> webContinuation,
+        Action<IReadOnlyList<string>> internalWorkerContinuation,
         Action<int> exitCodeSink)
     {
         var selection = ApplicationRoleSelector.Select(arguments, publicRoleCandidate);
@@ -43,6 +64,7 @@ public static class ApplicationRoleStartup
 
         if (ReferenceEquals(success.Role, Role.InternalWorker))
         {
+            internalWorkerContinuation(success.Arguments);
             return;
         }
 
