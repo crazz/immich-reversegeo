@@ -1,7 +1,10 @@
 using System;
+using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Web.WorkerHost;
+using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Composition;
 
@@ -25,6 +28,15 @@ internal static class InternalWorkerServiceCollectionExtensions
     internal static IServiceCollection AddInternalWorkerHostServices(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
+        return services.AddInternalWorkerHostServices(new WorkerNdjsonStandardOutputStreamFactory());
+    }
+
+    internal static IServiceCollection AddInternalWorkerHostServices(
+        this IServiceCollection services,
+        IWorkerNdjsonOutputStreamFactory stdoutFactory)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(stdoutFactory);
 
         services.AddSingleton<SkippedAssetsWorkerStartupInitializer>();
         services.AddSingleton<IWorkerStartupInitializer>(sp => sp.GetRequiredService<SkippedAssetsWorkerStartupInitializer>());
@@ -32,6 +44,15 @@ internal static class InternalWorkerServiceCollectionExtensions
         services.AddSingleton<IWorkerTransportAvailability>(sp => sp.GetRequiredService<WorkerTransportNotConfigured>());
         services.AddSingleton<TransitionalWorkerPreRequestFinality>();
         services.AddSingleton<IWorkerPreRequestFinality>(sp => sp.GetRequiredService<TransitionalWorkerPreRequestFinality>());
+        services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(stdoutFactory);
+        services.AddSingleton<WorkerNdjsonEmitter>(sp => WorkerNdjsonEmitter.CreateProduction(
+            sp.GetRequiredService<IWorkerNdjsonOutputStreamFactory>(),
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetRequiredService<ILogger<WorkerNdjsonEmitter>>()));
+        services.AddSingleton<IWorkerReadinessPublisher>(sp => sp.GetRequiredService<WorkerNdjsonEmitter>());
+        services.AddSingleton<WorkerNdjsonProcessingEventReporter>(sp => new WorkerNdjsonProcessingEventReporter(
+            sp.GetRequiredService<WorkerNdjsonEmitter>()));
+        services.AddSingleton<IProcessingEventReporter>(sp => sp.GetRequiredService<WorkerNdjsonProcessingEventReporter>());
         services.AddHostedService<InternalWorkerLifecycleService>();
         return services;
     }

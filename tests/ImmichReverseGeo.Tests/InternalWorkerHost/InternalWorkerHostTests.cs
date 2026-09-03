@@ -1,8 +1,10 @@
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.WorkerHost;
+using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging.Abstractions;
 using WorkerHostFactory = ImmichReverseGeo.Web.WorkerHost.InternalWorkerHost;
 
 namespace ImmichReverseGeo.Tests.InternalWorkerHost;
@@ -60,6 +62,11 @@ public sealed class InternalWorkerHostTests
     [TestMethod]
     public void CreateBuilder_RegistersOneSingletonOwnerAndAliasForWorkerComposition()
     {
+        var registrationFactory = new CountingOutputStreamFactory();
+        var registrationServices = new ServiceCollection();
+        registrationServices.AddInternalWorkerHostServices(registrationFactory);
+        Assert.AreEqual(0, registrationFactory.OpenCount, "worker-ndjson-registration-lazy");
+
         var fixtureRoot = CreateFixtureRoot();
         try
         {
@@ -74,9 +81,95 @@ public sealed class InternalWorkerHostTests
             AssertDescriptor(descriptors, typeof(IWorkerTransportAvailability), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(TransitionalWorkerPreRequestFinality), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(IWorkerPreRequestFinality), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(WorkerNdjsonEmitter), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(IWorkerReadinessPublisher), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(WorkerNdjsonProcessingEventReporter), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(ImmichReverseGeo.Core.Processing.IProcessingEventReporter), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(IHostedService), ServiceLifetime.Singleton);
         }
         finally { DeleteFixtureRoot(fixtureRoot); }
+    }
+
+    [TestMethod]
+    public async Task WorkerNdjsonRegistration_IsLazyAndAliasesTheExactSingletonEmitterAndReporter()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        try
+        {
+            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            AssertDescriptor(builder.Services, typeof(IWorkerNdjsonOutputStreamFactory), ServiceLifetime.Singleton);
+            AssertDescriptor(builder.Services, typeof(WorkerNdjsonEmitter), ServiceLifetime.Singleton);
+            AssertDescriptor(builder.Services, typeof(IWorkerReadinessPublisher), ServiceLifetime.Singleton);
+            AssertDescriptor(builder.Services, typeof(WorkerNdjsonProcessingEventReporter), ServiceLifetime.Singleton);
+            AssertDescriptor(builder.Services, typeof(ImmichReverseGeo.Core.Processing.IProcessingEventReporter), ServiceLifetime.Singleton);
+            var stdoutFactory = new CountingOutputStreamFactory();
+            builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(stdoutFactory);
+            var host = builder.Build();
+
+            Assert.AreEqual(0, stdoutFactory.OpenCount, "worker-ndjson-provider-build-lazy");
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, stdoutFactory.OpenCount, "worker-ndjson-unavailable-startup-lazy");
+
+            var reporter = host.Services.GetRequiredService<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
+            Assert.AreEqual(1, stdoutFactory.OpenCount, "worker-ndjson-reporter-resolution-opens-owner-once");
+            Assert.AreSame(reporter, host.Services.GetRequiredService<WorkerNdjsonProcessingEventReporter>(), "worker-ndjson-reporter-alias-identity");
+
+            var emitter = host.Services.GetRequiredService<WorkerNdjsonEmitter>();
+            Assert.AreEqual(1, stdoutFactory.OpenCount, "worker-ndjson-concrete-resolution-opens-once");
+            Assert.AreSame(emitter, host.Services.GetRequiredService<IWorkerReadinessPublisher>(), "worker-ndjson-readiness-alias-identity");
+            Assert.AreEqual(1, stdoutFactory.OpenCount, "worker-ndjson-alias-resolution-does-not-reopen");
+            var disposalFailure = Assert.ThrowsExactly<WorkerNdjsonTransportException>(host.Dispose, "worker-ndjson-unfinished-owner-disposal-failure");
+            Assert.AreEqual(WorkerNdjsonFailureStage.Disposal, disposalFailure.Stage, "worker-ndjson-unfinished-owner-disposal-stage");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    public async Task WorkerNdjsonRegistration_StdoutOpenFailureCachesOneSafeBrokenOwner()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        try
+        {
+            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var stdoutFactory = new ThrowingCountingOutputStreamFactory();
+            builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(stdoutFactory);
+            var host = builder.Build();
+
+            Assert.AreEqual(0, stdoutFactory.OpenCount, "worker-ndjson-open-failure-provider-build-lazy");
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, stdoutFactory.OpenCount, "worker-ndjson-open-failure-unavailable-lazy");
+
+            var emitter = host.Services.GetRequiredService<WorkerNdjsonEmitter>();
+            Assert.AreEqual(1, stdoutFactory.OpenCount, "worker-ndjson-open-failure-first-open");
+            Assert.AreSame(emitter, host.Services.GetRequiredService<IWorkerReadinessPublisher>(), "worker-ndjson-open-failure-alias-identity");
+            Assert.AreEqual(1, stdoutFactory.OpenCount, "worker-ndjson-open-failure-alias-no-retry");
+
+            var first = emitter.PublishAsync(CancellationToken.None);
+            var second = host.Services.GetRequiredService<IWorkerReadinessPublisher>().PublishAsync(CancellationToken.None);
+            var firstFailure = await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(async () => await first, "worker-ndjson-open-failure-first-safe");
+            var secondFailure = await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(async () => await second, "worker-ndjson-open-failure-concurrent-safe");
+            var futureFailure = await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(async () => await emitter.PublishAsync(CancellationToken.None), "worker-ndjson-open-failure-future-safe");
+
+            Assert.AreSame(firstFailure, secondFailure, "worker-ndjson-open-failure-concurrent-identity");
+            Assert.AreSame(firstFailure, futureFailure, "worker-ndjson-open-failure-future-identity");
+            Assert.AreEqual("worker-ndjson-output-failed", firstFailure.Message, "worker-ndjson-open-failure-safe-message");
+            Assert.AreEqual(WorkerNdjsonFailureStage.OpenStandardOutput, firstFailure.Stage, "worker-ndjson-open-failure-stage");
+            Assert.IsFalse(firstFailure.Message.Contains("OPEN_SECRET_SENTINEL", StringComparison.Ordinal), "worker-ndjson-open-failure-no-raw-message");
+            Assert.AreEqual(1, stdoutFactory.OpenCount, "worker-ndjson-open-failure-no-later-open");
+            var disposalFailure = Assert.ThrowsExactly<WorkerNdjsonTransportException>(host.Dispose, "worker-ndjson-open-failure-owner-disposal");
+            Assert.AreSame(firstFailure, disposalFailure, "worker-ndjson-open-failure-owner-identity");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
     }
 
     [TestMethod]
@@ -117,7 +210,6 @@ public sealed class InternalWorkerHostTests
                 .Value;
 
             Assert.AreEqual(Microsoft.Extensions.Logging.LogLevel.Trace, consoleOptions.LogToStandardErrorThreshold, "worker-console-stderr-threshold");
-            Assert.IsNull(host.Services.GetService<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(), "worker-stdout-reporter-unregistered");
             Assert.IsNull(host.Services.GetService(typeof(ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolCodec)), "worker-stdout-protocol-codec-unregistered");
             Assert.IsNull(host.Services.GetService(typeof(ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolMapper)), "worker-stdout-protocol-mapper-unregistered");
         }
@@ -193,8 +285,6 @@ public sealed class InternalWorkerHostTests
                 new[] { "initialise", "worker-transport-not-configured" },
                 calls,
                 "worker-transitional-order");
-            Assert.IsNull(host.Services.GetService<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(), "worker-reporter-not-registered");
-            Assert.IsNull(host.Services.GetService<IWorkerReadinessPublisher>(), "worker-readiness-not-registered");
             Assert.IsNull(host.Services.GetService<IInitialProcessingRunAcquirer>(), "worker-acquirer-not-registered");
         }
         finally
@@ -487,6 +577,80 @@ public sealed class InternalWorkerHostTests
 
             CollectionAssert.AreEqual(new[] { "initialise", "ready", "acquire-started" }, calls, "worker-stop-acquire-order");
             Assert.AreEqual(0, finality.Outcomes.Count, "worker-stop-acquire-no-finality");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    public async Task ConfiguredProductionHost_FlushesReadyBeforeAcceptanceAndUsesRegisteredReporterOnce()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var request = CreateRequest();
+        var lease = new AcceptedLease(request);
+        var outputFactory = new CapturingOutputStreamFactory();
+        var clock = new FixedTimeProvider(DateTimeOffset.UnixEpoch);
+        var acquirer = new FlushAwareAcceptedAcquirer(outputFactory.Output, lease);
+        var finality = new RecordingAcceptedFinality();
+        var executor = new RecordingExecutor(async (receivedRequest, receivedReporter, cancellationToken) =>
+        {
+            Assert.AreSame(request, receivedRequest, "worker-production-executor-request-reference");
+            Assert.AreEqual(1, outputFactory.Output.FlushCount, "worker-production-ready-flushed-before-execution");
+            var startedAtUtc = clock.GetUtcNow();
+            var session = await receivedReporter.OpenRunAsync(receivedRequest, startedAtUtc, cancellationToken);
+            var result = new ImmichReverseGeo.Core.Models.ProcessingRunResult(
+                receivedRequest,
+                startedAtUtc,
+                startedAtUtc,
+                0,
+                0,
+                0,
+                0,
+                ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Cancelled,
+                null);
+            await session.FinishAsync(result);
+            return result;
+        });
+
+        try
+        {
+            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            builder.Services.RemoveAll<TimeProvider>();
+            builder.Services.AddSingleton<TimeProvider>(clock);
+            builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(outputFactory);
+            ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer([]));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
+            ReplaceSingleton<IInitialProcessingRunAcquirer>(builder.Services, acquirer);
+            ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, new RecordingPreRequestFinality([]));
+            ReplaceSingleton<IWorkerAcceptedRunFinality>(builder.Services, finality);
+            ReplaceSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(builder.Services, executor);
+            using var host = builder.Build();
+
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            var registeredReporter = host.Services.GetRequiredService<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
+            Assert.AreSame(registeredReporter, host.Services.GetRequiredService<WorkerNdjsonProcessingEventReporter>(), "worker-production-registered-reporter-alias-identity");
+            Assert.AreEqual(1, acquirer.CallCount, "worker-production-one-acquisition");
+            Assert.AreEqual(1, executor.CallCount, "worker-production-one-execution");
+            Assert.AreSame(request, executor.Request, "worker-production-executor-exact-request");
+            Assert.AreSame(registeredReporter, executor.Reporter, "worker-production-executor-registered-reporter");
+            Assert.AreEqual(1, finality.Completed.Count, "worker-production-one-completion-finality");
+            Assert.AreEqual(0, finality.Failures.Count, "worker-production-no-synthetic-failure-finality");
+            Assert.AreEqual(1, lease.SettleCount, "worker-production-one-lease-settle");
+            Assert.AreEqual(1, lease.DisposeCount, "worker-production-one-lease-dispose");
+
+            var frames = System.Text.Encoding.UTF8.GetString(outputFactory.Output.ToArray())
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.AreEqual(3, frames.Length, "worker-production-ready-run-terminal-frame-count");
+            Assert.IsTrue(frames[0].Contains("\"type\":\"ready\"", StringComparison.Ordinal), "worker-production-ready-first");
+            Assert.IsTrue(frames[1].Contains("\"type\":\"run-started\"", StringComparison.Ordinal), "worker-production-run-started-second");
+            Assert.IsTrue(frames[2].Contains("\"category\":\"terminal\"", StringComparison.Ordinal), "worker-production-terminal-last");
+            Assert.AreEqual(1, frames.Count(frame => frame.Contains("\"category\":\"terminal\"", StringComparison.Ordinal)), "worker-production-no-duplicate-synthetic-terminal");
+            Assert.AreEqual(3, outputFactory.Output.FlushCount, "worker-production-one-flush-per-frame");
         }
         finally
         {
@@ -1967,6 +2131,71 @@ public sealed class InternalWorkerHostTests
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
         public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
         public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) => entries.Add((formatter(state, exception), exception));
+    }
+
+    private sealed class FixedTimeProvider(DateTimeOffset utcNow) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow()
+        {
+            return utcNow;
+        }
+    }
+
+    private sealed class FlushAwareAcceptedAcquirer(CapturingOutputStream output, IProcessingRunLease lease) : IInitialProcessingRunAcquirer
+    {
+        public int CallCount { get; private set; }
+
+        public Task<InitialProcessingRunAcquisition> AcquireAsync(CancellationToken cancellationToken)
+        {
+            CallCount++;
+            Assert.AreEqual(1, output.FlushCount, "worker-production-ready-flushed-before-acquisition");
+            return Task.FromResult<InitialProcessingRunAcquisition>(InitialProcessingRunAcquisition.Accept(lease));
+        }
+    }
+
+    private sealed class CapturingOutputStreamFactory : IWorkerNdjsonOutputStreamFactory
+    {
+        public CapturingOutputStream Output { get; } = new();
+
+        public Stream OpenStandardOutput()
+        {
+            return Output;
+        }
+    }
+
+    private sealed class CapturingOutputStream : MemoryStream
+    {
+        private int _flushCount;
+
+        public int FlushCount => _flushCount;
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _flushCount);
+            return Task.CompletedTask;
+        }
+    }
+
+    private sealed class CountingOutputStreamFactory : IWorkerNdjsonOutputStreamFactory
+    {
+        public int OpenCount { get; private set; }
+
+        public Stream OpenStandardOutput()
+        {
+            OpenCount++;
+            return new MemoryStream();
+        }
+    }
+
+    private sealed class ThrowingCountingOutputStreamFactory : IWorkerNdjsonOutputStreamFactory
+    {
+        public int OpenCount { get; private set; }
+
+        public Stream OpenStandardOutput()
+        {
+            OpenCount++;
+            throw new IOException("OPEN_SECRET_SENTINEL");
+        }
     }
 
     private sealed class CapturingLoggerProvider : Microsoft.Extensions.Logging.ILoggerProvider
