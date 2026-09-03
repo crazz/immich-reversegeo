@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.Web.WorkerHost;
 
@@ -26,7 +27,59 @@ internal interface IProcessingRunLease : IAsyncDisposable
 
     CancellationToken CancellationToken { get; }
 
-    ValueTask SettleAsync(CancellationToken cancellationToken);
+    void NotifyExecutionStarting();
+
+    ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken);
+}
+
+internal abstract class WorkerInputPumpFinality
+{
+    private WorkerInputPumpFinality()
+    {
+    }
+
+    internal static WorkerInputPumpFinality ControlsClosed()
+    {
+        return new ControlsClosedFinality();
+    }
+
+    internal static WorkerInputPumpFinality InputFailure(WorkerSafeFailure failure)
+    {
+        ArgumentNullException.ThrowIfNull(failure);
+        return new InputFailureFinality(failure);
+    }
+
+    internal static WorkerInputPumpFinality ReaderFailure()
+    {
+        return new ReaderFailureFinality();
+    }
+
+    internal static WorkerInputPumpFinality ExpectedShutdown()
+    {
+        return new ExpectedShutdownFinality();
+    }
+
+    internal sealed class ControlsClosedFinality : WorkerInputPumpFinality
+    {
+    }
+
+    internal sealed class InputFailureFinality : WorkerInputPumpFinality
+    {
+        internal InputFailureFinality(WorkerSafeFailure failure)
+        {
+            Failure = failure;
+        }
+
+        internal WorkerSafeFailure Failure { get; }
+    }
+
+    internal sealed class ReaderFailureFinality : WorkerInputPumpFinality
+    {
+    }
+
+    internal sealed class ExpectedShutdownFinality : WorkerInputPumpFinality
+    {
+    }
 }
 
 internal interface IWorkerPreRequestFinality
@@ -155,5 +208,15 @@ internal sealed class WorkerSafeFailure
     internal static WorkerSafeFailure Cleanup()
     {
         return new WorkerSafeFailure("worker-cleanup-failed");
+    }
+
+    internal static WorkerSafeFailure Input(WorkerProtocolFailureCode code)
+    {
+        return new WorkerSafeFailure($"worker-input-{code.ToString().ToLowerInvariant()}");
+    }
+
+    internal static WorkerSafeFailure Reader()
+    {
+        return new WorkerSafeFailure("worker-input-reader-failure");
     }
 }

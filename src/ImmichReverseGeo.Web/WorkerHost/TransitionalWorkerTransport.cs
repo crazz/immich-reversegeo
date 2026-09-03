@@ -12,9 +12,9 @@ internal sealed class SkippedAssetsWorkerStartupInitializer(SkippedAssetsReposit
     }
 }
 
-internal sealed class WorkerTransportNotConfigured : IWorkerTransportAvailability
+internal sealed class WorkerStdinTransportConfigured : IWorkerTransportAvailability
 {
-    public bool IsConfigured => false;
+    public bool IsConfigured => true;
 }
 
 internal sealed class TransitionalWorkerPreRequestFinality : IWorkerPreRequestFinality

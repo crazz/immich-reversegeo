@@ -32,7 +32,8 @@ public sealed class WorkerNdjsonOutputBoundaryGuardsTests
         var emitter = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/WorkerNdjsonOutput/WorkerNdjsonEmitter.cs");
         var reporter = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/WorkerNdjsonOutput/WorkerNdjsonProcessingEventReporter.cs");
         var composition = Read(root, "src/ImmichReverseGeo.Web/Composition/InternalWorkerServiceCollectionExtensions.cs");
-        var boundarySource = emitter + "\n" + reporter + "\n" + composition;
+        var stdinExemptBoundarySource = emitter + "\n" + reporter;
+        var fullBoundarySource = emitter + "\n" + reporter + "\n" + composition;
         Assert.AreEqual(6, StructuralScanRoots.Length, "worker-ndjson:source:six-boundary-roots");
         var host = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/InternalWorkerHost.cs");
         var lifecycle = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/InternalWorkerLifecycleService.cs");
@@ -81,9 +82,14 @@ public sealed class WorkerNdjsonOutputBoundaryGuardsTests
             Assert.IsFalse(source.Contains(token, StringComparison.Ordinal), "worker-ndjson:stdout:forbidden:" + token);
         }
 
-        foreach (var token in new[] { "ReadLine", "StandardInput", "Console.OpenStandardInput", "ExitCode", "ProcessStartInfo", "progress-coalesc", "Coalesce", "IWorkerNdjsonProtocolAdapter", "WorkerNdjsonProtocolAdapter", "TestHook", "ForTest", "Callback" })
+        foreach (var token in new[] { "ReadLine", "StandardInput", "Console.OpenStandardInput" })
         {
-            Assert.IsFalse(boundarySource.Contains(token, StringComparison.Ordinal), "worker-ndjson:boundary:forbidden:" + token);
+            Assert.IsFalse(stdinExemptBoundarySource.Contains(token, StringComparison.Ordinal), "worker-ndjson:stdin-exempt-boundary:forbidden:" + token);
+        }
+
+        foreach (var token in new[] { "ExitCode", "ProcessStartInfo", "progress-coalesc", "Coalesce", "IWorkerNdjsonProtocolAdapter", "WorkerNdjsonProtocolAdapter", "TestHook", "ForTest", "Callback" })
+        {
+            Assert.IsFalse(fullBoundarySource.Contains(token, StringComparison.Ordinal), "worker-ndjson:full-boundary:forbidden:" + token);
         }
 
         var emitterSubsystem = emitter + "\n" + reporter;

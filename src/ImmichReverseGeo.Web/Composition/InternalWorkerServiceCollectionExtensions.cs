@@ -2,6 +2,7 @@ using System;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Web.WorkerHost;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
+using ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -40,8 +41,15 @@ internal static class InternalWorkerServiceCollectionExtensions
 
         services.AddSingleton<SkippedAssetsWorkerStartupInitializer>();
         services.AddSingleton<IWorkerStartupInitializer>(sp => sp.GetRequiredService<SkippedAssetsWorkerStartupInitializer>());
-        services.AddSingleton<WorkerTransportNotConfigured>();
-        services.AddSingleton<IWorkerTransportAvailability>(sp => sp.GetRequiredService<WorkerTransportNotConfigured>());
+        services.AddSingleton<WorkerStdinTransportConfigured>();
+        services.AddSingleton<IWorkerTransportAvailability>(sp => sp.GetRequiredService<WorkerStdinTransportConfigured>());
+        services.AddSingleton<IWorkerStandardInputStreamFactory, WorkerStandardInputStreamFactory>();
+        services.AddSingleton<WorkerStdinRequestSource>(sp => new WorkerStdinRequestSource(
+            sp.GetRequiredService<IWorkerStandardInputStreamFactory>(),
+            sp.GetRequiredService<ILogger<WorkerStdinRequestSource>>()));
+        services.AddSingleton<IInitialProcessingRunAcquirer>(sp => sp.GetRequiredService<WorkerStdinRequestSource>());
+        services.AddSingleton<WorkerStdinAcceptedRunFinality>();
+        services.AddSingleton<IWorkerAcceptedRunFinality>(sp => sp.GetRequiredService<WorkerStdinAcceptedRunFinality>());
         services.AddSingleton<TransitionalWorkerPreRequestFinality>();
         services.AddSingleton<IWorkerPreRequestFinality>(sp => sp.GetRequiredService<TransitionalWorkerPreRequestFinality>());
         services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(stdoutFactory);

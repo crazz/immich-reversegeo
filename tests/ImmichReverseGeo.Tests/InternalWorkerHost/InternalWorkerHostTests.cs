@@ -1,6 +1,7 @@
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.WorkerHost;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
+using ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -45,6 +46,10 @@ public sealed class InternalWorkerHostTests
             Assert.IsNotNull(host.Services.GetRequiredService<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(), "worker-executor-graph");
             var skippedInitializer = host.Services.GetRequiredService<SkippedAssetsWorkerStartupInitializer>();
             Assert.AreSame(skippedInitializer, host.Services.GetRequiredService<IWorkerStartupInitializer>(), "worker-skipped-initializer-alias");
+            var stdinSource = host.Services.GetRequiredService<WorkerStdinRequestSource>();
+            Assert.AreSame(stdinSource, host.Services.GetRequiredService<IInitialProcessingRunAcquirer>(), "worker-stdin-source-alias");
+            var stdinFinality = host.Services.GetRequiredService<WorkerStdinAcceptedRunFinality>();
+            Assert.AreSame(stdinFinality, host.Services.GetRequiredService<IWorkerAcceptedRunFinality>(), "worker-stdin-finality-alias");
 
             foreach (var forbiddenType in forbiddenTypes)
             {
@@ -77,8 +82,13 @@ public sealed class InternalWorkerHostTests
             AssertDescriptor(descriptors, typeof(ImmichReverseGeo.Web.Services.IProcessingRunExecutor), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(SkippedAssetsWorkerStartupInitializer), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(IWorkerStartupInitializer), ServiceLifetime.Singleton);
-            AssertDescriptor(descriptors, typeof(WorkerTransportNotConfigured), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(WorkerStdinTransportConfigured), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(IWorkerTransportAvailability), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(IWorkerStandardInputStreamFactory), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(WorkerStdinRequestSource), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(IInitialProcessingRunAcquirer), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(WorkerStdinAcceptedRunFinality), ServiceLifetime.Singleton);
+            AssertDescriptor(descriptors, typeof(IWorkerAcceptedRunFinality), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(TransitionalWorkerPreRequestFinality), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(IWorkerPreRequestFinality), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(WorkerNdjsonEmitter), ServiceLifetime.Singleton);
@@ -91,12 +101,76 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    public async Task StdinRegistrationBuildAvailabilityAndAliasResolutionAreSideEffectFree()
+    {
+        var services = new ServiceCollection();
+        services.AddLogging();
+        services.AddInternalWorkerHostServices(new CountingOutputStreamFactory());
+        var inputFactory = new CountingNeverOpenInputFactory();
+        services.RemoveAll<IWorkerStandardInputStreamFactory>();
+        services.AddSingleton<IWorkerStandardInputStreamFactory>(inputFactory);
+
+        await using var provider = services.BuildServiceProvider();
+        Assert.AreEqual(0, inputFactory.OpenCount, "worker-stdin-registration-zero-open");
+        Assert.AreEqual(0, inputFactory.ReadCount, "worker-stdin-registration-zero-read");
+        var availability = provider.GetRequiredService<IWorkerTransportAvailability>();
+        Assert.IsTrue(availability.IsConfigured, "worker-stdin-production-availability-true");
+        Assert.AreEqual(0, inputFactory.OpenCount, "worker-stdin-availability-zero-open");
+        var source = provider.GetRequiredService<WorkerStdinRequestSource>();
+        Assert.AreSame(source, provider.GetRequiredService<IInitialProcessingRunAcquirer>(), "worker-stdin-provider-source-alias");
+        Assert.AreSame(
+            provider.GetRequiredService<WorkerStdinAcceptedRunFinality>(),
+            provider.GetRequiredService<IWorkerAcceptedRunFinality>(),
+            "worker-stdin-provider-finality-alias");
+        Assert.AreEqual(0, inputFactory.OpenCount, "worker-stdin-resolution-zero-open");
+        Assert.AreEqual(0, inputFactory.ReadCount, "worker-stdin-resolution-zero-read");
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task FalseOrFaultingAvailabilityNeverOpensOrReadsStdin(bool faultAvailability)
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var inputFactory = new CountingNeverOpenInputFactory();
+        try
+        {
+            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer([]));
+            ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, new RecordingPreRequestFinality([]));
+            builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerStandardInputStreamFactory>(inputFactory);
+            builder.Services.RemoveAll<IWorkerTransportAvailability>();
+            if (faultAvailability)
+            {
+                builder.Services.AddSingleton<IWorkerTransportAvailability>(_ => throw new InvalidOperationException("AVAILABILITY_RAW_SENTINEL"));
+            }
+            else
+            {
+                builder.Services.AddSingleton<IWorkerTransportAvailability>(new UnconfiguredTransport());
+            }
+
+            using var host = builder.Build();
+            Assert.AreEqual(0, inputFactory.OpenCount, "worker-stdin-availability-build-zero-open-" + faultAvailability);
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, inputFactory.OpenCount, "worker-stdin-availability-run-zero-open-" + faultAvailability);
+            Assert.AreEqual(0, inputFactory.ReadCount, "worker-stdin-availability-run-zero-read-" + faultAvailability);
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
     public async Task WorkerNdjsonRegistration_IsLazyAndAliasesTheExactSingletonEmitterAndReporter()
     {
         var fixtureRoot = CreateFixtureRoot();
         try
         {
             var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new UnconfiguredTransport());
             AssertDescriptor(builder.Services, typeof(IWorkerNdjsonOutputStreamFactory), ServiceLifetime.Singleton);
             AssertDescriptor(builder.Services, typeof(WorkerNdjsonEmitter), ServiceLifetime.Singleton);
             AssertDescriptor(builder.Services, typeof(IWorkerReadinessPublisher), ServiceLifetime.Singleton);
@@ -136,6 +210,7 @@ public sealed class InternalWorkerHostTests
         try
         {
             var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new UnconfiguredTransport());
             var stdoutFactory = new ThrowingCountingOutputStreamFactory();
             builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
             builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(stdoutFactory);
@@ -263,7 +338,7 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
-    public async Task TransitionalProductionHost_InitialisesThenCoordinatesOnlyStableUnavailableOutcome()
+    public async Task ActivatedProductionHost_InitialisesThenCoordinatesCleanInputEof()
     {
         var fixtureRoot = CreateFixtureRoot();
         var calls = new List<string>();
@@ -276,16 +351,17 @@ public sealed class InternalWorkerHostTests
                 {
                     ReplaceSingleton<IWorkerStartupInitializer>(services, new RecordingInitializer(calls));
                     ReplaceSingleton<IWorkerPreRequestFinality>(services, new RecordingPreRequestFinality(calls));
+                    ReplaceSingleton<IWorkerStandardInputStreamFactory>(services, new EmptyInputFactory());
                 });
 
             await host.StartAsync();
             await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
 
             CollectionAssert.AreEqual(
-                new[] { "initialise", "worker-transport-not-configured" },
+                new[] { "initialise", "worker-input-closed" },
                 calls,
-                "worker-transitional-order");
-            Assert.IsNull(host.Services.GetService<IInitialProcessingRunAcquirer>(), "worker-acquirer-not-registered");
+                "worker-activated-eof-order");
+            Assert.IsNotNull(host.Services.GetService<IInitialProcessingRunAcquirer>(), "worker-acquirer-registered");
         }
         finally
         {
@@ -441,6 +517,36 @@ public sealed class InternalWorkerHostTests
                 calls,
                 "worker-readiness-failure-order");
             Assert.AreEqual(0, acquirer.CallCount, "worker-readiness-failure-no-acquisition");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    public async Task ReadinessFailure_WithProductionStdinRegistrationPerformsZeroOpenAndRead()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var calls = new List<string>();
+        var inputFactory = new CountingNeverOpenInputFactory();
+
+        try
+        {
+            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer(calls));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
+            ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, new ThrowingReadiness(calls));
+            ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, new RecordingPreRequestFinality(calls));
+            builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerStandardInputStreamFactory>(inputFactory);
+            using var host = builder.Build();
+
+            Assert.AreEqual(0, inputFactory.OpenCount, "worker-ready-failure-provider-side-effect-free");
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, inputFactory.OpenCount, "worker-ready-failure-zero-stdin-open");
+            Assert.AreEqual(0, inputFactory.ReadCount, "worker-ready-failure-zero-stdin-read");
         }
         finally
         {
@@ -640,6 +746,7 @@ public sealed class InternalWorkerHostTests
             Assert.AreSame(registeredReporter, executor.Reporter, "worker-production-executor-registered-reporter");
             Assert.AreEqual(1, finality.Completed.Count, "worker-production-one-completion-finality");
             Assert.AreEqual(0, finality.Failures.Count, "worker-production-no-synthetic-failure-finality");
+            Assert.AreEqual(1, lease.NotifyExecutionStartingCount, "worker-production-one-execution-starting");
             Assert.AreEqual(1, lease.SettleCount, "worker-production-one-lease-settle");
             Assert.AreEqual(1, lease.DisposeCount, "worker-production-one-lease-dispose");
 
@@ -685,6 +792,7 @@ public sealed class InternalWorkerHostTests
             Assert.AreSame(request, finality.Completed[0].Request, "worker-accepted-finality-request");
             Assert.AreSame(executor.Result, finality.Completed[0].Result, "worker-accepted-finality-result");
             Assert.AreEqual(0, finality.Failures.Count, "worker-accepted-no-failure-finality");
+            Assert.AreEqual(1, lease.NotifyExecutionStartingCount, "worker-accepted-execution-starting-count");
             Assert.AreEqual(1, lease.SettleCount, "worker-accepted-settle-count");
             Assert.AreEqual(1, lease.DisposeCount, "worker-accepted-dispose-count");
         }
@@ -932,6 +1040,174 @@ public sealed class InternalWorkerHostTests
         Assert.IsTrue(sentinel.Disposed, "worker-runner-async-provider-disposal");
     }
 
+    [TestMethod]
+    public async Task StdinSource_OpensAndReadsOnlyAfterReadyCompletion()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var calls = new List<string>();
+        var input = new GatedReadStream(calls);
+        var factory = new RecordingStandardInputFactory(input, calls);
+        var readiness = new GatedReadiness(calls);
+
+        try
+        {
+            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer(calls));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
+            ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, readiness);
+            ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, new RecordingPreRequestFinality(calls));
+            builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerStandardInputStreamFactory>(factory);
+            using var host = builder.Build();
+
+            await host.StartAsync();
+            await readiness.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, factory.OpenCount, "worker-stdin-pending-ready-no-open");
+            Assert.AreEqual(0, input.ReadCount, "worker-stdin-pending-ready-no-read");
+            readiness.Release();
+            await input.FirstRead.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            CollectionAssert.AreEqual(new[] { "initialise", "ready-started", "ready-completed", "stdin-open", "stdin-read" }, calls, "worker-stdin-ready-before-open-read");
+            input.Complete();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    private sealed class CountingNeverOpenInputFactory : IWorkerStandardInputStreamFactory
+    {
+        internal int OpenCount { get; private set; }
+
+        internal int ReadCount { get; private set; }
+
+        public Stream OpenStandardInput()
+        {
+            OpenCount++;
+            return new NeverReadStream(this);
+        }
+
+        private sealed class NeverReadStream(CountingNeverOpenInputFactory owner) : Stream
+        {
+            public override bool CanRead => true;
+
+            public override bool CanSeek => false;
+
+            public override bool CanWrite => false;
+
+            public override long Length => 0;
+
+            public override long Position
+            {
+                get => 0;
+                set => throw new NotSupportedException();
+            }
+
+            public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+            {
+                owner.ReadCount++;
+                return ValueTask.FromResult(0);
+            }
+
+            public override void Flush()
+            {
+            }
+
+            public override int Read(byte[] buffer, int offset, int count)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override long Seek(long offset, SeekOrigin origin)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override void SetLength(long value)
+            {
+                throw new NotSupportedException();
+            }
+
+            public override void Write(byte[] buffer, int offset, int count)
+            {
+                throw new NotSupportedException();
+            }
+        }
+    }
+
+    private sealed class EmptyInputFactory : IWorkerStandardInputStreamFactory
+    {
+        public Stream OpenStandardInput()
+        {
+            return new MemoryStream();
+        }
+    }
+
+    private sealed class GatedReadiness(List<string> calls) : IWorkerReadinessPublisher
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task PublishAsync(CancellationToken cancellationToken)
+        {
+            calls.Add("ready-started");
+            Started.TrySetResult();
+            await _release.Task.WaitAsync(cancellationToken);
+            calls.Add("ready-completed");
+        }
+
+        internal void Release()
+        {
+            _release.TrySetResult();
+        }
+    }
+
+    private sealed class RecordingStandardInputFactory(GatedReadStream input, List<string> calls) : IWorkerStandardInputStreamFactory
+    {
+        internal int OpenCount { get; private set; }
+
+        public Stream OpenStandardInput()
+        {
+            OpenCount++;
+            calls.Add("stdin-open");
+            return input;
+        }
+    }
+
+    private sealed class GatedReadStream(List<string> calls) : Stream
+    {
+        private readonly TaskCompletionSource _completed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource FirstRead { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int ReadCount { get; private set; }
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => 0;
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override void Flush() { }
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+
+        public override async ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            ReadCount++;
+            calls.Add("stdin-read");
+            FirstRead.TrySetResult();
+            await _completed.Task.WaitAsync(cancellationToken);
+            return 0;
+        }
+
+        internal void Complete()
+        {
+            _completed.TrySetResult();
+        }
+    }
+
     private static IHost BuildAcceptedHost(
         string fixtureRoot,
         IProcessingRunLease lease,
@@ -1057,6 +1333,8 @@ public sealed class InternalWorkerHostTests
             _ledger = ledger;
         }
 
+        public int NotifyExecutionStartingCount { get; private set; }
+
         public int SettleCount { get; private set; }
 
         public int DisposeCount { get; private set; }
@@ -1065,11 +1343,17 @@ public sealed class InternalWorkerHostTests
 
         public CancellationToken CancellationToken { get; }
 
-        public ValueTask SettleAsync(CancellationToken cancellationToken)
+        public void NotifyExecutionStarting()
+        {
+            NotifyExecutionStartingCount++;
+            _ledger?.Add("execution-starting");
+        }
+
+        public ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken)
         {
             SettleCount++;
             _ledger?.Add("settle");
-            return ValueTask.CompletedTask;
+            return ValueTask.FromResult(WorkerInputPumpFinality.ExpectedShutdown());
         }
 
         public ValueTask DisposeAsync()
@@ -1279,15 +1563,24 @@ public sealed class InternalWorkerHostTests
 
         public CancellationToken CancellationToken => CancellationToken.None;
 
-        public ValueTask SettleAsync(CancellationToken cancellationToken)
+        public void NotifyExecutionStarting()
         {
-            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken)
+        {
+            return ValueTask.FromResult(WorkerInputPumpFinality.ExpectedShutdown());
         }
 
         public ValueTask DisposeAsync()
         {
             return ValueTask.CompletedTask;
         }
+    }
+
+    private sealed class UnconfiguredTransport : IWorkerTransportAvailability
+    {
+        public bool IsConfigured => false;
     }
 
     private sealed class ConfiguredTransport : IWorkerTransportAvailability
@@ -1691,10 +1984,10 @@ public sealed class InternalWorkerHostTests
             host.Services.GetRequiredService<IHostApplicationLifetime>().ApplicationStopping.Register(() => ledger.Add("stop"));
             await host.StartAsync();
             await finality.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            CollectionAssert.AreEqual(new[] { "complete" }, ledger, "worker-ledger-no-cleanup-while-gated");
+            CollectionAssert.AreEqual(new[] { "execution-starting", "complete" }, ledger, "worker-ledger-no-cleanup-while-gated");
             finality.Release();
             await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
-            CollectionAssert.AreEqual(new[] { "complete", "settle", "lease-dispose", "scope-dispose", "stop" }, ledger, "worker-ledger-order");
+            CollectionAssert.AreEqual(new[] { "execution-starting", "complete", "settle", "lease-dispose", "scope-dispose", "stop" }, ledger, "worker-ledger-order");
         }
         finally { DeleteFixtureRoot(fixtureRoot); }
     }
@@ -1855,9 +2148,25 @@ public sealed class InternalWorkerHostTests
     private sealed class LedgerLease(ImmichReverseGeo.Core.Models.ProcessingRunRequest request, List<string> ledger) : IProcessingRunLease
     {
         public ImmichReverseGeo.Core.Models.ProcessingRunRequest Request { get; } = request;
+
         public CancellationToken CancellationToken => CancellationToken.None;
-        public ValueTask SettleAsync(CancellationToken cancellationToken) { ledger.Add("settle"); return ValueTask.CompletedTask; }
-        public ValueTask DisposeAsync() { ledger.Add("lease-dispose"); return ValueTask.CompletedTask; }
+
+        public void NotifyExecutionStarting()
+        {
+            ledger.Add("execution-starting");
+        }
+
+        public ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken)
+        {
+            ledger.Add("settle");
+            return ValueTask.FromResult(WorkerInputPumpFinality.ExpectedShutdown());
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            ledger.Add("lease-dispose");
+            return ValueTask.CompletedTask;
+        }
     }
 
     private sealed class LedgerFinality(List<string> ledger) : IWorkerAcceptedRunFinality, IAsyncDisposable
@@ -2091,10 +2400,17 @@ public sealed class InternalWorkerHostTests
         public int DisposeCount { get; private set; }
         public ImmichReverseGeo.Core.Models.ProcessingRunRequest Request { get; } = request;
         public CancellationToken CancellationToken => CancellationToken.None;
-        public ValueTask SettleAsync(CancellationToken cancellationToken)
+
+        public void NotifyExecutionStarting()
+        {
+        }
+
+        public ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken)
         {
             SettleCount++;
-            return settleFault ? ValueTask.FromException(new InvalidOperationException("settle-secondary")) : ValueTask.CompletedTask;
+            return settleFault
+                ? ValueTask.FromException<WorkerInputPumpFinality>(new InvalidOperationException("settle-secondary"))
+                : ValueTask.FromResult(WorkerInputPumpFinality.ExpectedShutdown());
         }
         public ValueTask DisposeAsync()
         {

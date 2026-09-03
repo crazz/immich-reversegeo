@@ -157,6 +157,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         Exception? primaryFailure = null;
         var finalityStarted = false;
         CancellationTokenSource? linkedCancellation = null;
+        WorkerInputPumpFinality? inputFinality = null;
 
         IWorkerAcceptedRunFinality? finality = null;
 
@@ -166,6 +167,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             finality = services.GetRequiredService<IWorkerAcceptedRunFinality>();
             var executor = services.GetRequiredService<IProcessingRunExecutor>();
             var reporter = services.GetRequiredService<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
+            lease.NotifyExecutionStarting();
             var result = await executor.ExecuteAsync(request, reporter, linkedCancellation.Token);
             finalityStarted = true;
             await finality.CompleteAsync(request, result, CancellationToken.None);
@@ -197,7 +199,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         {
             try
             {
-                await lease.SettleAsync(CancellationToken.None);
+                inputFinality = await lease.SettleAsync(CancellationToken.None);
             }
             catch
             {
@@ -226,6 +228,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             }
         }
 
+        _ = inputFinality;
         if (primaryFailure is not null)
         {
             ExceptionDispatchInfo.Capture(primaryFailure).Throw();
