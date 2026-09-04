@@ -1,6 +1,9 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
+using System.Runtime.CompilerServices;
+
+[assembly: InternalsVisibleTo("ImmichReverseGeo.Web")]
 
 namespace ImmichReverseGeo.Core.ApplicationRole;
 
@@ -94,7 +97,7 @@ public abstract class ApplicationRoleSelectionResult
 /// </summary>
 public static class ApplicationRoleSelector
 {
-    private const string InternalWorkerSelector = "--internal-worker";
+    internal const string InternalWorkerSelector = "--internal-worker";
     private const string DuplicateCategory = "duplicate-internal-worker-selector";
     private const string UnexpectedArgumentCategory = "unexpected-internal-worker-argument";
     private const string InvalidSyntaxCategory = "invalid-internal-worker-syntax";

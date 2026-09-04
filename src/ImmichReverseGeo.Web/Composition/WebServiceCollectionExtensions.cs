@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -30,6 +31,12 @@ internal static class WebServiceCollectionExtensions
             .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionDirectory));
 
         services.AddProcessingControlPlaneServices();
+        services.AddSingleton<WorkerCommandAmbientRuntimeObservationSource>();
+        services.AddSingleton<IWorkerCommandRuntimeObservationSource>(sp => sp.GetRequiredService<WorkerCommandAmbientRuntimeObservationSource>());
+        services.AddSingleton(sp => new WorkerCommandRuntimeFactsCapture(sp.GetRequiredService<IWorkerCommandRuntimeObservationSource>()));
+        services.AddSingleton<IWorkerCommandRuntimeFactsCapture>(sp => sp.GetRequiredService<WorkerCommandRuntimeFactsCapture>());
+        services.AddSingleton(sp => new WorkerCommandInvocationBuilder(sp.GetRequiredService<IWorkerCommandRuntimeFactsCapture>()));
+        services.AddSingleton<IWorkerCommandInvocationBuilder>(sp => sp.GetRequiredService<WorkerCommandInvocationBuilder>());
         return services;
     }
 }

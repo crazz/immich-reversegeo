@@ -6,6 +6,7 @@ using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Components.Endpoints;
@@ -62,6 +63,29 @@ public sealed class InternalWorkerCompositionTests
     }
 
     [TestMethod]
+    public void InternalWorkerHostBuilder_ExcludesWorkerCommandBuilderGraph()
+    {
+        var context = ApplicationCompositionContext.Create(CompositionEnvironment.Development, "/composition/host", null, null);
+        var builder = ImmichReverseGeo.Web.WorkerHost.InternalWorkerHost.CreateBuilder(
+            context,
+            new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
+        var commandTypes = new[]
+        {
+            typeof(WorkerCommandAmbientRuntimeObservationSource),
+            typeof(IWorkerCommandRuntimeObservationSource),
+            typeof(WorkerCommandRuntimeFactsCapture),
+            typeof(IWorkerCommandRuntimeFactsCapture),
+            typeof(WorkerCommandInvocationBuilder),
+            typeof(IWorkerCommandInvocationBuilder)
+        };
+
+        foreach (var commandType in commandTypes)
+        {
+            Assert.AreEqual(0, builder.Services.Count(descriptor => descriptor.ServiceType == commandType), "host-builder-absent-" + commandType.Name);
+        }
+    }
+
+    [TestMethod]
     public void InternalWorkerComposition_ExcludesApplicationOwnedWebBoundary()
     {
         var services = CreateWorkerServices("/composition/worker-forbidden");
@@ -85,7 +109,13 @@ public sealed class InternalWorkerCompositionTests
             typeof(WorkerProtocolCodec),
             typeof(WorkerProtocolMapper),
             typeof(WorkerProtocolControllerInputValidator),
-            typeof(WorkerProtocolEventStreamValidator)
+            typeof(WorkerProtocolEventStreamValidator),
+            typeof(WorkerCommandAmbientRuntimeObservationSource),
+            typeof(IWorkerCommandRuntimeObservationSource),
+            typeof(WorkerCommandRuntimeFactsCapture),
+            typeof(IWorkerCommandRuntimeFactsCapture),
+            typeof(WorkerCommandInvocationBuilder),
+            typeof(IWorkerCommandInvocationBuilder)
         };
 
         foreach (var serviceType in forbiddenServices)

@@ -4,6 +4,7 @@ using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Components.Endpoints;
 using Microsoft.AspNetCore.Components.Server;
@@ -11,6 +12,7 @@ using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 
@@ -192,6 +194,118 @@ public sealed class WebCompositionTests
     }
 
     [TestMethod]
+    public void WebComposition_ExcludesInternalWorkerHostOnlyServices()
+    {
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var services = CreateWebServices(fixtureRoot, Path.Combine(fixtureRoot, "data"), Path.Combine(fixtureRoot, "config"));
+            var workerOnlyTypes = new[]
+            {
+                typeof(ImmichReverseGeo.Web.WorkerHost.SkippedAssetsWorkerStartupInitializer),
+                typeof(ImmichReverseGeo.Web.WorkerHost.IWorkerStartupInitializer),
+                typeof(ImmichReverseGeo.Web.WorkerHost.WorkerStdinTransportConfigured),
+                typeof(ImmichReverseGeo.Web.WorkerHost.IWorkerTransportAvailability),
+                typeof(ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop.IWorkerStandardInputStreamFactory),
+                typeof(ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop.WorkerStdinRequestSource),
+                typeof(ImmichReverseGeo.Web.WorkerHost.IInitialProcessingRunAcquirer),
+                typeof(ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop.WorkerStdinAcceptedRunFinality),
+                typeof(ImmichReverseGeo.Web.WorkerHost.IWorkerAcceptedRunFinality),
+                typeof(ImmichReverseGeo.Web.WorkerHost.TransitionalWorkerPreRequestFinality),
+                typeof(ImmichReverseGeo.Web.WorkerHost.IWorkerPreRequestFinality),
+                typeof(ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput.IWorkerNdjsonOutputStreamFactory),
+                typeof(ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput.WorkerNdjsonEmitter),
+                typeof(ImmichReverseGeo.Web.WorkerHost.IWorkerReadinessPublisher),
+                typeof(ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput.WorkerNdjsonProcessingEventReporter),
+                typeof(ImmichReverseGeo.Web.WorkerHost.InternalWorkerLifecycleService)
+            };
+            foreach (var workerOnlyType in workerOnlyTypes)
+            {
+                Assert.AreEqual(0, services.Count(descriptor => descriptor.ServiceType == workerOnlyType), "web-excludes-" + workerOnlyType.Name);
+            }
+        }
+        finally
+        {
+            DeleteFixture(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    public void WebComposition_CommandBuilderOwnerAliasesShareIdentityWithoutCapture()
+    {
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var services = CreateWebServices(fixtureRoot, Path.Combine(fixtureRoot, "data"), Path.Combine(fixtureRoot, "config"));
+            using var provider = services.BuildServiceProvider();
+            Assert.AreSame(
+                provider.GetRequiredService<WorkerCommandAmbientRuntimeObservationSource>(),
+                provider.GetRequiredService<IWorkerCommandRuntimeObservationSource>(),
+                "worker-command-source-alias");
+            Assert.AreSame(
+                provider.GetRequiredService<WorkerCommandRuntimeFactsCapture>(),
+                provider.GetRequiredService<IWorkerCommandRuntimeFactsCapture>(),
+                "worker-command-capture-alias");
+            Assert.AreSame(
+                provider.GetRequiredService<WorkerCommandInvocationBuilder>(),
+                provider.GetRequiredService<IWorkerCommandInvocationBuilder>(),
+                "worker-command-builder-alias");
+        }
+        finally
+        {
+            DeleteFixture(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    public void WebComposition_RegistersLazyWebOnlyWorkerCommandBuilderGraph()
+    {
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var source = new CountingWorkerCommandSource();
+            var services = CreateWebServices(fixtureRoot, Path.Combine(fixtureRoot, "data"), Path.Combine(fixtureRoot, "config"));
+            services.RemoveAll<IWorkerCommandRuntimeObservationSource>();
+            services.AddSingleton<IWorkerCommandRuntimeObservationSource>(source);
+
+            var expected = new[]
+            {
+                typeof(WorkerCommandAmbientRuntimeObservationSource),
+                typeof(IWorkerCommandRuntimeObservationSource),
+                typeof(WorkerCommandRuntimeFactsCapture),
+                typeof(IWorkerCommandRuntimeFactsCapture),
+                typeof(WorkerCommandInvocationBuilder),
+                typeof(IWorkerCommandInvocationBuilder)
+            };
+            foreach (var serviceType in expected)
+            {
+                var descriptors = services.Where(descriptor => descriptor.ServiceType == serviceType).ToArray();
+                Assert.AreEqual(1, descriptors.Length, "worker-command-" + serviceType.Name + "-count");
+                Assert.AreEqual(ServiceLifetime.Singleton, descriptors[0].Lifetime, "worker-command-" + serviceType.Name + "-lifetime");
+            }
+
+            using var provider = services.BuildServiceProvider();
+            Assert.AreEqual(0, source.TotalCalls, "provider-build-does-not-capture");
+            Assert.AreSame(source, provider.GetRequiredService<IWorkerCommandRuntimeObservationSource>(), "replacement-source-identity");
+            var captureConcrete = provider.GetRequiredService<WorkerCommandRuntimeFactsCapture>();
+            var captureContract = provider.GetRequiredService<IWorkerCommandRuntimeFactsCapture>();
+            Assert.AreSame(captureConcrete, captureContract, "replacement-capture-alias");
+            var concrete = provider.GetRequiredService<WorkerCommandInvocationBuilder>();
+            var contract = provider.GetRequiredService<IWorkerCommandInvocationBuilder>();
+            Assert.AreSame(concrete, contract, "worker-command-builder-alias");
+            Assert.AreEqual(0, source.TotalCalls, "resolution-does-not-capture");
+            _ = contract.Build();
+            Assert.AreEqual(7, source.TotalCalls, "first-builder-call-captures-once");
+            _ = contract.Build();
+            Assert.AreEqual(14, source.TotalCalls, "second-builder-call-captures-once-again");
+        }
+        finally
+        {
+            DeleteFixture(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
     public void WebComposition_CreatesOnlyConfigDataProtectionDirectory()
     {
         var fixtureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -234,6 +348,41 @@ public sealed class WebCompositionTests
         finally
         {
             DeleteFixture(fixtureRoot);
+        }
+    }
+
+    private sealed class CountingWorkerCommandSource : IWorkerCommandRuntimeObservationSource
+    {
+        internal int TotalCalls { get; private set; }
+
+        public string? GetProcessPath()
+        {
+            TotalCalls++;
+            return "/usr/share/dotnet/dotnet";
+        }
+
+        public WorkerCommandEntryAssemblyObservation GetEntryAssembly()
+        {
+            TotalCalls++;
+            return new WorkerCommandEntryAssemblyObservation("ImmichReverseGeo.Web", "/app/ImmichReverseGeo.Web.dll");
+        }
+
+        public string GetCurrentDirectory()
+        {
+            TotalCalls++;
+            return "/app";
+        }
+
+        public bool IsWindows()
+        {
+            TotalCalls++;
+            return false;
+        }
+
+        public WorkerTargetObservation ObserveTarget(string path)
+        {
+            TotalCalls++;
+            return path == "/app" ? WorkerTargetObservation.Directory : WorkerTargetObservation.File;
         }
     }
 

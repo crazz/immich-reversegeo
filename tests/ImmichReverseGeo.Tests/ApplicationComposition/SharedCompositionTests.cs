@@ -2,6 +2,7 @@ using System.Text.Json;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 
@@ -58,6 +59,30 @@ public sealed class SharedCompositionTests
             "/composition/config");
 
         Assert.AreEqual("ApplicationCompositionContext (Development)", context.ToString());
+    }
+
+    [TestMethod]
+    public void SharedAndReusableHeavyComposition_ExcludeWorkerCommandBuilderGraph()
+    {
+        var commandTypes = new[]
+        {
+            typeof(WorkerCommandAmbientRuntimeObservationSource),
+            typeof(IWorkerCommandRuntimeObservationSource),
+            typeof(WorkerCommandRuntimeFactsCapture),
+            typeof(IWorkerCommandRuntimeFactsCapture),
+            typeof(WorkerCommandInvocationBuilder),
+            typeof(IWorkerCommandInvocationBuilder)
+        };
+        var shared = new ServiceCollection();
+        shared.AddSharedComposition(ApplicationCompositionContext.Create(CompositionEnvironment.Development, "/composition/shared", null, null));
+        var reusable = new ServiceCollection();
+        reusable.AddReusableHeavyComposition();
+
+        foreach (var commandType in commandTypes)
+        {
+            Assert.AreEqual(0, shared.Count(descriptor => descriptor.ServiceType == commandType), "shared-absent-" + commandType.Name);
+            Assert.AreEqual(0, reusable.Count(descriptor => descriptor.ServiceType == commandType), "reusable-absent-" + commandType.Name);
+        }
     }
 
     [TestMethod]
