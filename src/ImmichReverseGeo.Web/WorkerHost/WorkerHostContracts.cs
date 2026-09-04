@@ -89,9 +89,15 @@ internal interface IWorkerPreRequestFinality
 
 internal interface IWorkerAcceptedRunFinality
 {
-    Task CompleteAsync(ProcessingRunRequest request, ProcessingRunResult result, CancellationToken cancellationToken);
+    Task CompleteAsync(
+        ProcessingRunRequest request,
+        ProcessingRunResult result,
+        CancellationToken cancellationToken);
 
-    Task FailAsync(ProcessingRunRequest request, WorkerSafeFailure failure, CancellationToken cancellationToken);
+    Task FailAsync(
+        ProcessingRunRequest request,
+        WorkerSafeFailure failure,
+        CancellationToken cancellationToken);
 }
 
 internal interface IWorkerTransportAvailability
@@ -178,45 +184,55 @@ internal sealed class WorkerPreRequestOutcome
 
 internal sealed class WorkerSafeFailure
 {
-    private WorkerSafeFailure(string category)
+    private WorkerSafeFailure(string category, WorkerSafeFailureKind kind)
     {
         Category = category;
+        Kind = kind;
     }
 
     internal string Category { get; }
 
+    internal WorkerSafeFailureKind Kind { get; }
+
     internal static WorkerSafeFailure Startup()
     {
-        return new WorkerSafeFailure("worker-startup-failed");
+        return new WorkerSafeFailure("worker-startup-failed", WorkerSafeFailureKind.Infrastructure);
     }
 
     internal static WorkerSafeFailure Readiness()
     {
-        return new WorkerSafeFailure("worker-readiness-failed");
+        return new WorkerSafeFailure("worker-readiness-failed", WorkerSafeFailureKind.Infrastructure);
     }
 
     internal static WorkerSafeFailure Acquisition()
     {
-        return new WorkerSafeFailure("worker-request-acquisition-failed");
+        return new WorkerSafeFailure("worker-request-acquisition-failed", WorkerSafeFailureKind.Infrastructure);
     }
 
     internal static WorkerSafeFailure AcceptedInfrastructure()
     {
-        return new WorkerSafeFailure("worker-accepted-infrastructure-failed");
+        return new WorkerSafeFailure("worker-accepted-infrastructure-failed", WorkerSafeFailureKind.Infrastructure);
     }
 
     internal static WorkerSafeFailure Cleanup()
     {
-        return new WorkerSafeFailure("worker-cleanup-failed");
+        return new WorkerSafeFailure("worker-cleanup-failed", WorkerSafeFailureKind.Infrastructure);
     }
 
     internal static WorkerSafeFailure Input(WorkerProtocolFailureCode code)
     {
-        return new WorkerSafeFailure($"worker-input-{code.ToString().ToLowerInvariant()}");
+        return new WorkerSafeFailure($"worker-input-{code.ToString().ToLowerInvariant()}", WorkerSafeFailureKind.InputProtocol);
     }
 
     internal static WorkerSafeFailure Reader()
     {
-        return new WorkerSafeFailure("worker-input-reader-failure");
+        return new WorkerSafeFailure("worker-input-reader-failure", WorkerSafeFailureKind.Reader);
     }
+}
+
+internal enum WorkerSafeFailureKind
+{
+    Infrastructure,
+    InputProtocol,
+    Reader
 }

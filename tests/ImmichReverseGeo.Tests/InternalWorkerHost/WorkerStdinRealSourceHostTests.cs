@@ -13,10 +13,12 @@ using Microsoft.Extensions.Hosting;
 namespace ImmichReverseGeo.Tests.InternalWorkerHost;
 
 [TestClass]
+[TestCategory("Change23")]
 public sealed class WorkerStdinRealSourceHostTests
 {
     private const string RunIdText = "84b94b54-b7c5-49cf-a7dd-2b4a006ba1ae";
     private const string Timestamp = "2026-01-02T03:04:05.0000000Z";
+    private const string RawStdoutSentinel = "RAW_STDOUT_SENTINEL";
     private static readonly DateTimeOffset HostTime = new(2026, 1, 2, 3, 4, 5, TimeSpan.Zero);
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
 
@@ -44,10 +46,14 @@ public sealed class WorkerStdinRealSourceHostTests
         var outputFactory = new FixedOutputFactory();
         var executor = new GatedReportingExecutor(Task.CompletedTask);
         var fixtureRoot = CreateFixtureRoot();
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        using var errorWriter = new StringWriter();
 
         try
         {
-            var builder = ImmichReverseGeo.Web.WorkerHost.InternalWorkerHost.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = ImmichReverseGeo.Web.WorkerHost.InternalWorkerHost.CreateBuilder(
+                CreateContext(fixtureRoot),
+                outcomes);
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer());
             ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, new CompletedReadiness());
             builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
@@ -60,11 +66,12 @@ public sealed class WorkerStdinRealSourceHostTests
             var forwarding = new ForwardingPreRequestFinality(transitional);
             ReplaceSingleton(builder.Services, transitional);
             ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, forwarding);
-            using var host = builder.Build();
+            var host = builder.Build();
 
-            await host.StartAsync();
-            await host.WaitForShutdownAsync().WaitAsync(Bound);
+            await ImmichReverseGeo.Web.WorkerHost.InternalWorkerHost.RunHostAsync(host, outcomes).WaitAsync(Bound);
+            var exitCode = InternalWorkerProcessExitBoundary.Complete(outcomes.Fact, errorWriter);
 
+            Assert.AreEqual(2, exitCode, "stdin-host-pre-request:invalid-input-exit");
             Assert.AreEqual(1, inputFactory.OpenCount, "stdin-host-pre-request:one-open");
             Assert.AreEqual(0, executor.CallCount, "stdin-host-pre-request:zero-work");
             Assert.AreEqual(0, outputFactory.OpenCount, "stdin-host-pre-request:zero-stdout-open");
@@ -76,10 +83,14 @@ public sealed class WorkerStdinRealSourceHostTests
             Assert.IsNotNull(recordedOutcome.SafeFailure, "stdin-host-pre-request:safe-failure-present");
             Assert.AreSame(recordedOutcome.SafeFailure, transitionalOutcome.SafeFailure, "stdin-host-pre-request:exact-failure-handoff");
             Assert.AreEqual("worker-input-malformedjson", recordedOutcome.Category, "stdin-host-pre-request:exact-category");
+            var stdout = outputFactory.Output.Text;
+            var stderr = errorWriter.ToString();
             foreach (var sentinel in sentinels)
             {
                 Assert.IsFalse(recordedOutcome.Category.Contains(sentinel, StringComparison.Ordinal), "stdin-host-pre-request:no-sentinel-" + sentinel);
                 Assert.IsFalse(recordedOutcome.SafeFailure.Category.Contains(sentinel, StringComparison.Ordinal), "stdin-host-pre-request:no-failure-sentinel-" + sentinel);
+                Assert.IsFalse(stdout.Contains(sentinel, StringComparison.Ordinal), "stdin-host-pre-request:no-stdout-sentinel-" + sentinel);
+                Assert.IsFalse(stderr.Contains(sentinel, StringComparison.Ordinal), "stdin-host-pre-request:no-stderr-sentinel-" + sentinel);
             }
         }
         finally
@@ -114,7 +125,7 @@ public sealed class WorkerStdinRealSourceHostTests
                 expectedInputCategory = "worker-input-invalidframing";
                 break;
             case "frame-failure":
-                input = new HostInputStream(execute.Concat("\n{]\n"u8.ToArray()).ToArray());
+                input = new HostInputStream(execute.Concat(Encoding.UTF8.GetBytes("\n{\"raw\":\"" + RawStdoutSentinel + "\",}\n")).ToArray());
                 inputOutcome = logger.Logged.Task;
                 expectedInputCategory = "worker-input-malformedjson";
                 break;
@@ -138,7 +149,9 @@ public sealed class WorkerStdinRealSourceHostTests
         var executor = new GatedReportingExecutor(inputOutcome);
         try
         {
-            var builder = ImmichReverseGeo.Web.WorkerHost.InternalWorkerHost.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = ImmichReverseGeo.Web.WorkerHost.InternalWorkerHost.CreateBuilder(
+                CreateContext(fixtureRoot),
+                new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer());
             builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
             builder.Services.AddSingleton<IWorkerStandardInputStreamFactory>(inputFactory);
@@ -166,8 +179,13 @@ public sealed class WorkerStdinRealSourceHostTests
                 Assert.AreEqual(expectedInputCategory, logger.Entries[0], "stdin-host-" + row + ":exact-input-category");
             }
 
-            var frames = outputFactory.Output.Text.Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            var stdout = outputFactory.Output.Text;
+            var frames = stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries);
             Assert.AreEqual(4, frames.Length, "stdin-host-" + row + ":ready-started-eligibility-terminal-only");
+            Assert.AreEqual(
+                "{\"protocol\":\"immich-reversegeo.worker\",\"version\":1,\"direction\":\"worker-to-controller\",\"category\":\"lifecycle\",\"type\":\"ready\",\"sequence\":1,\"timestampUtc\":\"2026-01-02T03:04:05.0000000Z\",\"runId\":null,\"payload\":{}}",
+                frames[0],
+                "stdin-host-" + row + ":ready-exact-frame");
             Assert.IsTrue(frames[0].Contains("\"type\":\"ready\"", StringComparison.Ordinal), "stdin-host-" + row + ":ready-first");
             Assert.IsTrue(frames[1].Contains("\"type\":\"run-started\"", StringComparison.Ordinal), "stdin-host-" + row + ":run-started-second");
             Assert.IsTrue(frames[2].Contains("\"type\":\"eligibility-determined\"", StringComparison.Ordinal), "stdin-host-" + row + ":eligibility-third");
@@ -175,6 +193,7 @@ public sealed class WorkerStdinRealSourceHostTests
             Assert.AreEqual(1, frames.Count(frame => frame.Contains("\"category\":\"terminal\"", StringComparison.Ordinal)), "stdin-host-" + row + ":one-terminal");
             Assert.AreEqual(0, frames.Count(frame => frame.Contains("ack", StringComparison.OrdinalIgnoreCase)), "stdin-host-" + row + ":no-ack");
             Assert.AreEqual(0, frames.Count(frame => frame.Contains("worker-input-", StringComparison.Ordinal)), "stdin-host-" + row + ":no-input-diagnostic-stdout");
+            Assert.IsFalse(stdout.Contains(RawStdoutSentinel, StringComparison.Ordinal), "stdin-host-" + row + ":real-stdout-excludes-raw-input-sentinel");
         }
         finally
         {

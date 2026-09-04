@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using Microsoft.Extensions.Logging;
@@ -14,6 +15,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ImmichReverseGeo.Tests.WorkerNdjsonOutput;
 
 [TestClass]
+[TestCategory("Change23")]
 public sealed class WorkerNdjsonEmitterTests
 {
     private static readonly DateTimeOffset Timestamp = new DateTimeOffset(2026, 8, 30, 12, 34, 56, TimeSpan.Zero).AddTicks(1234567);
@@ -316,7 +318,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task SubmitAsync_CapacityOneHonorsPreAcceptanceCancellationWithoutSequenceConsumption()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         stream.BlockWrites();
@@ -355,7 +357,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task SubmitAsync_PostAcceptanceCancellationDoesNotRetractCommittedCandidate()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         stream.BlockWrites();
@@ -378,7 +380,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task SubmitAsync_CallerCancellationAfterActiveWriteAcceptanceDoesNotCancelWriterLifetime()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         stream.BlockWrites();
@@ -402,7 +404,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task SubmitAsync_CapacityOnePreservesAcceptedFifoWithoutDropOrCoalescing()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         stream.BlockWrites();
@@ -430,7 +432,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task SubmitAsync_TerminalClosesIntakeAndRemainsTheLastFlushedFrame()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         await emitter.SubmitAsync(new RunStarted(request, Timestamp), CancellationToken.None);
@@ -461,7 +463,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task SubmitAsync_TerminalAcceptanceWinsCandidateRaceAndRejectsLateCandidate()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         await emitter.SubmitAsync(new RunStarted(request, Timestamp), CancellationToken.None);
@@ -546,7 +548,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task DisposeAsync_BreaksPendingReceiptsAndCompletesAfterTheWriterSettles()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         stream.BlockWrites();
@@ -575,7 +577,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task DisposeAsync_FansOneExactFailureToActiveQueuedWaitingAndFutureCallers()
     {
         var stream = new BlockingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         stream.BlockWrites();
@@ -646,7 +648,7 @@ public sealed class WorkerNdjsonEmitterTests
     {
         const string sentinel = "ConnectionString=SECRET_NDJSON_SENTINEL";
         var stream = new RecordingStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), new ThrowingLogger(), 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), new ThrowingLogger(), CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
 
@@ -664,6 +666,28 @@ public sealed class WorkerNdjsonEmitterTests
         Assert.IsFalse(Encoding.UTF8.GetString(stream.Bytes.ToArray()).Contains(sentinel, StringComparison.Ordinal), "mapping-failure-no-payload-on-stdout");
         Assert.AreEqual(1, stream.WriteCount, "mapping-failure-no-candidate-write");
         Assert.AreEqual(1, stream.FlushCount, "mapping-failure-no-candidate-flush");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task TransportBoundaryLoggerOutOfMemory_IsSwallowedAndPreservesStableFanout()
+    {
+        var outcomes = CreateOutcomes();
+        var emitter = new WorkerNdjsonEmitter(
+            new RecordingStream(throwWrite: true),
+            WorkerNdjsonOutputStreamOwnership.Owned,
+            new FixedTimeProvider(Timestamp),
+            new OutOfMemoryThrowingLogger(),
+            outcomes,
+            1);
+
+        var first = await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(() => emitter.PublishAsync(CancellationToken.None));
+        var future = await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(() => emitter.PublishAsync(CancellationToken.None));
+
+        Assert.AreSame(first, future, "emitter-oom-logger-stable-reference");
+        Assert.AreEqual(WorkerNdjsonFailureStage.Write, first.Stage, "emitter-oom-logger-stage");
+        Assert.IsTrue(outcomes.HasFact, "emitter-oom-logger-retains-mapped-output-fact");
+        Assert.AreEqual(6, outcomes.Fact.ExitCode, "emitter-oom-logger-retains-output-code");
     }
 
     [TestMethod]
@@ -710,7 +734,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task SubmitAsync_WriteFailureFansOneExactFailureToActiveQueuedAndFutureCallers()
     {
         var stream = new BlockingFailingWriteStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
         stream.ArmFailure();
@@ -750,7 +774,7 @@ public sealed class WorkerNdjsonEmitterTests
     {
         var stream = new RecordingStream();
         var logger = new RecordingLogger();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), logger, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), logger, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
         await emitter.PublishAsync(CancellationToken.None);
 
@@ -823,7 +847,7 @@ public sealed class WorkerNdjsonEmitterTests
         const string secret = "Server=db;Password=FIXED_SECRET_LOG_SENTINEL;SELECT private_value";
         var stream = new RecordingStream();
         var logger = new RecordingLogger();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), logger, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), logger, CreateOutcomes(), 1);
         var request = new ProcessingRunRequest(Guid.Parse("11111111-1111-1111-1111-111111111111"), ProcessingRunTrigger.RunOnce);
         await PrepareForLogAsync(emitter, request);
 
@@ -864,7 +888,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task PublishAsync_PartialWriteBreaksOnceWithoutRetryOrSyntheticFrames()
     {
         var stream = new PartialWriteThenThrowStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
 
         var failure = await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(
             async () => await emitter.PublishAsync(CancellationToken.None),
@@ -963,7 +987,7 @@ public sealed class WorkerNdjsonEmitterTests
     public async Task DisposeAsync_DuringFlushFailsReceiptAndOwnerWithOneStableFailure()
     {
         var stream = new DisposalGatedFlushStream();
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
         var publish = emitter.PublishAsync(CancellationToken.None);
         await stream.FlushStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
@@ -1020,13 +1044,112 @@ public sealed class WorkerNdjsonEmitterTests
     }
 
     [TestMethod]
+    [DataRow("open")]
+    [DataRow("write")]
+    [DataRow("flush")]
+    [DataRow("dispose")]
+    public async Task RawOutOfMemory_EscapesWithoutMappedOutputOutcome(string stage)
+    {
+        var outcomes = CreateOutcomes();
+        var rawFailure = new OutOfMemoryException("controlled-emitter-oom");
+
+        if (stage == "open")
+        {
+            var thrownOnOpen = Assert.ThrowsExactly<OutOfMemoryException>(() => WorkerNdjsonEmitter.CreateProduction(
+                new ExceptionOutputStreamFactory(rawFailure),
+                new FixedTimeProvider(Timestamp),
+                NullLogger<WorkerNdjsonEmitter>.Instance,
+                outcomes));
+            Assert.AreSame(rawFailure, thrownOnOpen, "emitter-open-oom-reference");
+            Assert.IsFalse(outcomes.HasFact, "emitter-open-oom-has-no-mapped-fact");
+            Assert.AreEqual(0, outcomes.Fact.ExitCode, "emitter-open-oom-sentinel-remains-non-authoritative");
+            return;
+        }
+
+        var stream = new StageExceptionStream(stage, rawFailure);
+        var emitter = new WorkerNdjsonEmitter(
+            stream,
+            WorkerNdjsonOutputStreamOwnership.Owned,
+            new FixedTimeProvider(Timestamp),
+            NullLogger<WorkerNdjsonEmitter>.Instance,
+            outcomes,
+            1);
+
+        var thrown = stage == "dispose"
+            ? await PublishThenDisposeAsync(emitter)
+            : await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => emitter.PublishAsync(CancellationToken.None));
+
+        Assert.AreSame(rawFailure, thrown, $"emitter-{stage}-oom-reference");
+        Assert.IsFalse(outcomes.HasFact, $"emitter-{stage}-oom-has-no-mapped-fact");
+        Assert.AreEqual(0, outcomes.Fact.ExitCode, $"emitter-{stage}-oom-sentinel-remains-non-authoritative");
+
+        if (stage is "write" or "flush")
+        {
+            var futureFailure = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(
+                () => emitter.PublishAsync(CancellationToken.None).WaitAsync(TimeSpan.FromSeconds(5)),
+                $"emitter-{stage}-oom-future-fanout");
+            var disposeFailure = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(
+                () => emitter.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)),
+                $"emitter-{stage}-oom-dispose-fanout");
+            Assert.AreSame(rawFailure, futureFailure, $"emitter-{stage}-oom-future-reference");
+            Assert.AreSame(rawFailure, disposeFailure, $"emitter-{stage}-oom-dispose-reference");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task FatalWriterOutOfMemory_FansExactUnmappedReferenceToActiveQueuedWaitingFutureAndDisposeWithoutHanging()
+    {
+        var outcomes = CreateOutcomes();
+        var rawFailure = new OutOfMemoryException("controlled-fatal-writer-oom");
+        var stream = new BlockingOutOfMemoryWriteStream(rawFailure);
+        var emitter = new WorkerNdjsonEmitter(
+            stream,
+            WorkerNdjsonOutputStreamOwnership.Owned,
+            new FixedTimeProvider(Timestamp),
+            NullLogger<WorkerNdjsonEmitter>.Instance,
+            outcomes,
+            1);
+        var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.RunOnce);
+        await emitter.PublishAsync(CancellationToken.None);
+        stream.ArmFailure();
+
+        var active = emitter.SubmitAsync(new RunStarted(request, Timestamp), CancellationToken.None).AsTask();
+        await stream.BlockedWriteStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var queued = emitter.SubmitAsync(new EligibilityDetermined(request, 1), CancellationToken.None).AsTask();
+        var waiting = emitter.SubmitAsync(
+            new LogEmitted(request, ProcessingLogLevel.Information, "fatal-waiting"),
+            CancellationToken.None).AsTask();
+        Assert.IsFalse(waiting.IsCompleted, "fatal-oom-waiting-producer-is-backpressured");
+
+        stream.ReleaseFailure();
+
+        var activeFailure = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => active.WaitAsync(TimeSpan.FromSeconds(5)));
+        var queuedFailure = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => queued.WaitAsync(TimeSpan.FromSeconds(5)));
+        var waitingFailure = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => waiting.WaitAsync(TimeSpan.FromSeconds(5)));
+        var futureFailure = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() =>
+            emitter.SubmitAsync(new LogEmitted(request, ProcessingLogLevel.Information, "fatal-future"), CancellationToken.None).AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+        var disposeFailure = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => emitter.DisposeAsync().AsTask().WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.AreSame(rawFailure, activeFailure, "fatal-oom-active-reference");
+        Assert.AreSame(rawFailure, queuedFailure, "fatal-oom-queued-reference");
+        Assert.AreSame(rawFailure, waitingFailure, "fatal-oom-waiting-reference");
+        Assert.AreSame(rawFailure, futureFailure, "fatal-oom-future-reference");
+        Assert.AreSame(rawFailure, disposeFailure, "fatal-oom-dispose-reference");
+        Assert.IsFalse(outcomes.HasFact, "fatal-oom-does-not-create-mapped-output-fact");
+        Assert.AreEqual(2, stream.WriteCount, "fatal-oom-no-write-after-fatal-boundary");
+        Assert.AreEqual(1, stream.FlushCount, "fatal-oom-only-ready-flushed");
+    }
+
+    [TestMethod]
     public async Task CreateProduction_DoesNotDisposeStandardOutput()
     {
         var stream = new RecordingStream();
         var emitter = WorkerNdjsonEmitter.CreateProduction(
             new FixedOutputStreamFactory(stream),
             new FixedTimeProvider(Timestamp),
-            NullLogger<WorkerNdjsonEmitter>.Instance);
+            NullLogger<WorkerNdjsonEmitter>.Instance,
+            CreateOutcomes());
         await emitter.PublishAsync(CancellationToken.None);
 
         await emitter.DisposeAsync();
@@ -1043,6 +1166,7 @@ public sealed class WorkerNdjsonEmitterTests
             WorkerNdjsonOutputStreamOwnership.Unowned,
             new FixedTimeProvider(Timestamp),
             NullLogger<WorkerNdjsonEmitter>.Instance,
+            CreateOutcomes(),
             1);
         await emitter.PublishAsync(CancellationToken.None);
 
@@ -1061,7 +1185,8 @@ public sealed class WorkerNdjsonEmitterTests
             var emitter = WorkerNdjsonEmitter.CreateProduction(
                 new ThrowingOutputStreamFactory(),
                 new FixedTimeProvider(Timestamp),
-                logger);
+                logger,
+                CreateOutcomes());
             return await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(
                 async () => await emitter.PublishAsync(CancellationToken.None),
                 "logger-natural-open-standard-output");
@@ -1074,7 +1199,7 @@ public sealed class WorkerNdjsonEmitterTests
         var clock = stage == WorkerNdjsonFailureStage.Mapping
             ? new FixedTimeProvider(Timestamp.ToOffset(TimeSpan.FromHours(1)))
             : new FixedTimeProvider(Timestamp);
-        var output = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, clock, logger, 1);
+        var output = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, clock, logger, CreateOutcomes(), 1);
         if (stage is WorkerNdjsonFailureStage.Mapping or WorkerNdjsonFailureStage.Write or WorkerNdjsonFailureStage.Flush)
         {
             return await Assert.ThrowsExactlyAsync<WorkerNdjsonTransportException>(
@@ -1146,7 +1271,7 @@ public sealed class WorkerNdjsonEmitterTests
         var clock = kind == FailureKind.Mapping
             ? new FixedTimeProvider(Timestamp.ToOffset(TimeSpan.FromHours(1)))
             : new FixedTimeProvider(Timestamp);
-        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, clock, NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        var emitter = new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, clock, NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
 
         var first = emitter.PublishAsync(CancellationToken.None);
         var second = emitter.PublishAsync(CancellationToken.None);
@@ -1212,7 +1337,18 @@ public sealed class WorkerNdjsonEmitterTests
 
     private static WorkerNdjsonEmitter Create(RecordingStream stream)
     {
-        return new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, 1);
+        return new WorkerNdjsonEmitter(stream, WorkerNdjsonOutputStreamOwnership.Owned, new FixedTimeProvider(Timestamp), NullLogger<WorkerNdjsonEmitter>.Instance, CreateOutcomes(), 1);
+    }
+
+    private static WorkerProcessExitOutcomeAccumulator CreateOutcomes()
+    {
+        return new WorkerProcessExitOutcomeAccumulator();
+    }
+
+    private static async Task<OutOfMemoryException> PublishThenDisposeAsync(WorkerNdjsonEmitter emitter)
+    {
+        await emitter.PublishAsync(CancellationToken.None);
+        return await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => emitter.DisposeAsync().AsTask());
     }
 
     private static string ExpectedReadyJson()
@@ -1247,6 +1383,13 @@ public sealed class WorkerNdjsonEmitterTests
 
     private sealed record UnsupportedProcessingEvent(ProcessingRunRequest Request, string SensitivePayload) : ProcessingEvent(Request);
 
+    private sealed class OutOfMemoryThrowingLogger : ILogger<WorkerNdjsonEmitter>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(LogLevel logLevel) => true;
+        public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) => throw new OutOfMemoryException("controlled-emitter-logger-oom");
+    }
+
     private sealed class ThrowingLogger : ILogger<WorkerNdjsonEmitter>
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
@@ -1280,8 +1423,31 @@ public sealed class WorkerNdjsonEmitterTests
         public Stream OpenStandardOutput() => throw new IOException("OPEN_STDOUT_SECRET_SENTINEL");
     }
 
+    private sealed class ExceptionOutputStreamFactory(Exception failure) : IWorkerNdjsonOutputStreamFactory
+    {
+        public Stream OpenStandardOutput() => throw failure;
+    }
+
+    private sealed class StageExceptionStream(string stage, Exception failure) : Stream
+    {
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => 0;
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+        public override ValueTask DisposeAsync() => stage == "dispose" ? ValueTask.FromException(failure) : ValueTask.CompletedTask;
+        public override void Flush() => throw new NotSupportedException();
+        public override Task FlushAsync(CancellationToken cancellationToken) => stage == "flush" ? Task.FromException(failure) : Task.CompletedTask;
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken) => stage == "write" ? Task.FromException(failure) : Task.CompletedTask;
+    }
+
     private sealed class DisposalGatedFlushStream : Stream
     {
+        private readonly TaskCompletionSource _flushRelease = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool _flushFinalized;
         public TaskCompletionSource FlushStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource FlushFinalized { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1306,7 +1472,7 @@ public sealed class WorkerNdjsonEmitterTests
             FlushStarted.TrySetResult();
             try
             {
-                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken).ConfigureAwait(false);
+                await _flushRelease.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
             }
             finally
             {
@@ -1430,6 +1596,53 @@ public sealed class WorkerNdjsonEmitterTests
             WriteCount++;
             Bytes.AddRange(buffer.AsSpan(offset, count / 2).ToArray());
             throw new IOException("BROKEN_PIPE_SECRET_SENTINEL");
+        }
+    }
+
+    private sealed class BlockingOutOfMemoryWriteStream(OutOfMemoryException failure) : Stream
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private bool _armed;
+
+        public TaskCompletionSource BlockedWriteStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int WriteCount { get; private set; }
+        public int FlushCount { get; private set; }
+        public override bool CanRead => false;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => 0;
+        public override long Position { get => 0; set => throw new NotSupportedException(); }
+
+        public void ArmFailure()
+        {
+            _armed = true;
+        }
+
+        public void ReleaseFailure()
+        {
+            _release.TrySetResult();
+        }
+
+        public override void Flush() => throw new NotSupportedException();
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            FlushCount++;
+            return Task.CompletedTask;
+        }
+
+        public override int Read(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override long Seek(long offset, SeekOrigin origin) => throw new NotSupportedException();
+        public override void SetLength(long value) => throw new NotSupportedException();
+        public override void Write(byte[] buffer, int offset, int count) => throw new NotSupportedException();
+        public override async Task WriteAsync(byte[] buffer, int offset, int count, CancellationToken cancellationToken)
+        {
+            WriteCount++;
+            if (_armed)
+            {
+                BlockedWriteStarted.TrySetResult();
+                await _release.Task.ConfigureAwait(false);
+                throw failure;
+            }
         }
     }
 

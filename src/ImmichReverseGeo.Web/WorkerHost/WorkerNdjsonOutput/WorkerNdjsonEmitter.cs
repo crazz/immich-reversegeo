@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.WorkerHost;
 using Microsoft.Extensions.Logging;
@@ -21,12 +22,14 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
     private readonly WorkerNdjsonOutputStreamOwnership _stdoutOwnership;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WorkerNdjsonEmitter> _logger;
+    private readonly WorkerProcessExitOutcomeAccumulator _outcomes;
     private readonly Channel<EmissionCandidate> _queue;
     private readonly WorkerProtocolEventStreamValidator _validator = new();
     private readonly object _stateGate = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly Task _writer;
     private InitializationAttempt? _initialization;
+    private OutOfMemoryException? _fatalOutOfMemory;
     private WorkerNdjsonTransportException? _broken;
     private Task? _disposeTask;
     private bool _readyFlushed;
@@ -40,17 +43,20 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         WorkerNdjsonOutputStreamOwnership stdoutOwnership,
         TimeProvider timeProvider,
         ILogger<WorkerNdjsonEmitter> logger,
+        WorkerProcessExitOutcomeAccumulator outcomes,
         int queueCapacity = ProductionQueueCapacity)
     {
         ArgumentNullException.ThrowIfNull(stdout);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(outcomes);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(queueCapacity);
 
         _stdout = stdout;
         _stdoutOwnership = stdoutOwnership;
         _timeProvider = timeProvider;
         _logger = logger;
+        _outcomes = outcomes;
         _queue = Channel.CreateBounded<EmissionCandidate>(new BoundedChannelOptions(queueCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -64,11 +70,13 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
     internal static WorkerNdjsonEmitter CreateProduction(
         IWorkerNdjsonOutputStreamFactory stdoutFactory,
         TimeProvider timeProvider,
-        ILogger<WorkerNdjsonEmitter> logger)
+        ILogger<WorkerNdjsonEmitter> logger,
+        WorkerProcessExitOutcomeAccumulator outcomes)
     {
         ArgumentNullException.ThrowIfNull(stdoutFactory);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(outcomes);
 
         try
         {
@@ -76,7 +84,12 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
                 stdoutFactory.OpenStandardOutput(),
                 WorkerNdjsonOutputStreamOwnership.Unowned,
                 timeProvider,
-                logger);
+                logger,
+                outcomes);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -84,7 +97,8 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
                 Stream.Null,
                 WorkerNdjsonOutputStreamOwnership.Unowned,
                 timeProvider,
-                logger);
+                logger,
+                outcomes);
             broken.Break(WorkerNdjsonFailureStage.OpenStandardOutput);
             return broken;
         }
@@ -94,34 +108,47 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
     {
         lock (_stateGate)
         {
-            if (_broken is not null)
+            try
             {
-                return Task.FromException(_broken);
-            }
+                if (_fatalOutOfMemory is not null)
+                {
+                    return Task.FromException(_fatalOutOfMemory);
+                }
 
-            if (_initialization is not null)
+                if (_broken is not null)
+                {
+                    return Task.FromException(_broken);
+                }
+
+                if (_initialization is not null)
+                {
+                    return _initialization.Task;
+                }
+
+                var attempt = new InitializationAttempt();
+                _initialization = attempt;
+                attempt.Task = PublishReadyAsync(attempt, cancellationToken);
+                return attempt.Task;
+            }
+            catch (OutOfMemoryException outOfMemoryFailure)
             {
-                return _initialization.Task;
+                throw FailFatally(outOfMemoryFailure);
             }
-
-            var attempt = new InitializationAttempt();
-            _initialization = attempt;
-            attempt.Task = PublishReadyAsync(attempt, cancellationToken);
-            return attempt.Task;
         }
     }
 
     private async Task PublishReadyAsync(InitializationAttempt attempt, CancellationToken cancellationToken)
     {
-        var candidate = new EmissionCandidate();
         try
         {
+            var candidate = new EmissionCandidate();
             await EnqueueAsync(
                 candidate,
                 requiresReady: false,
                 isRunStarted: false,
                 isTerminal: false,
                 cancellationToken).ConfigureAwait(false);
+            await candidate.Completion.Task.ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -135,23 +162,33 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
 
             throw;
         }
-
-        await candidate.Completion.Task.ConfigureAwait(false);
+        catch (OutOfMemoryException outOfMemoryFailure)
+        {
+            throw FailFatally(outOfMemoryFailure);
+        }
     }
 
     internal async ValueTask SubmitAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(processingEvent);
-        var candidate = new EmissionCandidate(processingEvent);
-        await EnqueueAsync(
-            candidate,
-            requiresReady: true,
-            isRunStarted: processingEvent is RunStarted,
-            isTerminal: processingEvent is RunFinished,
-            cancellationToken).ConfigureAwait(false);
 
-        // An accepted candidate is committed; intentionally do not use the caller token here.
-        await candidate.Completion.Task.ConfigureAwait(false);
+        try
+        {
+            var candidate = new EmissionCandidate(processingEvent);
+            await EnqueueAsync(
+                candidate,
+                requiresReady: true,
+                isRunStarted: processingEvent is RunStarted,
+                isTerminal: processingEvent is RunFinished,
+                cancellationToken).ConfigureAwait(false);
+
+            // An accepted candidate is committed; intentionally do not use the caller token here.
+            await candidate.Completion.Task.ConfigureAwait(false);
+        }
+        catch (OutOfMemoryException outOfMemoryFailure)
+        {
+            throw FailFatally(outOfMemoryFailure);
+        }
     }
 
     private async ValueTask EnqueueAsync(
@@ -214,6 +251,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         {
             throw;
         }
+        catch (OutOfMemoryException outOfMemoryFailure)
+        {
+            throw FailFatally(outOfMemoryFailure);
+        }
         catch
         {
             throw GetUnavailableFailure();
@@ -228,7 +269,7 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         {
             await foreach (var candidate in _queue.Reader.ReadAllAsync().ConfigureAwait(false))
             {
-                if (GetBrokenFailureOrNull() is { } failure)
+                if (GetUnavailableFailureOrNull() is { } failure)
                 {
                     candidate.Completion.TrySetException(failure);
                     continue;
@@ -243,11 +284,21 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
                 {
                     candidate.Completion.TrySetException(transportFailure);
                 }
+                catch (OutOfMemoryException outOfMemoryFailure)
+                {
+                    var fatalFailure = FailFatally(outOfMemoryFailure);
+                    candidate.Completion.TrySetException(fatalFailure);
+                    throw fatalFailure;
+                }
                 catch
                 {
                     candidate.Completion.TrySetException(Break(WorkerNdjsonFailureStage.Writer));
                 }
             }
+        }
+        catch (OutOfMemoryException outOfMemoryFailure)
+        {
+            throw FailFatally(outOfMemoryFailure);
         }
         catch
         {
@@ -255,7 +306,7 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         }
         finally
         {
-            var failure = GetBrokenFailureOrNull();
+            var failure = GetUnavailableFailureOrNull();
             if (failure is not null)
             {
                 while (_queue.Reader.TryRead(out var pending))
@@ -276,6 +327,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
                 ? WorkerProtocolMapper.Ready(sequence, _timeProvider.GetUtcNow())
                 : WorkerProtocolMapper.Map(candidate.ProcessingEvent, sequence, _timeProvider.GetUtcNow());
         }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
         catch
         {
             throw Break(WorkerNdjsonFailureStage.Mapping);
@@ -285,6 +340,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         try
         {
             json = WorkerProtocolCodec.Serialize(@event);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch (ArgumentException)
         {
@@ -302,6 +361,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
                 throw new InvalidOperationException();
             }
         }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
         catch
         {
             throw Break(WorkerNdjsonFailureStage.Validation);
@@ -314,6 +377,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
             json.CopyTo(frame, 0);
             frame[^1] = (byte)'\n';
         }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
         catch
         {
             throw Break(WorkerNdjsonFailureStage.Framing);
@@ -322,12 +389,16 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         try
         {
             await _stdout.WriteAsync(frame.AsMemory(), _lifetimeCancellation.Token).ConfigureAwait(false);
-            if (GetBrokenFailureOrNull() is { } writeFailure)
+            if (GetUnavailableFailureOrNull() is { } writeFailure)
             {
                 throw writeFailure;
             }
         }
         catch (WorkerNdjsonTransportException)
+        {
+            throw;
+        }
+        catch (OutOfMemoryException)
         {
             throw;
         }
@@ -339,12 +410,16 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         try
         {
             await _stdout.FlushAsync(_lifetimeCancellation.Token).ConfigureAwait(false);
-            if (GetBrokenFailureOrNull() is { } flushFailure)
+            if (GetUnavailableFailureOrNull() is { } flushFailure)
             {
                 throw flushFailure;
             }
         }
         catch (WorkerNdjsonTransportException)
+        {
+            throw;
+        }
+        catch (OutOfMemoryException)
         {
             throw;
         }
@@ -384,13 +459,29 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
 
     private async Task DisposeCoreAsync(bool terminalRequired, bool terminalAccepted)
     {
+        try
+        {
+            await DisposeCoreWithFatalFanoutAsync(terminalRequired, terminalAccepted).ConfigureAwait(false);
+        }
+        catch (OutOfMemoryException outOfMemoryFailure)
+        {
+            throw FailFatally(outOfMemoryFailure);
+        }
+    }
+
+    private async Task DisposeCoreWithFatalFanoutAsync(bool terminalRequired, bool terminalAccepted)
+    {
         WorkerNdjsonTransportException? failure = null;
-        if (terminalRequired && !terminalAccepted)
+        if (GetFatalOutOfMemoryOrNull() is null && terminalRequired && !terminalAccepted)
         {
             failure = Break(WorkerNdjsonFailureStage.Disposal);
             try
             {
                 _lifetimeCancellation.Cancel();
+            }
+            catch (OutOfMemoryException)
+            {
+                throw;
             }
             catch
             {
@@ -405,6 +496,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         try
         {
             await _writer.ConfigureAwait(false);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -435,6 +530,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
             await _stdout.DisposeAsync().ConfigureAwait(false);
             return null;
         }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
         catch
         {
             return Break(WorkerNdjsonFailureStage.Disposal);
@@ -451,6 +550,11 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
 
     private void ThrowIfUnavailable(bool requiresReady)
     {
+        if (_fatalOutOfMemory is not null)
+        {
+            throw _fatalOutOfMemory;
+        }
+
         if (_broken is not null)
         {
             throw _broken;
@@ -487,6 +591,8 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
 
         if (log)
         {
+            _outcomes.Add(WorkerProcessExitFact.OutputTransport());
+
             try
             {
                 _logger.LogWarning("worker-ndjson-output-failed stage={FailureStage}", stage);
@@ -499,11 +605,43 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         return failure;
     }
 
+    private OutOfMemoryException FailFatally(OutOfMemoryException failure)
+    {
+        lock (_stateGate)
+        {
+            if (_fatalOutOfMemory is not null)
+            {
+                return _fatalOutOfMemory;
+            }
+
+            _fatalOutOfMemory = failure;
+            _intakeClosed = true;
+            _queue.Writer.TryComplete(failure);
+            return failure;
+        }
+    }
+
     private Exception GetUnavailableFailure()
     {
         lock (_stateGate)
         {
-            return _broken is not null ? _broken : new WorkerNdjsonOutputClosedException();
+            return _fatalOutOfMemory ?? (Exception?)_broken ?? new WorkerNdjsonOutputClosedException();
+        }
+    }
+
+    private Exception? GetUnavailableFailureOrNull()
+    {
+        lock (_stateGate)
+        {
+            return _fatalOutOfMemory ?? (Exception?)_broken;
+        }
+    }
+
+    private OutOfMemoryException? GetFatalOutOfMemoryOrNull()
+    {
+        lock (_stateGate)
+        {
+            return _fatalOutOfMemory;
         }
     }
 

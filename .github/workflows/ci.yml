@@ -33,3 +33,21 @@ jobs:
 
       - name: Build Docker image
         run: docker build -f src/ImmichReverseGeo.Web/Dockerfile -t immich-reversegeo:test .
+
+  change23:
+    name: Change 23 focused tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run Change 23 focused tests
+        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --filter "TestCategory=Change23"

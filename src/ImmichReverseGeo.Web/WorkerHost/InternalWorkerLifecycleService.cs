@@ -2,6 +2,8 @@ using System;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
+using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -14,20 +16,24 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHostApplicationLifetime _applicationLifetime;
     private readonly ILogger<InternalWorkerLifecycleService> _logger;
+    private readonly WorkerProcessExitOutcomeAccumulator _outcomes;
 
     public InternalWorkerLifecycleService(
         IServiceScopeFactory scopeFactory,
         IHostApplicationLifetime applicationLifetime,
-        ILogger<InternalWorkerLifecycleService> logger)
+        ILogger<InternalWorkerLifecycleService> logger,
+        WorkerProcessExitOutcomeAccumulator outcomes)
     {
         _scopeFactory = scopeFactory;
         _applicationLifetime = applicationLifetime;
         _logger = logger;
+        _outcomes = outcomes;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         Exception? primaryFailure = null;
+        OutOfMemoryException? firstFatal = null;
         IAsyncDisposable? scopeDisposal = null;
 
         try
@@ -39,10 +45,16 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            _outcomes.Add(WorkerProcessExitFact.ShutdownCancelled());
+        }
+        catch (OutOfMemoryException exception)
+        {
+            firstFatal ??= exception;
         }
         catch (Exception exception)
         {
             primaryFailure = exception;
+            _outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
         }
         finally
         {
@@ -53,9 +65,14 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                     await scopeDisposal.DisposeAsync();
                 }
             }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatal ??= exception;
+            }
             catch
             {
                 primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
                 LogSafely("worker-cleanup-failed");
             }
             finally
@@ -64,12 +81,22 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                 {
                     _applicationLifetime.StopApplication();
                 }
+                catch (OutOfMemoryException exception)
+                {
+                    firstFatal ??= exception;
+                }
                 catch
                 {
                     primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                    _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
                     LogSafely("worker-cleanup-failed");
                 }
             }
+        }
+
+        if (firstFatal is not null)
+        {
+            ExceptionDispatchInfo.Capture(firstFatal).Throw();
         }
 
         if (primaryFailure is not null)
@@ -95,6 +122,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
 
             if (!availability.IsConfigured)
             {
+                _outcomes.Add(WorkerProcessExitFact.TransportInfrastructure());
                 await CompletePreRequestAsync(
                     preRequestFinality,
                     WorkerPreRequestOutcome.TransportNotConfigured(),
@@ -118,6 +146,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                     await ExecuteAcceptedAsync(services, accepted.Lease, stoppingToken);
                     break;
                 case InitialProcessingRunAcquisition.PreRequestEof:
+                    _outcomes.Add(WorkerProcessExitFact.InputInvalid());
                     await CompletePreRequestAsync(
                         preRequestFinality,
                         WorkerPreRequestOutcome.CleanEndOfInput(),
@@ -125,6 +154,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                         preRequestFinalityState);
                     break;
                 case InitialProcessingRunAcquisition.PreRequestFailure failure:
+                    _outcomes.Add(MapSafeFailure(failure.Failure));
                     await CompletePreRequestAsync(
                         preRequestFinality,
                         WorkerPreRequestOutcome.Failure(failure.Failure),
@@ -137,9 +167,15 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         }
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
+            _outcomes.Add(WorkerProcessExitFact.ShutdownCancelled());
         }
-        catch when (preRequestFinality is not null && !preRequestFinalityState.Started && !requestAccepted)
+        catch (OutOfMemoryException)
         {
+            throw;
+        }
+        catch (Exception) when (preRequestFinality is not null && !preRequestFinalityState.Started && !requestAccepted)
+        {
+            _outcomes.Add(MapPreRequestException(phase));
             await CompletePreRequestAsync(
                 preRequestFinality,
                 WorkerPreRequestOutcome.Failure(CreateFailure(phase)),
@@ -155,6 +191,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
     {
         var request = lease.Request;
         Exception? primaryFailure = null;
+        OutOfMemoryException? firstFatal = null;
         var finalityStarted = false;
         CancellationTokenSource? linkedCancellation = null;
         WorkerInputPumpFinality? inputFinality = null;
@@ -170,11 +207,26 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             lease.NotifyExecutionStarting();
             var result = await executor.ExecuteAsync(request, reporter, linkedCancellation.Token);
             finalityStarted = true;
-            await finality.CompleteAsync(request, result, CancellationToken.None);
+
+            var finalityOutcome = await CompleteAcceptedFinalityAsync(finality, request, result);
+            if (finalityOutcome is AcceptedRunFinalityOutcome.Completed)
+            {
+                _outcomes.Add(MapProcessingResult(result));
+            }
+            else
+            {
+                _outcomes.Add(WorkerProcessExitFact.ExecutionInfrastructure());
+                LogSafely("worker-accepted-finality-failed");
+            }
+        }
+        catch (OutOfMemoryException exception)
+        {
+            firstFatal ??= exception;
         }
         catch (Exception exception)
         {
             primaryFailure = exception;
+            _outcomes.Add(WorkerProcessExitFact.ExecutionInfrastructure());
 
             if (finality is not null
                 && !finalityStarted
@@ -189,8 +241,13 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                         WorkerSafeFailure.AcceptedInfrastructure(),
                         CancellationToken.None);
                 }
+                catch (OutOfMemoryException finalityFatal)
+                {
+                    firstFatal ??= finalityFatal;
+                }
                 catch
                 {
+                    _outcomes.Add(WorkerProcessExitFact.ExecutionInfrastructure());
                     LogSafely("worker-accepted-finality-failed");
                 }
             }
@@ -201,9 +258,14 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             {
                 inputFinality = await lease.SettleAsync(CancellationToken.None);
             }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatal ??= exception;
+            }
             catch
             {
                 primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
                 LogSafely("worker-cleanup-failed");
             }
 
@@ -211,9 +273,14 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             {
                 linkedCancellation?.Dispose();
             }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatal ??= exception;
+            }
             catch
             {
                 primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
                 LogSafely("worker-cleanup-failed");
             }
 
@@ -221,17 +288,93 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             {
                 await lease.DisposeAsync();
             }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatal ??= exception;
+            }
             catch
             {
                 primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
                 LogSafely("worker-cleanup-failed");
             }
         }
 
-        _ = inputFinality;
+        AddInputFinality(inputFinality);
+
+        if (firstFatal is not null)
+        {
+            ExceptionDispatchInfo.Capture(firstFatal).Throw();
+        }
+
         if (primaryFailure is not null)
         {
             ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+        }
+    }
+
+    private void AddInputFinality(WorkerInputPumpFinality? finality)
+    {
+        switch (finality)
+        {
+            case WorkerInputPumpFinality.InputFailureFinality inputFailure:
+                _outcomes.Add(MapSafeFailure(inputFailure.Failure));
+                break;
+            case WorkerInputPumpFinality.ReaderFailureFinality:
+                _outcomes.Add(WorkerProcessExitFact.InputInfrastructure());
+                break;
+        }
+    }
+
+    private static WorkerProcessExitFact MapProcessingResult(ProcessingRunResult result)
+    {
+        return result.Outcome switch
+        {
+            ProcessingRunOutcome.Completed => WorkerProcessExitFact.Completed(),
+            ProcessingRunOutcome.Cancelled => WorkerProcessExitFact.ShutdownCancelled(),
+            ProcessingRunOutcome.Failed => WorkerProcessExitFact.ExecutionFailure(),
+            _ => WorkerProcessExitFact.StartupInfrastructure()
+        };
+    }
+
+    private static WorkerProcessExitFact MapSafeFailure(WorkerSafeFailure failure)
+    {
+        return failure.Kind switch
+        {
+            WorkerSafeFailureKind.InputProtocol => WorkerProcessExitFact.InputInvalid(),
+            WorkerSafeFailureKind.Reader => WorkerProcessExitFact.InputInfrastructure(),
+            _ => WorkerProcessExitFact.TransportInfrastructure()
+        };
+    }
+
+    private static WorkerProcessExitFact MapPreRequestException(PreRequestPhase phase)
+    {
+        return phase switch
+        {
+            PreRequestPhase.Startup => WorkerProcessExitFact.StartupInfrastructure(),
+            PreRequestPhase.Readiness => WorkerProcessExitFact.TransportInfrastructure(),
+            PreRequestPhase.Acquisition => WorkerProcessExitFact.InputInfrastructure(),
+            _ => WorkerProcessExitFact.StartupInfrastructure()
+        };
+    }
+
+    private static async Task<AcceptedRunFinalityOutcome> CompleteAcceptedFinalityAsync(
+        IWorkerAcceptedRunFinality finality,
+        ProcessingRunRequest request,
+        ProcessingRunResult result)
+    {
+        try
+        {
+            await finality.CompleteAsync(request, result, CancellationToken.None);
+            return AcceptedRunFinalityOutcome.Completed;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return AcceptedRunFinalityOutcome.InfrastructureFailure;
         }
     }
 
@@ -278,6 +421,12 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
     private sealed class PreRequestFinalityState
     {
         public bool Started { get; set; }
+    }
+
+    private enum AcceptedRunFinalityOutcome
+    {
+        Completed,
+        InfrastructureFailure
     }
 
     private enum PreRequestPhase

@@ -1,5 +1,7 @@
 using System.IO;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.ApplicationRole;
+using ImmichReverseGeo.Web.WorkerHost;
 using PublicRole = ImmichReverseGeo.Core.ApplicationRole.PublicApplicationRole;
 
 namespace ImmichReverseGeo.Tests.ApplicationRole;
@@ -8,6 +10,7 @@ namespace ImmichReverseGeo.Tests.ApplicationRole;
 public sealed class ApplicationRoleStartupTests
 {
     [TestMethod]
+    [TestCategory("Change23")]
     public void DefaultOperation_InvalidSelection_WritesSafeDiagnosticSetsExitTwoOnceAndDoesNotEnterWebContinuation()
     {
         using var errorWriter = new StringWriter();
@@ -23,6 +26,31 @@ public sealed class ApplicationRoleStartupTests
         Assert.AreEqual(
             $"Application role selection failed: invalid-internal-worker-syntax. Supported private syntax: --internal-worker.{Environment.NewLine}",
             errorWriter.ToString());
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void InvalidSelection_OrdinaryDiagnosticPrecedesExactlyOneTopLevelFinalSummary()
+    {
+        using var errorWriter = new StringWriter();
+        var exitCodes = new List<int>();
+
+        ApplicationRoleStartup.Begin(
+            ["--internal-worker=RAW_ARGUMENT_SENTINEL"],
+            errorWriter,
+            ThrowIfWebContinuationIsReached,
+            ThrowIfWebContinuationIsReached,
+            _ => exitCodes.Add(InternalWorkerProcess.CompleteInvalidInvocation(errorWriter)));
+
+        CollectionAssert.AreEqual(new[] { 2 }, exitCodes, "invalid-boundary-exit-code");
+        var stderr = errorWriter.ToString();
+        Assert.IsTrue(stderr.StartsWith("Application role selection failed:", StringComparison.Ordinal), "invalid-role-log-first");
+        Assert.AreEqual(1, stderr.Split(WorkerProcessExitDiagnostic.FinalSummaryMarker, StringSplitOptions.None).Length - 1, "invalid-summary-once");
+        Assert.IsTrue(stderr.EndsWith(
+            WorkerProcessExitFact.InputInvalid().Diagnostic.FormatFinalSummary() + Environment.NewLine,
+            StringComparison.Ordinal),
+            "invalid-summary-last");
+        Assert.IsFalse(stderr.Contains("RAW_ARGUMENT_SENTINEL", StringComparison.Ordinal), "invalid-summary-does-not-echo-raw-argument");
     }
 
     [TestMethod]

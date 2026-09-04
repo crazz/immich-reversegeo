@@ -20,7 +20,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            using var host = WorkerHostFactory.Build(CreateContext(fixtureRoot));
+            using var host = BuildWorkerHost(CreateContext(fixtureRoot));
             var hostedServices = host.Services.GetServices<IHostedService>().ToArray();
             var forbiddenTypes = new[]
             {
@@ -69,13 +69,15 @@ public sealed class InternalWorkerHostTests
     {
         var registrationFactory = new CountingOutputStreamFactory();
         var registrationServices = new ServiceCollection();
-        registrationServices.AddInternalWorkerHostServices(registrationFactory);
+        registrationServices.AddInternalWorkerHostServices(
+            registrationFactory,
+            new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
         Assert.AreEqual(0, registrationFactory.OpenCount, "worker-ndjson-registration-lazy");
 
         var fixtureRoot = CreateFixtureRoot();
         try
         {
-            var descriptors = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot)).Services;
+            var descriptors = CreateWorkerBuilder(CreateContext(fixtureRoot)).Services;
             AssertDescriptor(descriptors, typeof(ImmichReverseGeo.Web.Services.ProcessingInfrastructureLookup), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(ImmichReverseGeo.Web.Services.IProcessingInfrastructureLookup), ServiceLifetime.Singleton);
             AssertDescriptor(descriptors, typeof(ImmichReverseGeo.Web.Services.ProcessingRunExecutor), ServiceLifetime.Singleton);
@@ -101,11 +103,49 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
+    public void HostRegistration_UsesTheExactPreconstructedOutcomeAccumulator()
+    {
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddInternalWorkerHostServices(new CountingOutputStreamFactory(), outcomes);
+
+        using var host = builder.Build();
+
+        Assert.AreSame(outcomes, host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>(), "worker-prehost-accumulator-reference");
+        Assert.AreSame(
+            host.Services.GetRequiredService<InternalWorkerLifecycleService>(),
+            host.Services.GetServices<IHostedService>().Single(),
+            "worker-lifecycle-owner-alias-reference");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_MismatchedAccumulatorSentinelReturnsInfrastructureWithoutStartingHost()
+    {
+        var registered = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        var supplied = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        using var services = new ServiceCollection()
+            .AddSingleton(registered)
+            .BuildServiceProvider();
+        var host = new FaultingHost(services, new AssertFailedException("MISMATCH_MUST_NOT_START"), new InvalidOperationException("cleanup"));
+
+        var exitCode = await WorkerHostFactory.RunHostAsync(host, supplied);
+
+        Assert.AreEqual(5, exitCode, "worker-mismatched-accumulator-code");
+        Assert.AreEqual(5, supplied.Fact.ExitCode, "worker-mismatched-accumulator-fact");
+        Assert.AreEqual(0, host.StartAsyncCount, "worker-mismatched-accumulator-does-not-start");
+        Assert.AreEqual(1, host.DisposeAsyncCount, "worker-mismatched-accumulator-disposes-once");
+    }
+
+    [TestMethod]
     public async Task StdinRegistrationBuildAvailabilityAndAliasResolutionAreSideEffectFree()
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddInternalWorkerHostServices(new CountingOutputStreamFactory());
+        services.AddInternalWorkerHostServices(
+            new CountingOutputStreamFactory(),
+            new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
         var inputFactory = new CountingNeverOpenInputFactory();
         services.RemoveAll<IWorkerStandardInputStreamFactory>();
         services.AddSingleton<IWorkerStandardInputStreamFactory>(inputFactory);
@@ -135,7 +175,7 @@ public sealed class InternalWorkerHostTests
         var inputFactory = new CountingNeverOpenInputFactory();
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer([]));
             ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, new RecordingPreRequestFinality([]));
             builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
@@ -169,7 +209,7 @@ public sealed class InternalWorkerHostTests
         var fixtureRoot = CreateFixtureRoot();
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new UnconfiguredTransport());
             AssertDescriptor(builder.Services, typeof(IWorkerNdjsonOutputStreamFactory), ServiceLifetime.Singleton);
             AssertDescriptor(builder.Services, typeof(WorkerNdjsonEmitter), ServiceLifetime.Singleton);
@@ -209,7 +249,7 @@ public sealed class InternalWorkerHostTests
         var fixtureRoot = CreateFixtureRoot();
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new UnconfiguredTransport());
             var stdoutFactory = new ThrowingCountingOutputStreamFactory();
             builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
@@ -254,8 +294,8 @@ public sealed class InternalWorkerHostTests
         try
         {
             var context = CreateContext(fixtureRoot);
-            var descriptors = WorkerHostFactory.CreateBuilder(context).Services;
-            using var host = WorkerHostFactory.Build(context);
+            var descriptors = CreateWorkerBuilder(context).Services;
+            using var host = BuildWorkerHost(context);
             foreach (var serviceType in new[]
             {
                 typeof(ImmichReverseGeo.Web.Services.IProcessingRunExecutor),
@@ -279,7 +319,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            using var host = WorkerHostFactory.Build(CreateContext(fixtureRoot));
+            using var host = BuildWorkerHost(CreateContext(fixtureRoot));
             var consoleOptions = host.Services
                 .GetRequiredService<Microsoft.Extensions.Options.IOptions<Microsoft.Extensions.Logging.Console.ConsoleLoggerOptions>>()
                 .Value;
@@ -309,6 +349,25 @@ public sealed class InternalWorkerHostTests
         Assert.AreSame(request, accepted.Lease.Request, "worker-accepted-request-reference");
         Assert.AreSame(failure, preRequestFailure.Failure, "worker-acquisition-failure-reference");
         Assert.IsInstanceOfType<InitialProcessingRunAcquisition.PreRequestEof>(InitialProcessingRunAcquisition.EndOfInput(), "worker-eof-row");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void InputFailureMatrix_PreservesEveryExactSafeFailureReference()
+    {
+        foreach (var code in Enum.GetValues<ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolFailureCode>())
+        {
+            var failure = WorkerSafeFailure.Input(code);
+            var acquisition = InitialProcessingRunAcquisition.Fail(failure);
+            var inputFinality = WorkerInputPumpFinality.InputFailure(failure);
+
+            Assert.AreSame(failure, acquisition.Failure, $"worker-input-acquisition-reference-{code}");
+            Assert.AreSame(
+                failure,
+                ((WorkerInputPumpFinality.InputFailureFinality)inputFinality).Failure,
+                $"worker-input-finality-reference-{code}");
+            Assert.AreEqual(WorkerSafeFailureKind.InputProtocol, failure.Kind, $"worker-input-kind-{code}");
+        }
     }
 
     [TestMethod]
@@ -377,7 +436,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer([]));
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
             ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, new RecordingReadiness([], Task.CompletedTask));
@@ -447,7 +506,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, initializer);
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
             ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, readiness);
@@ -533,7 +592,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer(calls));
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
             ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, new ThrowingReadiness(calls));
@@ -613,7 +672,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer(calls));
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
             ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, new RecordingReadiness(calls, Task.CompletedTask));
@@ -722,7 +781,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             builder.Services.RemoveAll<TimeProvider>();
             builder.Services.AddSingleton<TimeProvider>(clock);
             builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
@@ -892,6 +951,459 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow("startup", 5, "startup")]
+    [DataRow("readiness", 5, "transport")]
+    [DataRow("ready-output", 6, "output")]
+    [DataRow("clean-eof", 2, "input")]
+    [DataRow("partial-request", 2, "input")]
+    [DataRow("invalid-request", 2, "input")]
+    [DataRow("stdin-io", 5, "input")]
+    [DataRow("acquisition", 5, "input")]
+    public async Task PreRequestOutcomes_ReturnExactCodeAndSafePhaseWithoutRunTerminal(
+        string scenario,
+        int expectedExitCode,
+        string expectedPhase)
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        using var errorWriter = new StringWriter();
+        var finality = new RecordingPreRequestFinality([]);
+
+        try
+        {
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerStartupInitializer>(
+                builder.Services,
+                scenario == "startup"
+                    ? new ThrowingInitializer([])
+                    : new CompletedInitializer([]));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
+            var readiness = new RecordingReadiness(
+                [],
+                scenario == "readiness"
+                    ? Task.FromException(new InvalidOperationException("generic-readiness-failure"))
+                    : Task.CompletedTask);
+            if (scenario == "ready-output")
+            {
+                builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+                builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(new FaultingOutputStreamFactory("flush"));
+            }
+            else
+            {
+                ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, readiness);
+            }
+
+            IInitialProcessingRunAcquirer acquirer = scenario switch
+            {
+                "clean-eof" => new StaticAcquirer(InitialProcessingRunAcquisition.EndOfInput()),
+                "partial-request" => new StaticAcquirer(InitialProcessingRunAcquisition.Fail(WorkerSafeFailure.Input(ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolFailureCode.InvalidFraming))),
+                "invalid-request" => new StaticAcquirer(InitialProcessingRunAcquisition.Fail(WorkerSafeFailure.Input(ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolFailureCode.MalformedJson))),
+                "stdin-io" => new StaticAcquirer(InitialProcessingRunAcquisition.Fail(WorkerSafeFailure.Reader())),
+                "acquisition" => new ThrowingAcquirer([], readiness.Completed),
+                _ => new StaticAcquirer(InitialProcessingRunAcquisition.EndOfInput())
+            };
+            ReplaceSingleton<IInitialProcessingRunAcquirer>(builder.Services, acquirer);
+            ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, finality);
+
+            var exitCode = await RunToBoundaryAsync(builder.Build(), errorWriter);
+
+            Assert.AreEqual(expectedExitCode, exitCode, $"worker-pre-request-code-{scenario}");
+            Assert.AreEqual(1, finality.Outcomes.Count, $"worker-pre-request-finality-{scenario}");
+            Assert.AreEqual(0, finality.Outcomes.Count(outcome => outcome.Category.Contains("terminal", StringComparison.Ordinal)), $"worker-pre-request-no-terminal-{scenario}");
+            Assert.AreEqual(1, errorWriter.ToString().Split(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitDiagnostic.FinalSummaryMarker, StringSplitOptions.None).Length - 1, $"worker-pre-request-summary-once-{scenario}");
+            Assert.IsTrue(errorWriter.ToString().Contains($"phase={expectedPhase}", StringComparison.Ordinal), $"worker-pre-request-summary-phase-{scenario}");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed, 0, "")]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Failed, 4, "outcome=executor-failure phase=execution")]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Cancelled, 130, "outcome=cancelled phase=shutdown")]
+    public async Task AcceptedResults_ReturnAfterOneTerminalFinalityWithExactSummary(
+        ImmichReverseGeo.Core.Models.ProcessingRunOutcome outcome,
+        int expectedExitCode,
+        string expectedSummary)
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        using var errorWriter = new StringWriter();
+        var lease = new AcceptedLease(CreateRequest());
+        var finality = new RecordingAcceptedFinality();
+        var executor = new RecordingExecutor((request, _, _) => Task.FromResult(CreateResult(request, outcome)));
+
+        try
+        {
+            var exitCode = await RunToBoundaryAsync(
+                BuildAcceptedHost(fixtureRoot, lease, executor, finality),
+                errorWriter);
+
+            Assert.AreEqual(expectedExitCode, exitCode, $"worker-accepted-code-{outcome}");
+            Assert.AreEqual(1, executor.CallCount, $"worker-accepted-executor-once-{outcome}");
+            Assert.AreEqual(1, finality.Completed.Count, $"worker-accepted-terminal-finality-once-{outcome}");
+            Assert.AreEqual(0, finality.Failures.Count, $"worker-accepted-no-synthetic-terminal-{outcome}");
+            Assert.AreSame(lease.Request, executor.Request, $"worker-accepted-executor-request-reference-{outcome}");
+            Assert.AreSame(lease.Request, finality.Completed[0].Request, $"worker-accepted-finality-request-reference-{outcome}");
+            Assert.AreSame(executor.Result, finality.Completed[0].Result, $"worker-accepted-finality-result-reference-{outcome}");
+            if (expectedExitCode == 0)
+            {
+                Assert.AreEqual(string.Empty, errorWriter.ToString(), "worker-completed-no-nonzero-summary");
+            }
+            else
+            {
+                Assert.IsTrue(errorWriter.ToString().Contains(expectedSummary, StringComparison.Ordinal), $"worker-accepted-summary-{outcome}");
+            }
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task AdjudicatedBusyExecutor_EmitsExistingFailedTerminalWithoutDomainWork()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var outputFactory = new CapturingOutputStreamFactory();
+        var lease = new AcceptedLease(CreateRequest());
+        var finality = new RecordingAcceptedFinality();
+
+        try
+        {
+            var builder = CreateAcceptedBuilder(
+                fixtureRoot,
+                lease,
+                new RecordingExecutor((request, _, _) => Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed))),
+                finality);
+            builder.Services.RemoveAll<TimeProvider>();
+            builder.Services.AddSingleton<TimeProvider>(new FixedTimeProvider(DateTimeOffset.UnixEpoch));
+            builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(outputFactory);
+            builder.Services.RemoveAll<IWorkerReadinessPublisher>();
+            builder.Services.AddSingleton<IWorkerReadinessPublisher>(sp => sp.GetRequiredService<WorkerNdjsonEmitter>());
+            builder.Services.RemoveAll<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
+            builder.Services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(sp =>
+                sp.GetRequiredService<WorkerNdjsonProcessingEventReporter>());
+            builder.Services.RemoveAll<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>();
+            builder.Services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(sp => new AdjudicatedBusyExecutor(
+                sp.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>()));
+            var host = builder.Build();
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.AreEqual(3, outcomes.Fact.ExitCode, "worker-busy-adjudicated-exit-code");
+            Assert.AreEqual(1, lease.NotifyExecutionStartingCount, "worker-busy-execution-entry");
+            Assert.AreEqual(1, finality.Completed.Count, "worker-busy-terminal-notification-once");
+            var frames = System.Text.Encoding.UTF8.GetString(outputFactory.Output.ToArray())
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+            Assert.AreEqual(3, frames.Length, "worker-busy-ready-started-terminal-count");
+            Assert.IsTrue(frames[1].Contains("\"type\":\"run-started\"", StringComparison.Ordinal), "worker-busy-started-before-failure");
+            Assert.IsTrue(frames[2].Contains("\"category\":\"terminal\"", StringComparison.Ordinal), "worker-busy-existing-terminal");
+            Assert.IsTrue(frames[2].Contains("worker advisory lock is busy", StringComparison.Ordinal), "worker-busy-safe-detail");
+            host.Dispose();
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task AcceptedReporterTerminalFlushFailure_OverridesPostAcceptanceInputWithoutSyntheticTerminal()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var outputFactory = new TerminalFlushFailingOutputStreamFactory();
+        var lease = new AcceptedLease(
+            CreateRequest(),
+            finality: WorkerInputPumpFinality.InputFailure(WorkerSafeFailure.Input(ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolFailureCode.InvalidSequence)));
+        var finality = new RecordingAcceptedFinality();
+
+        try
+        {
+            var builder = CreateAcceptedBuilder(
+                fixtureRoot,
+                lease,
+                new RecordingExecutor((request, _, _) => Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed))),
+                finality);
+            builder.Services.RemoveAll<TimeProvider>();
+            builder.Services.AddSingleton<TimeProvider>(new FixedTimeProvider(DateTimeOffset.UnixEpoch));
+            builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(outputFactory);
+            builder.Services.RemoveAll<IWorkerReadinessPublisher>();
+            builder.Services.AddSingleton<IWorkerReadinessPublisher>(sp => sp.GetRequiredService<WorkerNdjsonEmitter>());
+            builder.Services.RemoveAll<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
+            builder.Services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(sp =>
+                sp.GetRequiredService<WorkerNdjsonProcessingEventReporter>());
+            builder.Services.RemoveAll<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>();
+            builder.Services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(new TerminalFinishingExecutor());
+            var host = builder.Build();
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.AreEqual(6, outcomes.Fact.ExitCode, "worker-terminal-flush-output-precedence");
+            Assert.AreEqual(1, finality.Failures.Count, "worker-terminal-flush-failure-notification-once");
+            Assert.AreEqual(0, finality.Completed.Count, "worker-terminal-flush-no-completion-notification");
+            Assert.AreEqual(4, outputFactory.Output.FlushCount, "worker-terminal-flush-one-terminal-attempt");
+            Assert.AreEqual(4, outputFactory.Output.ToArray().Count(value => value == (byte)'\n'), "worker-terminal-flush-no-synthetic-terminal");
+            Assert.ThrowsExactly<WorkerNdjsonTransportException>(host.Dispose, "worker-terminal-flush-emitter-disposal");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task ShutdownBeforeAcceptance_ReturnsCancelledWithoutTerminal()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var readiness = new BlockingReadiness([]);
+        var finality = new RecordingPreRequestFinality([]);
+
+        try
+        {
+            var host = BuildConfiguredHost(
+                fixtureRoot,
+                new CompletedInitializer([]),
+                readiness,
+                new StaticAcquirer(InitialProcessingRunAcquisition.EndOfInput()),
+                finality);
+            var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+            var run = WorkerHostFactory.RunHostAsync(host);
+            await readiness.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            lifetime.StopApplication();
+
+            var exitCode = await run.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(130, exitCode, "worker-shutdown-before-request-code");
+            Assert.AreEqual(0, finality.Outcomes.Count, "worker-shutdown-before-request-no-terminal");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task ShutdownDuringAcceptedRun_AttemptsCancelledTerminalAndReturns130()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var lease = new AcceptedLease(CreateRequest());
+        var executor = new CancellationResultExecutor();
+        var finality = new RecordingAcceptedFinality();
+
+        try
+        {
+            var host = BuildAcceptedHost(fixtureRoot, lease, executor, finality);
+            var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+            var run = WorkerHostFactory.RunHostAsync(host);
+            await executor.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            lifetime.StopApplication();
+
+            var exitCode = await run.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(130, exitCode, "worker-shutdown-during-request-code");
+            Assert.AreEqual(1, finality.Completed.Count, "worker-shutdown-during-request-terminal-once");
+            Assert.AreEqual(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Cancelled, finality.Completed[0].Result.Outcome, "worker-shutdown-during-request-cancelled-terminal");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task ShutdownAfterTerminalStarts_DoesNotRetroactivelyReplaceCompletion()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var lease = new AcceptedLease(CreateRequest());
+        var finality = new GatedAcceptedFinality();
+        var executor = new RecordingExecutor((request, _, _) => Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed)));
+
+        try
+        {
+            var host = BuildAcceptedHost(fixtureRoot, lease, executor, finality);
+            var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+            var run = WorkerHostFactory.RunHostAsync(host);
+            await finality.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            lifetime.StopApplication();
+            finality.Release();
+
+            var exitCode = await run.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(0, exitCode, "worker-shutdown-after-terminal-code");
+            Assert.AreEqual(1, finality.CompleteCount, "worker-shutdown-after-terminal-once");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed, "neutral", 0)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Failed, "neutral", 4)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Cancelled, "neutral", 130)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed, "input", 2)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Failed, "input", 2)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Cancelled, "input", 2)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed, "reader", 5)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Failed, "reader", 5)]
+    [DataRow(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Cancelled, "reader", 5)]
+    public async Task AcceptedResultAndPostAcceptanceInputFinality_ShareAccumulator(
+        ImmichReverseGeo.Core.Models.ProcessingRunOutcome runOutcome,
+        string inputOutcome,
+        int expectedExitCode)
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var inputFinality = inputOutcome switch
+        {
+            "input" => WorkerInputPumpFinality.InputFailure(WorkerSafeFailure.Input(ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolFailureCode.InvalidSequence)),
+            "reader" => WorkerInputPumpFinality.ReaderFailure(),
+            _ => WorkerInputPumpFinality.ExpectedShutdown()
+        };
+        var lease = new AcceptedLease(CreateRequest(), finality: inputFinality);
+        var executor = new RecordingExecutor((request, _, _) => Task.FromResult(CreateResult(request, runOutcome)));
+        var finality = new RecordingAcceptedFinality();
+
+        try
+        {
+            using var host = BuildAcceptedHost(fixtureRoot, lease, executor, finality);
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.AreEqual(expectedExitCode, outcomes.Fact.ExitCode, $"worker-accepted-shared-outcome-{runOutcome}-{inputOutcome}");
+            Assert.AreEqual(1, lease.SettleCount, "worker-accepted-input-finality-once");
+            Assert.AreEqual(1, finality.Completed.Count, "worker-accepted-input-terminal-once");
+            Assert.AreEqual(0, finality.Failures.Count, "worker-accepted-input-no-replacement-failure-terminal");
+            Assert.AreSame(lease.Request, finality.Completed[0].Request, "worker-accepted-input-request-reference");
+            Assert.AreSame(executor.Result, finality.Completed[0].Result, "worker-accepted-input-result-reference");
+            Assert.AreEqual(runOutcome, finality.Completed[0].Result.Outcome, "worker-accepted-input-terminal-outcome-preserved");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task GenericExecutorTypedTransportExceptionReturnsInfrastructureFive()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var lease = new AcceptedLease(CreateRequest());
+        var finality = new RecordingAcceptedFinality();
+        var executor = new RecordingExecutor((_, _, _) => throw new WorkerNdjsonTransportException(WorkerNdjsonFailureStage.Write));
+
+        try
+        {
+            using var host = BuildAcceptedHost(fixtureRoot, lease, executor, finality);
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+            await host.StartAsync();
+            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.AreEqual(5, outcomes.Fact.ExitCode, "worker-generic-executor-typed-transport-infrastructure");
+            Assert.AreEqual(1, finality.Failures.Count, "worker-generic-executor-failure-finality-once");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task GenericAcceptedFinalityTransportException_FromCompleteOrFailReturnsInfrastructureFive(
+        bool completionHook)
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var lease = new AcceptedLease(CreateRequest());
+        var finality = new TransportThrowingAcceptedFinality(completionHook);
+        var executor = new RecordingExecutor((request, _, _) => completionHook
+            ? Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed))
+            : throw new InvalidOperationException("executor-failure-before-generic-fail-hook"));
+
+        try
+        {
+            using var errorWriter = new StringWriter();
+            var exitCode = await RunToBoundaryAsync(
+                BuildAcceptedHost(fixtureRoot, lease, executor, finality),
+                errorWriter);
+
+            Assert.AreEqual(5, exitCode, "worker-generic-finality-exception-infrastructure-code");
+            Assert.AreEqual(completionHook ? 1 : 0, finality.CompleteCount, "worker-generic-complete-hook-count");
+            Assert.AreEqual(completionHook ? 0 : 1, finality.FailCount, "worker-generic-fail-hook-count");
+            Assert.AreEqual(
+                "worker-exit-summary outcome=infrastructure-failure phase=execution message=worker infrastructure failed" + Environment.NewLine,
+                errorWriter.ToString(),
+                "worker-generic-finality-exception-summary");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow("write")]
+    [DataRow("partial-write")]
+    [DataRow("flush")]
+    [DataRow("broken-pipe")]
+    public async Task InjectedStdoutFailure_ReturnsSixWithoutRetryOrTerminal(string failureMode)
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        using var errorWriter = new StringWriter();
+        var outputFactory = new FaultingOutputStreamFactory(failureMode);
+
+        try
+        {
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer([]));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
+            builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(outputFactory);
+            builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerStandardInputStreamFactory>(new EmptyInputFactory());
+
+            var exitCode = await RunToBoundaryAsync(builder.Build(), errorWriter);
+
+            Assert.AreEqual(6, exitCode, $"worker-stdout-code-{failureMode}");
+            Assert.AreEqual(1, outputFactory.OpenCount, $"worker-stdout-open-once-{failureMode}");
+            Assert.AreEqual(1, outputFactory.Output.WriteCount, $"worker-stdout-write-once-{failureMode}");
+            CollectionAssert.AreEqual(
+                failureMode == "flush" ? new[] { "open", "write", "flush" } : new[] { "open", "write" },
+                outputFactory.Ledger,
+                $"worker-stdout-exact-ledger-{failureMode}");
+            Assert.AreEqual(
+                failureMode == "flush" ? 1 : 0,
+                outputFactory.Output.ToArray().Count(value => value == (byte)'\n'),
+                $"worker-stdout-no-synthetic-terminal-{failureMode}");
+            Assert.AreEqual(
+                "worker-exit-summary outcome=output-transport-failure phase=output message=worker output transport failed" + Environment.NewLine,
+                errorWriter.ToString(),
+                $"worker-stdout-summary-{failureMode}");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
     public async Task CompletionFinalityFault_DoesNotRetryOrInvokeFailureFinality()
     {
         var fixtureRoot = CreateFixtureRoot();
@@ -1022,10 +1534,12 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
     public async Task Runner_DisposesRealHostProviderOwnedAsyncResource()
     {
         var builder = Host.CreateApplicationBuilder();
         builder.Services.AddSingleton<AsyncDisposeSentinel>();
+        builder.Services.AddSingleton<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
         using var host = builder.Build();
         var sentinel = host.Services.GetRequiredService<AsyncDisposeSentinel>();
 
@@ -1041,6 +1555,223 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_ReturnsOnlyAfterProviderCleanupCompletes()
+    {
+        var builder = Host.CreateApplicationBuilder();
+        builder.Services.AddSingleton<GatedAsyncDisposeSentinel>();
+        builder.Services.AddSingleton<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+        using var host = builder.Build();
+        var sentinel = host.Services.GetRequiredService<GatedAsyncDisposeSentinel>();
+        var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+        var applicationStarted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        lifetime.ApplicationStarted.Register(() => applicationStarted.TrySetResult());
+
+        var run = WorkerHostFactory.RunHostAsync(host);
+        await applicationStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        lifetime.StopApplication();
+        await sentinel.DisposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.IsFalse(run.IsCompleted, "worker-result-waits-for-provider-cleanup");
+        sentinel.Release();
+
+        var exitCode = await run.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.AreEqual(0, exitCode, "worker-cleanup-completed-exit-code");
+        Assert.IsTrue(sentinel.Disposed, "worker-provider-cleanup-completed-before-return");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow(false, 5)]
+    [DataRow(true, 5)]
+    public async Task Runner_GenericLateDisposalFaultOverridesLowerExecutorOutcomeAsInfrastructure(
+        bool outputFault,
+        int expectedExitCode)
+    {
+        var lifetime = new ControllableApplicationLifetime();
+        lifetime.StopApplication();
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        outcomes.Add(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitFact.ExecutionFailure());
+        using var services = new ServiceCollection()
+            .AddSingleton<IHostApplicationLifetime>(lifetime)
+            .AddSingleton(outcomes)
+            .BuildServiceProvider();
+        var disposalFailure = outputFault
+            ? new WorkerNdjsonTransportException(WorkerNdjsonFailureStage.Disposal)
+            : new InvalidOperationException("LATE_DISPOSAL_SECRET");
+        var host = new FaultingHost(services, null, disposalFailure);
+
+        var exitCode = await WorkerHostFactory.RunHostAsync(host);
+
+        Assert.AreEqual(expectedExitCode, exitCode, "worker-late-disposal-precedence");
+        Assert.AreEqual(1, host.DisposeAsyncCount, "worker-late-disposal-once");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_LateOutputDisposalAfterFlushedTerminalReturnsSixAndPreservesTerminal()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var ledger = new List<string>();
+        var output = new LateDisposalFaultStream(ledger);
+        var lease = new AcceptedLease(CreateRequest(), ledger: ledger);
+        var finality = new RecordingAcceptedFinality(ledger);
+        using var errorWriter = new LedgerTextWriter(ledger);
+
+        try
+        {
+            var builder = CreateAcceptedBuilder(
+                fixtureRoot,
+                lease,
+                new TerminalFinishingExecutor(),
+                finality);
+            builder.Services.RemoveAll<TimeProvider>();
+            builder.Services.AddSingleton<TimeProvider>(new FixedTimeProvider(DateTimeOffset.UnixEpoch));
+            builder.Services.RemoveAll<WorkerNdjsonEmitter>();
+            builder.Services.AddSingleton(sp => new WorkerNdjsonEmitter(
+                output,
+                WorkerNdjsonOutputStreamOwnership.Owned,
+                sp.GetRequiredService<TimeProvider>(),
+                NullLogger<WorkerNdjsonEmitter>.Instance,
+                sp.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>()));
+            builder.Services.RemoveAll<IWorkerReadinessPublisher>();
+            builder.Services.AddSingleton<IWorkerReadinessPublisher>(sp => sp.GetRequiredService<WorkerNdjsonEmitter>());
+            builder.Services.RemoveAll<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
+            builder.Services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(sp =>
+                new WorkerNdjsonProcessingEventReporter(sp.GetRequiredService<WorkerNdjsonEmitter>()));
+            var host = builder.Build();
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+
+            var exitCode = await RunToBoundaryAsync(host, errorWriter);
+            var frames = System.Text.Encoding.UTF8.GetString(output.ToArray())
+                .Split('\n', StringSplitOptions.RemoveEmptyEntries);
+
+            Assert.AreEqual(6, exitCode, "worker-late-output-after-terminal-code");
+            Assert.AreEqual(4, frames.Length, "worker-late-output-ready-started-eligibility-terminal");
+            Assert.AreEqual(
+                "{\"protocol\":\"immich-reversegeo.worker\",\"version\":1,\"direction\":\"worker-to-controller\",\"category\":\"terminal\",\"type\":\"completed\",\"sequence\":4,\"timestampUtc\":\"1970-01-01T00:00:00.0000000Z\",\"runId\":\"6ed5cbcf-068d-40d5-b36a-badfcdfb0e76\",\"payload\":{\"trigger\":\"run-once\",\"startedAtUtc\":\"1970-01-01T00:00:00.0000000Z\",\"endedAtUtc\":\"1970-01-01T00:00:00.0000000Z\",\"processedCount\":0,\"updatedCount\":0,\"skippedCount\":0,\"failedCount\":0,\"failureMessage\":null}}",
+                frames[^1],
+                "worker-late-output-terminal-full-frame");
+            using var terminal = System.Text.Json.JsonDocument.Parse(frames[^1]);
+            var terminalRoot = terminal.RootElement;
+            Assert.AreEqual("terminal", terminalRoot.GetProperty("category").GetString(), "worker-late-output-terminal-category");
+            Assert.AreEqual("completed", terminalRoot.GetProperty("type").GetString(), "worker-late-output-terminal-type");
+            Assert.AreEqual(lease.Request.RunId.ToString(), terminalRoot.GetProperty("runId").GetString(), "worker-late-output-terminal-run-id");
+            Assert.AreEqual(1, finality.Completed.Count, "worker-late-output-finality-once");
+            Assert.AreEqual(1, output.DisposeCount, "worker-late-output-real-emitter-disposal-once");
+            Assert.AreEqual("output", outcomes.Fact.Diagnostic.Phase, "worker-late-output-stage");
+            CollectionAssert.AreEqual(
+                new[] { "flush-1", "execution-starting", "flush-2", "flush-3", "flush-4", "complete", "settle", "lease-dispose", "stdout-dispose", "stderr-summary", "stderr-flush" },
+                ledger,
+                "worker-late-output-cleanup-and-top-level-summary-ledger: " + string.Join(",", ledger));
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_StderrFailureIsBestEffortOnceAndDoesNotChangeClassification()
+    {
+        var lifetime = new ControllableApplicationLifetime();
+        lifetime.StopApplication();
+        using var services = new ServiceCollection()
+            .AddSingleton<IHostApplicationLifetime>(lifetime)
+            .AddSingleton<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>()
+            .BuildServiceProvider();
+        var host = new FaultingHost(services, new InvalidOperationException("START_SECRET"), new InvalidOperationException("DISPOSE_SECRET"));
+        var errorWriter = new ThrowingCountingTextWriter();
+
+        var exitCode = await RunToBoundaryAsync(host, errorWriter);
+
+        Assert.AreEqual(5, exitCode, "worker-stderr-failure-keeps-code");
+        Assert.AreEqual(1, errorWriter.WriteLineCount, "worker-stderr-failure-no-retry");
+        Assert.AreEqual(0, errorWriter.FlushCount, "worker-stderr-failure-stops-after-write");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_FinalSummaryIsExactlyOnceAfterEarlierLogsAndContainsNoRawData()
+    {
+        var forbiddenSentinels = new[]
+        {
+            "--raw-argument-sentinel",
+            "stdin-request-bytes-sentinel",
+            "protocol-payload-sentinel",
+            "configuration-value-sentinel",
+            "Password=CREDENTIAL_SENTINEL",
+            "Server=CONNECTION_STRING_SENTINEL",
+            "SELECT SQL_SENTINEL",
+            "exception-message-sentinel",
+            "stack-trace-sentinel"
+        };
+        var lifetime = new ControllableApplicationLifetime();
+        lifetime.StopApplication();
+        using var services = new ServiceCollection()
+            .AddSingleton<IHostApplicationLifetime>(lifetime)
+            .AddSingleton<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>()
+            .BuildServiceProvider();
+        var host = new FaultingHost(
+            services,
+            new InvalidOperationException(string.Join('|', forbiddenSentinels[..5])),
+            new InvalidOperationException(string.Join('|', forbiddenSentinels[5..])));
+        using var errorWriter = new StringWriter();
+        errorWriter.WriteLine("earlier-safe-log");
+
+        var exitCode = await RunToBoundaryAsync(host, errorWriter);
+        errorWriter.Write("writer-still-alive");
+        var stderr = errorWriter.ToString();
+
+        Assert.AreEqual(5, exitCode, "worker-safe-summary-code");
+        Assert.IsTrue(stderr.StartsWith("earlier-safe-log" + Environment.NewLine, StringComparison.Ordinal), "worker-summary-after-earlier-log");
+        Assert.AreEqual(1, stderr.Split(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitDiagnostic.FinalSummaryMarker, StringSplitOptions.None).Length - 1, "worker-summary-marker-once");
+        Assert.IsTrue(stderr.Contains("worker-exit-summary outcome=infrastructure-failure phase=cleanup message=worker infrastructure failed", StringComparison.Ordinal), "worker-safe-summary-exact");
+        foreach (var sentinel in forbiddenSentinels)
+        {
+            Assert.IsFalse(stderr.Contains(sentinel, StringComparison.Ordinal), $"worker-safe-summary-excludes-{sentinel}");
+        }
+        Assert.IsFalse(stderr.Contains("{\"type\"", StringComparison.Ordinal), "worker-safe-summary-no-stdout-frame");
+        Assert.IsTrue(stderr.EndsWith("writer-still-alive", StringComparison.Ordinal), "worker-error-writer-alive-after-provider-disposal");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task TransportUnavailable_UsesSharedInfrastructureFactAfterProviderCleanup()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        using var errorWriter = new StringWriter();
+
+        try
+        {
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
+            ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer([]));
+            ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new UnconfiguredTransport());
+            builder.Services.AddSingleton<GatedAsyncDisposeSentinel>();
+            using var host = builder.Build();
+            var sentinel = host.Services.GetRequiredService<GatedAsyncDisposeSentinel>();
+
+            var run = RunToBoundaryAsync(host, errorWriter);
+            await sentinel.DisposeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.IsFalse(run.IsCompleted, "worker-transport-result-waits-for-cleanup");
+            Assert.AreEqual(string.Empty, errorWriter.ToString(), "worker-transport-no-summary-before-cleanup");
+            sentinel.Release();
+
+            var exitCode = await run.WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(5, exitCode, "worker-transport-infrastructure-code");
+            Assert.AreEqual(
+                "worker-exit-summary outcome=infrastructure-failure phase=transport message=worker infrastructure failed" + Environment.NewLine,
+                errorWriter.ToString(),
+                "worker-transport-final-summary");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
     public async Task StdinSource_OpensAndReadsOnlyAfterReadyCompletion()
     {
         var fixtureRoot = CreateFixtureRoot();
@@ -1051,7 +1782,7 @@ public sealed class InternalWorkerHostTests
 
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer(calls));
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
             ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, readiness);
@@ -1074,6 +1805,27 @@ public sealed class InternalWorkerHostTests
         {
             DeleteFixtureRoot(fixtureRoot);
         }
+    }
+
+    private static HostApplicationBuilder CreateWorkerBuilder(ApplicationCompositionContext context)
+    {
+        return WorkerHostFactory.CreateBuilder(
+            context,
+            new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
+    }
+
+    private static IHost BuildWorkerHost(ApplicationCompositionContext context)
+    {
+        return WorkerHostFactory.Build(
+            context,
+            new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
+    }
+
+    private static async Task<int> RunToBoundaryAsync(IHost host, TextWriter errorWriter)
+    {
+        var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+        await WorkerHostFactory.RunHostAsync(host, outcomes);
+        return InternalWorkerProcessExitBoundary.Complete(outcomes.Fact, errorWriter);
     }
 
     private sealed class CountingNeverOpenInputFactory : IWorkerStandardInputStreamFactory
@@ -1227,7 +1979,7 @@ public sealed class InternalWorkerHostTests
         IInitialProcessingRunAcquirer? acquirer = null,
         ImmichReverseGeo.Core.Processing.IProcessingEventReporter? reporter = null)
     {
-        var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+        var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
         ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer([]));
         ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
         ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, new RecordingReadiness([], Task.CompletedTask));
@@ -1283,7 +2035,7 @@ public sealed class InternalWorkerHostTests
 
     private static IHost BuildWithReplacements(string fixtureRoot, Action<IServiceCollection> replace)
     {
-        var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+        var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
         replace(builder.Services);
         return builder.Build();
     }
@@ -1325,12 +2077,18 @@ public sealed class InternalWorkerHostTests
     private sealed class AcceptedLease : IProcessingRunLease
     {
         private readonly List<string>? _ledger;
+        private readonly WorkerInputPumpFinality _finality;
 
-        public AcceptedLease(ImmichReverseGeo.Core.Models.ProcessingRunRequest request, CancellationToken cancellationToken = default, List<string>? ledger = null)
+        public AcceptedLease(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            CancellationToken cancellationToken = default,
+            List<string>? ledger = null,
+            WorkerInputPumpFinality? finality = null)
         {
             Request = request;
             CancellationToken = cancellationToken;
             _ledger = ledger;
+            _finality = finality ?? WorkerInputPumpFinality.ExpectedShutdown();
         }
 
         public int NotifyExecutionStartingCount { get; private set; }
@@ -1353,7 +2111,7 @@ public sealed class InternalWorkerHostTests
         {
             SettleCount++;
             _ledger?.Add("settle");
-            return ValueTask.FromResult(WorkerInputPumpFinality.ExpectedShutdown());
+            return ValueTask.FromResult(_finality);
         }
 
         public ValueTask DisposeAsync()
@@ -1386,6 +2144,66 @@ public sealed class InternalWorkerHostTests
             Reporter = reporter;
             Result = await execute(request, reporter, cancellationToken);
             return Result;
+        }
+    }
+
+    private sealed class AdjudicatedBusyExecutor(
+        ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator outcomes)
+        : ImmichReverseGeo.Web.Services.IProcessingRunExecutor
+    {
+        public async Task<ImmichReverseGeo.Core.Models.ProcessingRunResult> ExecuteAsync(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            ImmichReverseGeo.Core.Processing.IProcessingEventReporter reporter,
+            CancellationToken cancellationToken)
+        {
+            var startedAtUtc = DateTimeOffset.UnixEpoch;
+            var session = await reporter.OpenRunAsync(request, startedAtUtc, cancellationToken);
+            outcomes.Add(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitFact.Busy());
+            var result = new ImmichReverseGeo.Core.Models.ProcessingRunResult(
+                request,
+                startedAtUtc,
+                startedAtUtc,
+                0,
+                0,
+                0,
+                0,
+                ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Failed,
+                "worker advisory lock is busy");
+            await session.FinishAsync(result);
+            return result;
+        }
+    }
+
+    private sealed class TerminalFinishingExecutor : ImmichReverseGeo.Web.Services.IProcessingRunExecutor
+    {
+        public async Task<ImmichReverseGeo.Core.Models.ProcessingRunResult> ExecuteAsync(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            ImmichReverseGeo.Core.Processing.IProcessingEventReporter reporter,
+            CancellationToken cancellationToken)
+        {
+            var startedAtUtc = DateTimeOffset.UnixEpoch;
+            var session = await reporter.OpenRunAsync(request, startedAtUtc, cancellationToken);
+            await session.DetermineEligibilityAsync(0, cancellationToken);
+            var result = CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed);
+            await session.FinishAsync(result);
+            return result;
+        }
+    }
+
+    private sealed class CancellationResultExecutor : ImmichReverseGeo.Web.Services.IProcessingRunExecutor
+    {
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task<ImmichReverseGeo.Core.Models.ProcessingRunResult> ExecuteAsync(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            ImmichReverseGeo.Core.Processing.IProcessingEventReporter reporter,
+            CancellationToken cancellationToken)
+        {
+            var cancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            using var registration = cancellationToken.Register(() => cancelled.TrySetResult());
+            Started.TrySetResult();
+            await cancelled.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            return CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Cancelled);
         }
     }
 
@@ -1427,6 +2245,7 @@ public sealed class InternalWorkerHostTests
         public Task CompleteAsync(ImmichReverseGeo.Core.Models.ProcessingRunRequest request, ImmichReverseGeo.Core.Models.ProcessingRunResult result, CancellationToken cancellationToken)
         {
             Completed.Add((request, result));
+            ledger?.Add("complete");
             return Task.CompletedTask;
         }
 
@@ -1681,6 +2500,14 @@ public sealed class InternalWorkerHostTests
         }
     }
 
+    private sealed class StaticAcquirer(InitialProcessingRunAcquisition outcome) : IInitialProcessingRunAcquirer
+    {
+        public Task<InitialProcessingRunAcquisition> AcquireAsync(CancellationToken cancellationToken)
+        {
+            return Task.FromResult(outcome);
+        }
+    }
+
     private sealed class ThrowingAcquirer(List<string> calls, Task readinessCompleted) : IInitialProcessingRunAcquirer
     {
         public Task<InitialProcessingRunAcquisition> AcquireAsync(CancellationToken cancellationToken)
@@ -1742,6 +2569,27 @@ public sealed class InternalWorkerHostTests
         {
             calls.Add("initialise");
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class GatedAsyncDisposeSentinel : IAsyncDisposable
+    {
+        private readonly TaskCompletionSource _release = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal TaskCompletionSource DisposeStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        internal bool Disposed { get; private set; }
+
+        internal void Release()
+        {
+            _release.TrySetResult();
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            DisposeStarted.TrySetResult();
+            await _release.Task;
+            Disposed = true;
         }
     }
 
@@ -1827,7 +2675,7 @@ public sealed class InternalWorkerHostTests
         services.AddSingleton<IWorkerPreRequestFinality>(_ => throw finalityPrimary);
         await using var provider = services.BuildServiceProvider();
         var factory = new CountingScopeFactory(provider, []);
-        var service = new InternalWorkerLifecycleService(factory, finalityLifetime, Microsoft.Extensions.Logging.Abstractions.NullLogger<InternalWorkerLifecycleService>.Instance);
+        var service = new InternalWorkerLifecycleService(factory, finalityLifetime, Microsoft.Extensions.Logging.Abstractions.NullLogger<InternalWorkerLifecycleService>.Instance, new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
         await service.StartAsync(CancellationToken.None);
         finalityLifetime.SignalStarted();
         var finalityThrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)), "worker-pre-finality-primary");
@@ -1846,7 +2694,7 @@ public sealed class InternalWorkerHostTests
         {
                 var calls = new List<string>();
                 var finality = new RecordingPreRequestFinality(calls);
-                var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+                var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
                 ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, finality);
                 if (fault == "initializer")
                 {
@@ -1876,7 +2724,7 @@ public sealed class InternalWorkerHostTests
         var calls = new List<string>();
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             builder.Services.RemoveAll<IWorkerPreRequestFinality>();
             builder.Services.AddSingleton<IWorkerPreRequestFinality>(_ => throw new InvalidOperationException("pre-finality-resolution"));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer(calls));
@@ -1897,7 +2745,7 @@ public sealed class InternalWorkerHostTests
         var reporterResolutionCount = 0;
         try
         {
-            var builder = WorkerHostFactory.CreateBuilder(CreateContext(fixtureRoot));
+            var builder = CreateWorkerBuilder(CreateContext(fixtureRoot));
             ReplaceSingleton<IWorkerStartupInitializer>(builder.Services, new CompletedInitializer(calls));
             ReplaceSingleton<IWorkerTransportAvailability>(builder.Services, new ConfiguredTransport());
             ReplaceSingleton<IWorkerReadinessPublisher>(builder.Services, new RecordingReadiness(calls, Task.CompletedTask));
@@ -1969,6 +2817,7 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
     public async Task AcceptedFinalityLedger_DoesNotCleanBeforeGateAndOrdersCleanup()
     {
         var fixtureRoot = CreateFixtureRoot();
@@ -1993,6 +2842,7 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
     [DataRow(true, "with-earlier-primary")]
     [DataRow(false, "cleanup-only")]
     public async Task StopApplicationFailure_PreservesEarlierPrimaryOrBecomesCleanupFailure(bool earlierPrimary, string label)
@@ -2014,6 +2864,8 @@ public sealed class InternalWorkerHostTests
 
             var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => fixture.Service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)), $"worker-stop-failure-{label}");
             Assert.AreEqual(earlierPrimary ? "scope-primary" : "worker-cleanup-failed", thrown.Message, $"worker-stop-failure-category-{earlierPrimary}");
+            Assert.AreEqual(5, fixture.Outcomes.Fact.ExitCode, $"worker-stop-failure-accumulator-code-{label}");
+            Assert.AreEqual("cleanup", fixture.Outcomes.Fact.Diagnostic.Phase, $"worker-stop-failure-accumulator-phase-{label}");
             Assert.AreEqual(1, lifetime.StopCount, $"worker-stop-failure-one-stop-{label}");
     }
 
@@ -2069,7 +2921,14 @@ public sealed class InternalWorkerHostTests
     private sealed class DirectLifecycleFixture : IAsyncDisposable
     {
         private readonly ServiceProvider _provider;
-        private DirectLifecycleFixture(ServiceProvider provider, InternalWorkerLifecycleService service, CountingScopeFactory scopeFactory, CountingInitializer initializer, RecordingAcquirer acquirer, RecordingPreRequestFinality finality)
+        private DirectLifecycleFixture(
+            ServiceProvider provider,
+            InternalWorkerLifecycleService service,
+            CountingScopeFactory scopeFactory,
+            CountingInitializer initializer,
+            RecordingAcquirer acquirer,
+            RecordingPreRequestFinality finality,
+            ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator outcomes)
         {
             _provider = provider;
             Service = service;
@@ -2077,12 +2936,14 @@ public sealed class InternalWorkerHostTests
             Initializer = initializer;
             Acquirer = acquirer;
             Finality = finality;
+            Outcomes = outcomes;
         }
         public InternalWorkerLifecycleService Service { get; }
         public CountingScopeFactory ScopeFactory { get; }
         public CountingInitializer Initializer { get; }
         public RecordingAcquirer Acquirer { get; }
         public RecordingPreRequestFinality Finality { get; }
+        public ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator Outcomes { get; }
         public static DirectLifecycleFixture Create(ControllableApplicationLifetime lifetime, List<string> calls, InitialProcessingRunAcquisition acquisition)
         {
             var services = new ServiceCollection();
@@ -2097,7 +2958,19 @@ public sealed class InternalWorkerHostTests
             services.AddSingleton<IWorkerPreRequestFinality>(finality);
             var provider = services.BuildServiceProvider();
             var factory = new CountingScopeFactory(provider, calls);
-            return new DirectLifecycleFixture(provider, new InternalWorkerLifecycleService(factory, lifetime, Microsoft.Extensions.Logging.Abstractions.NullLogger<InternalWorkerLifecycleService>.Instance), factory, initializer, acquirer, finality);
+            var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+            return new DirectLifecycleFixture(
+                provider,
+                new InternalWorkerLifecycleService(
+                    factory,
+                    lifetime,
+                    Microsoft.Extensions.Logging.Abstractions.NullLogger<InternalWorkerLifecycleService>.Instance,
+                    outcomes),
+                factory,
+                initializer,
+                acquirer,
+                finality,
+                outcomes);
         }
         public ValueTask DisposeAsync() => _provider.DisposeAsync();
     }
@@ -2185,6 +3058,152 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow("settle")]
+    [DataRow("dispose")]
+    public async Task AcceptedCleanup_RawOutOfMemoryEscapesOnlyAfterRemainingOwnedCleanup(string boundary)
+    {
+        var calls = new List<string>();
+        var lifetime = new ControllableApplicationLifetime();
+        var rawFailure = new OutOfMemoryException("controlled-cleanup-oom-" + boundary);
+        var lease = new RawOutOfMemoryLease(CreateRequest(), boundary, rawFailure);
+        var services = new ServiceCollection();
+        services.AddSingleton<IWorkerStartupInitializer>(new CompletedInitializer(calls));
+        services.AddSingleton<IWorkerTransportAvailability>(new ConfiguredTransport());
+        services.AddSingleton<IWorkerReadinessPublisher>(new RecordingReadiness(calls, Task.CompletedTask));
+        services.AddSingleton<IInitialProcessingRunAcquirer>(new RecordingAcquirer(calls, Task.CompletedTask, InitialProcessingRunAcquisition.Accept(lease)));
+        services.AddSingleton<IWorkerPreRequestFinality>(new RecordingPreRequestFinality(calls));
+        services.AddSingleton<IWorkerAcceptedRunFinality>(new RecordingAcceptedFinality());
+        services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(new RecordingExecutor((request, _, _) => Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed))));
+        services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(new TestReporter());
+        await using var provider = services.BuildServiceProvider();
+        var scopeFactory = new CountingScopeFactory(provider, calls);
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        var service = new InternalWorkerLifecycleService(
+            scopeFactory,
+            lifetime,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<InternalWorkerLifecycleService>.Instance,
+            outcomes);
+        await service.StartAsync(CancellationToken.None);
+        lifetime.SignalStarted();
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.AreSame(rawFailure, thrown, "worker-cleanup-oom-reference");
+        Assert.AreEqual(1, lease.SettleCount, "worker-cleanup-oom-settle-once");
+        Assert.AreEqual(1, lease.DisposeCount, "worker-cleanup-oom-lease-dispose-once");
+        Assert.AreEqual(1, scopeFactory.DisposeCount, "worker-cleanup-oom-scope-dispose-once");
+        Assert.AreEqual(1, lifetime.StopCount, "worker-cleanup-oom-stop-once");
+        Assert.AreEqual(0, outcomes.Fact.ExitCode, "worker-cleanup-oom-does-not-map-raw-oom");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task AcceptedCleanup_MultipleRawOutOfMemoryFailuresPreserveFirstFatalReference()
+    {
+        var calls = new List<string>();
+        var lifetime = new ControllableApplicationLifetime();
+        var firstFatal = new OutOfMemoryException("controlled-first-settle-oom");
+        var laterFatal = new OutOfMemoryException("controlled-later-dispose-oom");
+        var lease = new MultipleRawOutOfMemoryLease(CreateRequest(), firstFatal, laterFatal);
+        var services = new ServiceCollection();
+        services.AddSingleton<IWorkerStartupInitializer>(new CompletedInitializer(calls));
+        services.AddSingleton<IWorkerTransportAvailability>(new ConfiguredTransport());
+        services.AddSingleton<IWorkerReadinessPublisher>(new RecordingReadiness(calls, Task.CompletedTask));
+        services.AddSingleton<IInitialProcessingRunAcquirer>(new RecordingAcquirer(calls, Task.CompletedTask, InitialProcessingRunAcquisition.Accept(lease)));
+        services.AddSingleton<IWorkerPreRequestFinality>(new RecordingPreRequestFinality(calls));
+        services.AddSingleton<IWorkerAcceptedRunFinality>(new RecordingAcceptedFinality());
+        services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(new RecordingExecutor((request, _, _) => Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed))));
+        services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(new TestReporter());
+        await using var provider = services.BuildServiceProvider();
+        var scopeFactory = new CountingScopeFactory(provider, calls);
+        var service = new InternalWorkerLifecycleService(
+            scopeFactory,
+            lifetime,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<InternalWorkerLifecycleService>.Instance,
+            new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
+        await service.StartAsync(CancellationToken.None);
+        lifetime.SignalStarted();
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.AreSame(firstFatal, thrown, "worker-accepted-first-fatal-reference");
+        Assert.AreEqual(1, lease.SettleCount, "worker-accepted-first-fatal-settle-once");
+        Assert.AreEqual(1, lease.DisposeCount, "worker-accepted-first-fatal-dispose-once");
+        Assert.AreEqual(1, scopeFactory.DisposeCount, "worker-accepted-first-fatal-scope-dispose-once");
+        Assert.AreEqual(1, lifetime.StopCount, "worker-accepted-first-fatal-stop-once");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task LifecycleCleanup_MultipleRawOutOfMemoryFailuresPreserveFirstFatalReference()
+    {
+        var calls = new List<string>();
+        var lifetime = new ControllableApplicationLifetime();
+        var firstFatal = new OutOfMemoryException("controlled-first-scope-oom");
+        var laterFatal = new OutOfMemoryException("controlled-later-stop-oom");
+        await using var fixture = DirectLifecycleFixture.Create(lifetime, calls, InitialProcessingRunAcquisition.EndOfInput());
+        fixture.ScopeFactory.DisposeFailure = firstFatal;
+        lifetime.StopFailure = laterFatal;
+        await fixture.Service.StartAsync(CancellationToken.None);
+        lifetime.SignalStarted();
+        await fixture.Initializer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        fixture.Initializer.Release();
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => fixture.Service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.AreSame(firstFatal, thrown, "worker-lifecycle-first-fatal-reference");
+        Assert.AreEqual(1, fixture.ScopeFactory.DisposeCount, "worker-lifecycle-first-fatal-scope-dispose-once");
+        Assert.AreEqual(1, lifetime.StopCount, "worker-lifecycle-first-fatal-stop-once");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task AcceptedFinality_RawOutOfMemoryEscapesAfterOwnedCleanup(bool completionPath)
+    {
+        var calls = new List<string>();
+        var lifetime = new ControllableApplicationLifetime();
+        var rawFailure = new OutOfMemoryException("controlled-finality-oom");
+        var lease = new FaultingLease(CreateRequest(), settleFault: false, disposeFault: false);
+        var finality = new OutOfMemoryAcceptedFinality(rawFailure, completionPath);
+        var services = new ServiceCollection();
+        services.AddSingleton<IWorkerStartupInitializer>(new CompletedInitializer(calls));
+        services.AddSingleton<IWorkerTransportAvailability>(new ConfiguredTransport());
+        services.AddSingleton<IWorkerReadinessPublisher>(new RecordingReadiness(calls, Task.CompletedTask));
+        services.AddSingleton<IInitialProcessingRunAcquirer>(new RecordingAcquirer(calls, Task.CompletedTask, InitialProcessingRunAcquisition.Accept(lease)));
+        services.AddSingleton<IWorkerPreRequestFinality>(new RecordingPreRequestFinality(calls));
+        services.AddSingleton<IWorkerAcceptedRunFinality>(finality);
+        services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(new RecordingExecutor((request, _, _) => completionPath
+            ? Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed))
+            : Task.FromException<ImmichReverseGeo.Core.Models.ProcessingRunResult>(new InvalidOperationException("executor-primary"))));
+        services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(new TestReporter());
+        await using var provider = services.BuildServiceProvider();
+        var scopeFactory = new CountingScopeFactory(provider, calls);
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        var service = new InternalWorkerLifecycleService(
+            scopeFactory,
+            lifetime,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<InternalWorkerLifecycleService>.Instance,
+            outcomes);
+        await service.StartAsync(CancellationToken.None);
+        lifetime.SignalStarted();
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.AreSame(rawFailure, thrown, "worker-finality-oom-reference");
+        Assert.AreEqual(completionPath ? 1 : 0, finality.CompleteCount, "worker-finality-oom-complete-count");
+        Assert.AreEqual(completionPath ? 0 : 1, finality.FailCount, "worker-finality-oom-fail-count");
+        Assert.AreEqual(1, lease.SettleCount, "worker-finality-oom-settle-once");
+        Assert.AreEqual(1, lease.DisposeCount, "worker-finality-oom-lease-dispose-once");
+        Assert.AreEqual(1, scopeFactory.DisposeCount, "worker-finality-oom-scope-dispose-once");
+        Assert.AreEqual(!completionPath, outcomes.HasFact, "worker-finality-oom-preclassification-state");
+        Assert.AreEqual(completionPath ? 0 : 5, outcomes.Fact.ExitCode, "worker-finality-oom-sentinel-or-prior-infrastructure");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
     [DataRow("failure-finality")]
     [DataRow("settle")]
     [DataRow("dispose")]
@@ -2202,33 +3221,35 @@ public sealed class InternalWorkerHostTests
             var lease = new FaultingLease(CreateRequest(), secondary == "settle", secondary == "dispose");
             services.AddSingleton<IInitialProcessingRunAcquirer>(new RecordingAcquirer(calls, Task.CompletedTask, InitialProcessingRunAcquisition.Accept(lease)));
             services.AddSingleton<IWorkerPreRequestFinality>(new RecordingPreRequestFinality(calls));
-            var finalityPrimary = secondary != "failure-finality";
-            var finality = new FaultingAcceptedFinality(secondary == "failure-finality", finalityPrimary ? primary : null);
+            var finality = new FaultingAcceptedFinality(secondary == "failure-finality", null);
             services.AddSingleton<IWorkerAcceptedRunFinality>(finality);
-            services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(new RecordingExecutor((request, _, _) => finalityPrimary
-                ? Task.FromResult(CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed))
-                : throw primary));
+            services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(new RecordingExecutor((_, _, _) => throw primary));
             services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(new TestReporter());
             await using var provider = services.BuildServiceProvider();
             var scopeFactory = new CountingScopeFactory(provider, calls) { DisposeFailure = secondary == "scope" ? new InvalidOperationException("scope-secondary") : null };
             var logger = new CapturingLogger<InternalWorkerLifecycleService>(logs.Entries);
-            var service = new InternalWorkerLifecycleService(scopeFactory, lifetime, logger);
+            var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+            var service = new InternalWorkerLifecycleService(scopeFactory, lifetime, logger, outcomes);
             await service.StartAsync(CancellationToken.None);
             lifetime.SignalStarted();
             var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)), $"worker-{secondary}-primary");
 
             Assert.AreSame(primary, thrown, $"worker-{secondary}-primary-reference");
-            Assert.AreEqual(1, finalityPrimary ? finality.CompleteCount : finality.FailCount, $"worker-{secondary}-one-terminal-hook");
+            Assert.AreEqual(0, finality.CompleteCount, $"worker-{secondary}-no-completion-hook");
+            Assert.AreEqual(1, finality.FailCount, $"worker-{secondary}-one-failure-hook");
             Assert.AreEqual(1, lease.SettleCount, $"worker-{secondary}-settle-once");
             Assert.AreEqual(1, lease.DisposeCount, $"worker-{secondary}-dispose-once");
             Assert.AreEqual(1, scopeFactory.DisposeCount, $"worker-{secondary}-scope-once");
             Assert.AreEqual(1, lifetime.StopCount, $"worker-{secondary}-stop-once");
             var category = secondary == "failure-finality" ? "worker-accepted-finality-failed" : "worker-cleanup-failed";
+            Assert.AreEqual(5, outcomes.Fact.ExitCode, $"worker-{secondary}-infrastructure-code");
+            Assert.AreEqual(secondary == "failure-finality" ? "execution" : "cleanup", outcomes.Fact.Diagnostic.Phase, $"worker-{secondary}-diagnostic-stage");
             Assert.AreEqual(1, logs.Entries.Count(entry => entry.Message == category), $"worker-{secondary}-fixed-log-once");
             Assert.IsTrue(logs.Entries.Where(entry => entry.Message == category).All(entry => entry.Exception is null), $"worker-{secondary}-safe-log-no-exception");
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
     [DataRow("settle")]
     [DataRow("dispose")]
     [DataRow("scope")]
@@ -2250,7 +3271,8 @@ public sealed class InternalWorkerHostTests
             services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(new TestReporter());
             await using var provider = services.BuildServiceProvider();
             var scopeFactory = new CountingScopeFactory(provider, calls) { DisposeFailure = fault == "scope" ? new InvalidOperationException("scope-only") : null };
-            var service = new InternalWorkerLifecycleService(scopeFactory, lifetime, new CapturingLogger<InternalWorkerLifecycleService>(logs.Entries));
+            var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+            var service = new InternalWorkerLifecycleService(scopeFactory, lifetime, new CapturingLogger<InternalWorkerLifecycleService>(logs.Entries), outcomes);
             await service.StartAsync(CancellationToken.None);
             lifetime.SignalStarted();
             var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)), $"worker-cleanup-only-{fault}");
@@ -2260,7 +3282,9 @@ public sealed class InternalWorkerHostTests
             Assert.AreEqual(1, lease.DisposeCount, $"worker-cleanup-only-{fault}-lease-dispose");
             Assert.AreEqual(1, scopeFactory.DisposeCount, $"worker-cleanup-only-{fault}-scope-dispose");
             Assert.AreEqual(1, lifetime.StopCount, $"worker-cleanup-only-{fault}-stop");
-            Assert.AreEqual(1, logs.Entries.Count(entry => entry.Message == "worker-cleanup-failed"), $"worker-cleanup-only-{fault}-log");
+            Assert.AreEqual(5, outcomes.Fact.ExitCode, $"worker-cleanup-only-{fault}-code");
+            Assert.AreEqual("cleanup", outcomes.Fact.Diagnostic.Phase, $"worker-cleanup-only-{fault}-diagnostic-stage");
+            Assert.AreEqual(1, logs.Entries.Count(entry => entry.Message == "worker-cleanup-failed"), $"worker-cleanup-only-{fault}-log-category");
     }
 
     [TestMethod]
@@ -2281,7 +3305,7 @@ public sealed class InternalWorkerHostTests
         services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(new TestReporter());
         await using var provider = services.BuildServiceProvider();
         var scopeFactory = new CountingScopeFactory(provider, calls);
-        var service = new InternalWorkerLifecycleService(scopeFactory, lifetime, new ThrowingLogger<InternalWorkerLifecycleService>());
+        var service = new InternalWorkerLifecycleService(scopeFactory, lifetime, new ThrowingLogger<InternalWorkerLifecycleService>(), new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
         await service.StartAsync(CancellationToken.None);
         lifetime.SignalStarted();
 
@@ -2295,20 +3319,55 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change23")]
+    public async Task CleanupBoundaryLoggerOutOfMemory_IsSwallowedAndCannotSkipOwnedCleanup()
+    {
+        var calls = new List<string>();
+        var lifetime = new ControllableApplicationLifetime();
+        var primary = new InvalidOperationException("executor-primary-oom-logger");
+        var lease = new FaultingLease(CreateRequest(), settleFault: true, disposeFault: false);
+        var services = new ServiceCollection();
+        services.AddSingleton<IWorkerStartupInitializer>(new CompletedInitializer(calls));
+        services.AddSingleton<IWorkerTransportAvailability>(new ConfiguredTransport());
+        services.AddSingleton<IWorkerReadinessPublisher>(new RecordingReadiness(calls, Task.CompletedTask));
+        services.AddSingleton<IInitialProcessingRunAcquirer>(new RecordingAcquirer(calls, Task.CompletedTask, InitialProcessingRunAcquisition.Accept(lease)));
+        services.AddSingleton<IWorkerPreRequestFinality>(new RecordingPreRequestFinality(calls));
+        services.AddSingleton<IWorkerAcceptedRunFinality>(new FaultingAcceptedFinality(false, null));
+        services.AddSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(new RecordingExecutor((_, _, _) => throw primary));
+        services.AddSingleton<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>(new TestReporter());
+        await using var provider = services.BuildServiceProvider();
+        var scopeFactory = new CountingScopeFactory(provider, calls);
+        var service = new InternalWorkerLifecycleService(
+            scopeFactory,
+            lifetime,
+            new OutOfMemoryThrowingLogger<InternalWorkerLifecycleService>(),
+            new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator());
+        await service.StartAsync(CancellationToken.None);
+        lifetime.SignalStarted();
+
+        var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => service.ExecuteTask!.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        Assert.AreSame(primary, thrown, "worker-oom-logger-primary-reference");
+        Assert.AreEqual(1, lease.SettleCount, "worker-oom-logger-settle-once");
+        Assert.AreEqual(1, lease.DisposeCount, "worker-oom-logger-lease-dispose-once");
+        Assert.AreEqual(1, scopeFactory.DisposeCount, "worker-oom-logger-scope-dispose-once");
+        Assert.AreEqual(1, lifetime.StopCount, "worker-oom-logger-stop-once");
+    }
+
+    [TestMethod]
     public async Task Runner_StartPrimaryAndAsyncDisposeFault_PreservesPrimaryAndLogsFixedCategoryOnce()
     {
         var logs = new CapturingLoggerProvider();
         using var services = new ServiceCollection()
             .AddSingleton<Microsoft.Extensions.Logging.ILoggerFactory>(_ => Microsoft.Extensions.Logging.LoggerFactory.Create(builder => builder.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(logs)))
+            .AddSingleton<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>()
             .BuildServiceProvider();
         var primary = new InvalidOperationException("runner-start-primary");
         var host = new FaultingHost(services, primary, new InvalidOperationException("runner-dispose-secondary"));
 
-        var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => WorkerHostFactory.RunHostAsync(host),
-            "worker-runner-primary-preserved");
+        var exitCode = await WorkerHostFactory.RunHostAsync(host);
 
-        Assert.AreSame(primary, thrown, "worker-runner-primary-reference");
+        Assert.AreEqual(5, exitCode, "worker-runner-primary-infrastructure-code");
         Assert.AreEqual(1, host.DisposeAsyncCount, "worker-runner-dispose-attempted-once");
         Assert.AreEqual(1, logs.Entries.Count(entry => entry.Message == "worker-host-dispose-failed"), "worker-runner-dispose-log-once");
         Assert.IsTrue(logs.Entries.Where(entry => entry.Message == "worker-host-dispose-failed").All(entry => entry.Exception is null), "worker-runner-safe-log-no-exception");
@@ -2323,12 +3382,13 @@ public sealed class InternalWorkerHostTests
         using var services = new ServiceCollection()
             .AddSingleton<IHostApplicationLifetime>(lifetime)
             .AddSingleton<Microsoft.Extensions.Logging.ILoggerFactory>(_ => Microsoft.Extensions.Logging.LoggerFactory.Create(builder => builder.Services.AddSingleton<Microsoft.Extensions.Logging.ILoggerProvider>(logs)))
+            .AddSingleton<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>()
             .BuildServiceProvider();
         var host = new FaultingHost(services, null, new InvalidOperationException("dispose-only"));
 
-        var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => WorkerHostFactory.RunHostAsync(host), "worker-runner-dispose-only");
+        var exitCode = await WorkerHostFactory.RunHostAsync(host);
 
-        Assert.AreEqual("worker-cleanup-failed", thrown.Message, "worker-runner-dispose-only-category");
+        Assert.AreEqual(5, exitCode, "worker-runner-dispose-only-category");
         Assert.AreEqual(1, host.DisposeAsyncCount, "worker-runner-dispose-only-once");
         Assert.AreEqual(1, logs.Entries.Count(entry => entry.Message == "worker-host-dispose-failed"), "worker-runner-dispose-only-log-once");
     }
@@ -2338,9 +3398,288 @@ public sealed class InternalWorkerHostTests
     {
         var primary = new InvalidOperationException("runner-primary-throwing-logger");
         var host = new FaultingHost(new LoggerFactoryServiceProvider(new ThrowingLoggerFactory()), primary, new InvalidOperationException("dispose-secondary"));
-        var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => WorkerHostFactory.RunHostAsync(host), "worker-runner-throwing-logger-primary");
-        Assert.AreSame(primary, thrown, "worker-runner-throwing-logger-reference");
+        var exitCode = await WorkerHostFactory.RunHostAsync(host);
+        Assert.AreEqual(5, exitCode, "worker-runner-throwing-logger-infrastructure-code");
         Assert.AreEqual(1, host.DisposeAsyncCount, "worker-runner-throwing-logger-dispose-once");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void FinalExitBoundary_SwallowsOutOfMemoryFromBestEffortStderrAndPreservesClassification()
+    {
+        var diagnosticFailure = new OutOfMemoryException("controlled-stderr-oom");
+        var writer = new OutOfMemoryTextWriter(diagnosticFailure);
+
+        var exitCode = InternalWorkerProcessExitBoundary.Complete(
+            ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitFact.InputInvalid(),
+            writer);
+
+        Assert.AreEqual(2, exitCode, "worker-stderr-oom-preserves-exit");
+        Assert.AreEqual(1, writer.WriteLineCount, "worker-stderr-oom-one-best-effort-attempt");
+        Assert.AreEqual(0, writer.FlushCount, "worker-stderr-oom-does-not-retry-or-flush-after-write-failure");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task ActualProcessingExecutor_ManagedOutOfMemoryProducesFailedTerminalAndExitFour()
+    {
+        var fixtureRoot = CreateFixtureRoot();
+        var execution = new global::ImmichReverseGeo.Tests.ExecutorFixture().EnableReporter();
+        var managedFailure = new OutOfMemoryException("MANAGED_EXECUTION_OOM_SENTINEL");
+        execution.CountBehavior = _ => Task.FromException<long>(managedFailure);
+        var lease = new AcceptedLease(execution.Request);
+        var finality = new RecordingAcceptedFinality();
+        using var errorWriter = new StringWriter();
+
+        try
+        {
+            var host = BuildAcceptedHost(
+                fixtureRoot,
+                lease,
+                execution.Executor,
+                finality,
+                reporter: execution.Reporter);
+
+            var exitCode = await RunToBoundaryAsync(host, errorWriter);
+
+            Assert.AreEqual(4, exitCode, "worker-managed-oom-exit-code");
+            Assert.AreEqual(1, finality.Completed.Count, "worker-managed-oom-terminal-once");
+            Assert.AreSame(execution.Request, finality.Completed[0].Request, "worker-managed-oom-request-reference");
+            Assert.AreEqual(ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Failed, finality.Completed[0].Result.Outcome, "worker-managed-oom-failed-terminal");
+            Assert.AreEqual(managedFailure.Message, finality.Completed[0].Result.FailureMessage, "worker-managed-oom-failure-result");
+            Assert.IsTrue(execution.Logger.Entries.Any(entry => ReferenceEquals(entry.Exception, managedFailure)), "worker-managed-oom-caught-by-real-executor");
+            Assert.AreEqual(
+                "worker-exit-summary outcome=executor-failure phase=execution message=worker executor failed" + Environment.NewLine,
+                errorWriter.ToString(),
+                "worker-managed-oom-safe-summary");
+            Assert.IsFalse(errorWriter.ToString().Contains(managedFailure.Message, StringComparison.Ordinal), "worker-managed-oom-summary-redacted");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_RawOutOfMemoryBypassesOrderlyExitMappingOnlyAfterHostDisposal()
+    {
+        var lifetime = new ControllableApplicationLifetime();
+        lifetime.StopApplication();
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        using var services = new ServiceCollection()
+            .AddSingleton<IHostApplicationLifetime>(lifetime)
+            .AddSingleton(outcomes)
+            .BuildServiceProvider();
+        var rawFailure = new OutOfMemoryException("controlled-raw-oom");
+        var host = new FaultingHost(services, rawFailure, null);
+        using var errorWriter = new StringWriter();
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(
+            () => RunToBoundaryAsync(host, errorWriter),
+            "worker-raw-oom-bypasses-mapped-return");
+        Assert.AreSame(rawFailure, thrown, "worker-raw-oom-reference");
+        Assert.AreEqual(string.Empty, errorWriter.ToString(), "worker-raw-oom-no-summary");
+        Assert.IsFalse(outcomes.HasFact, "worker-raw-oom-no-mapped-fact");
+        Assert.AreEqual(1, host.DisposeAsyncCount, "worker-raw-oom-orderly-disposal-once");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_StartAndDisposeOutOfMemory_PreservesFirstFatalReferenceAfterCleanup()
+    {
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        using var services = new ServiceCollection().AddSingleton(outcomes).BuildServiceProvider();
+        var firstFatal = new OutOfMemoryException("controlled-start-oom");
+        var laterFatal = new OutOfMemoryException("controlled-dispose-oom");
+        var host = new FaultingHost(services, firstFatal, laterFatal);
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(
+            () => WorkerHostFactory.RunHostAsync(host, outcomes));
+
+        Assert.AreSame(firstFatal, thrown, "worker-first-fatal-reference");
+        Assert.AreEqual(1, host.DisposeAsyncCount, "worker-first-fatal-disposal-once");
+        Assert.IsFalse(outcomes.HasFact, "worker-first-fatal-unmapped");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_ServiceResolutionAndDisposeOutOfMemory_PreservesFirstFatalReferenceAfterCleanup()
+    {
+        var firstFatal = new OutOfMemoryException("controlled-resolution-oom");
+        var laterFatal = new OutOfMemoryException("controlled-dispose-oom");
+        var services = new ThrowingServiceProvider(firstFatal);
+        var host = new FaultingHost(services, new InvalidOperationException("start-must-not-run"), laterFatal);
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(
+            () => WorkerHostFactory.RunHostAsync(host));
+
+        Assert.AreSame(firstFatal, thrown, "worker-resolution-first-fatal-reference");
+        Assert.AreEqual(0, host.StartAsyncCount, "worker-resolution-fatal-no-start");
+        Assert.AreEqual(1, host.DisposeAsyncCount, "worker-resolution-fatal-disposal-once");
+        Assert.IsFalse(services.Outcomes.HasFact, "worker-resolution-fatal-unmapped");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public async Task Runner_DisposeOutOfMemoryWithoutEarlierFatal_RethrowsDisposeReference()
+    {
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        using var services = new ServiceCollection().AddSingleton(outcomes).BuildServiceProvider();
+        var disposeFatal = new OutOfMemoryException("controlled-dispose-only-oom");
+        var host = new FaultingHost(services, new InvalidOperationException("mapped-start-failure"), disposeFatal);
+
+        var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(
+            () => WorkerHostFactory.RunHostAsync(host, outcomes));
+
+        Assert.AreSame(disposeFatal, thrown, "worker-dispose-fatal-reference");
+        Assert.AreEqual(1, host.DisposeAsyncCount, "worker-dispose-fatal-once");
+        Assert.AreEqual(5, outcomes.Fact.ExitCode, "worker-earlier-orderly-fact-retained-but-not-returned");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void ProcessBoundary_MandatoryRunDelegatePreservesFatalReferenceWithoutSummary()
+    {
+        var fatal = new OutOfMemoryException("controlled-top-level-delegate-oom");
+        var calls = 0;
+        ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator? suppliedOutcomes = null;
+        using var errorWriter = new StringWriter();
+
+        var thrown = Assert.ThrowsExactly<OutOfMemoryException>(() => InternalWorkerProcess.Run(
+            [],
+            errorWriter,
+            outcomes =>
+            {
+                calls++;
+                suppliedOutcomes = outcomes;
+                return Task.FromException<int>(fatal);
+            }));
+
+        Assert.AreSame(fatal, thrown, "worker-top-level-fatal-reference");
+        Assert.AreEqual(1, calls, "worker-top-level-delegate-once");
+        Assert.IsNotNull(suppliedOutcomes, "worker-top-level-accumulator-supplied");
+        Assert.IsFalse(suppliedOutcomes.HasFact, "worker-top-level-fatal-unmapped");
+        Assert.AreEqual(string.Empty, errorWriter.ToString(), "worker-top-level-fatal-no-summary");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void ProcessBoundary_NonOutOfMemoryDelegateFailureMapsStartupAndWritesExactSummary()
+    {
+        using var errorWriter = new StringWriter();
+
+        var exitCode = InternalWorkerProcess.Run(
+            [],
+            errorWriter,
+            _ => Task.FromException<int>(new InvalidOperationException("raw-worker-delegate-failure")));
+
+        Assert.AreEqual(5, exitCode, "worker-top-level-non-oom-infrastructure-code");
+        Assert.AreEqual(
+            "worker-exit-summary outcome=infrastructure-failure phase=startup message=worker infrastructure failed" + Environment.NewLine,
+            errorWriter.ToString(),
+            "worker-top-level-non-oom-exact-summary");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void ProcessBoundary_MissingOutcomeMapsStartupAndWritesExactSummary()
+    {
+        using var errorWriter = new StringWriter();
+
+        var exitCode = InternalWorkerProcess.Run(
+            [],
+            errorWriter,
+            _ => Task.FromResult(0));
+
+        Assert.AreEqual(5, exitCode, "worker-top-level-missing-fact-infrastructure-code");
+        Assert.AreEqual(
+            "worker-exit-summary outcome=infrastructure-failure phase=startup message=worker infrastructure failed" + Environment.NewLine,
+            errorWriter.ToString(),
+            "worker-top-level-missing-fact-exact-summary");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void ProcessBoundary_CompletedDelegateUsesSameAccumulatorAndWritesNoSummary()
+    {
+        using var errorWriter = new StringWriter();
+        var ledger = new List<string>();
+        ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator? supplied = null;
+
+        var exitCode = InternalWorkerProcess.Run(
+            [],
+            errorWriter,
+            outcomes =>
+            {
+                supplied = outcomes;
+                ledger.Add("runner");
+                outcomes.Add(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitFact.Completed());
+                return Task.FromResult(0);
+            });
+
+        Assert.AreEqual(0, exitCode, "worker-top-level-completed-code");
+        Assert.IsNotNull(supplied, "worker-top-level-completed-accumulator");
+        Assert.AreEqual(0, supplied.Fact.ExitCode, "worker-top-level-completed-same-accumulator-fact");
+        CollectionAssert.AreEqual(new[] { "runner" }, ledger, "worker-top-level-completed-runner-before-return");
+        Assert.AreEqual(string.Empty, errorWriter.ToString(), "worker-top-level-completed-no-summary");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void ProcessBoundary_CompleteInvalidInvocationWritesExactInputSummary()
+    {
+        using var errorWriter = new StringWriter();
+
+        var exitCode = InternalWorkerProcess.CompleteInvalidInvocation(errorWriter);
+
+        Assert.AreEqual(2, exitCode, "worker-top-level-invalid-invocation-code");
+        Assert.AreEqual(
+            "worker-exit-summary outcome=invalid-input phase=input message=worker invocation or input is invalid" + Environment.NewLine,
+            errorWriter.ToString(),
+            "worker-top-level-invalid-invocation-summary");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    public void ProcessBoundary_ResidualArgumentsRejectBeforeRunDelegateWithoutSummary()
+    {
+        var calls = 0;
+        using var errorWriter = new StringWriter();
+
+        Assert.ThrowsExactly<InvalidOperationException>(() => InternalWorkerProcess.Run(
+            ["--unexpected-residual"],
+            errorWriter,
+            _ =>
+            {
+                calls++;
+                return Task.FromResult(0);
+            }));
+
+        Assert.AreEqual(0, calls, "worker-top-level-invalid-residual-does-not-run");
+        Assert.AreEqual(string.Empty, errorWriter.ToString(), "worker-top-level-invalid-residual-no-summary");
+    }
+
+    [TestMethod]
+    [TestCategory("Change23")]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task Runner_GenericTypedTransportStartOrDisposeExceptionMapsInfrastructureFive(bool startFault)
+    {
+        var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
+        using var services = new ServiceCollection()
+            .AddSingleton(outcomes)
+            .BuildServiceProvider();
+        var typed = new WorkerNdjsonTransportException(WorkerNdjsonFailureStage.Write);
+        var host = new FaultingHost(
+            services,
+            startFault ? typed : null,
+            startFault ? new InvalidOperationException("cleanup-after-start") : typed);
+
+        var exitCode = await WorkerHostFactory.RunHostAsync(host, outcomes);
+
+        Assert.AreEqual(5, exitCode, "worker-generic-host-typed-transport-is-infrastructure");
+        Assert.AreEqual(5, outcomes.Fact.ExitCode, "worker-generic-host-typed-transport-accumulator");
     }
 
     [TestMethod]
@@ -2349,22 +3688,77 @@ public sealed class InternalWorkerHostTests
         var primary = new InvalidOperationException("logger-resolution-primary");
         var host = new FaultingHost(new ThrowingServiceProvider(primary), new InvalidOperationException("start-should-not-run"), new InvalidOperationException("dispose-secondary"));
 
-        var thrown = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
-            () => WorkerHostFactory.RunHostAsync(host),
-            "worker-runner-logger-resolution-primary");
+        var exitCode = await WorkerHostFactory.RunHostAsync(host);
 
-        Assert.AreSame(primary, thrown, "worker-runner-logger-resolution-reference");
+        Assert.AreEqual(5, exitCode, "worker-runner-logger-resolution-infrastructure-code");
         Assert.AreEqual(1, host.DisposeAsyncCount, "worker-runner-logger-resolution-dispose-once");
     }
 
     private sealed class ThrowingServiceProvider(Exception exception) : IServiceProvider
     {
-        public object? GetService(Type serviceType) => throw exception;
+        internal ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator Outcomes { get; } = new();
+
+        public object? GetService(Type serviceType)
+        {
+            return serviceType == typeof(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator)
+                ? Outcomes
+                : throw exception;
+        }
     }
 
     private sealed class LoggerFactoryServiceProvider(Microsoft.Extensions.Logging.ILoggerFactory factory) : IServiceProvider
     {
-        public object? GetService(Type serviceType) => serviceType == typeof(Microsoft.Extensions.Logging.ILoggerFactory) ? factory : null;
+        private readonly ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator _outcomes = new();
+
+        public object? GetService(Type serviceType)
+        {
+            return serviceType switch
+            {
+                var type when type == typeof(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator) => _outcomes,
+                var type when type == typeof(Microsoft.Extensions.Logging.ILoggerFactory) => factory,
+                _ => null
+            };
+        }
+    }
+
+    private sealed class OutOfMemoryTextWriter(OutOfMemoryException failure) : TextWriter
+    {
+        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+        public int WriteLineCount { get; private set; }
+        public int FlushCount { get; private set; }
+
+        public override void WriteLine(string? value)
+        {
+            WriteLineCount++;
+            throw failure;
+        }
+
+        public override void Flush()
+        {
+            FlushCount++;
+            throw failure;
+        }
+    }
+
+    private sealed class ThrowingCountingTextWriter : TextWriter
+    {
+        public override System.Text.Encoding Encoding => System.Text.Encoding.UTF8;
+
+        public int WriteLineCount { get; private set; }
+
+        public int FlushCount { get; private set; }
+
+        public override void WriteLine(string? value)
+        {
+            WriteLineCount++;
+            throw new IOException("stderr-unavailable");
+        }
+
+        public override void Flush()
+        {
+            FlushCount++;
+            throw new IOException("stderr-unavailable");
+        }
     }
 
     private sealed class ThrowingLoggerFactory : Microsoft.Extensions.Logging.ILoggerFactory
@@ -2380,17 +3774,57 @@ public sealed class InternalWorkerHostTests
         }
     }
 
-    private sealed class FaultingHost(IServiceProvider services, Exception? startFailure, Exception disposeFailure) : IHost, IAsyncDisposable
+    private sealed class LateDisposalFaultStream(List<string> ledger) : MemoryStream
+    {
+        private int _flushCount;
+
+        public int DisposeCount { get; private set; }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            ledger.Add($"flush-{Interlocked.Increment(ref _flushCount)}");
+            return Task.CompletedTask;
+        }
+
+        public override ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            ledger.Add("stdout-dispose");
+            return ValueTask.FromException(new IOException("LATE_STDOUT_DISPOSAL_SENTINEL"));
+        }
+    }
+
+    private sealed class LedgerTextWriter(List<string> ledger) : StringWriter
+    {
+        public override void WriteLine(string? value)
+        {
+            ledger.Add("stderr-summary");
+            base.WriteLine(value);
+        }
+
+        public override void Flush()
+        {
+            ledger.Add("stderr-flush");
+            base.Flush();
+        }
+    }
+
+    private sealed class FaultingHost(IServiceProvider services, Exception? startFailure, Exception? disposeFailure) : IHost, IAsyncDisposable
     {
         public IServiceProvider Services { get; } = services;
+        public int StartAsyncCount { get; private set; }
         public int DisposeAsyncCount { get; private set; }
-        public Task StartAsync(CancellationToken cancellationToken = default) => startFailure is null ? Task.CompletedTask : Task.FromException(startFailure);
+        public Task StartAsync(CancellationToken cancellationToken = default)
+        {
+            StartAsyncCount++;
+            return startFailure is null ? Task.CompletedTask : Task.FromException(startFailure);
+        }
         public Task StopAsync(CancellationToken cancellationToken = default) => Task.CompletedTask;
         public void Dispose() { }
         public ValueTask DisposeAsync()
         {
             DisposeAsyncCount++;
-            return ValueTask.FromException(disposeFailure);
+            return disposeFailure is null ? ValueTask.CompletedTask : ValueTask.FromException(disposeFailure);
         }
     }
 
@@ -2419,6 +3853,115 @@ public sealed class InternalWorkerHostTests
         }
     }
 
+    private sealed class RawOutOfMemoryLease(
+        ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+        string boundary,
+        OutOfMemoryException failure) : IProcessingRunLease
+    {
+        public int SettleCount { get; private set; }
+        public int DisposeCount { get; private set; }
+        public ImmichReverseGeo.Core.Models.ProcessingRunRequest Request { get; } = request;
+        public CancellationToken CancellationToken => CancellationToken.None;
+
+        public void NotifyExecutionStarting()
+        {
+        }
+
+        public ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken)
+        {
+            SettleCount++;
+            return boundary == "settle"
+                ? ValueTask.FromException<WorkerInputPumpFinality>(failure)
+                : ValueTask.FromResult(WorkerInputPumpFinality.ExpectedShutdown());
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return boundary == "dispose" ? ValueTask.FromException(failure) : ValueTask.CompletedTask;
+        }
+    }
+
+    private sealed class MultipleRawOutOfMemoryLease(
+        ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+        OutOfMemoryException settleFailure,
+        OutOfMemoryException disposeFailure) : IProcessingRunLease
+    {
+        public int SettleCount { get; private set; }
+        public int DisposeCount { get; private set; }
+        public ImmichReverseGeo.Core.Models.ProcessingRunRequest Request { get; } = request;
+        public CancellationToken CancellationToken => CancellationToken.None;
+
+        public void NotifyExecutionStarting()
+        {
+        }
+
+        public ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken)
+        {
+            SettleCount++;
+            return ValueTask.FromException<WorkerInputPumpFinality>(settleFailure);
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            return ValueTask.FromException(disposeFailure);
+        }
+    }
+
+    private sealed class TransportThrowingAcceptedFinality(bool completionHook) : IWorkerAcceptedRunFinality
+    {
+        public int CompleteCount { get; private set; }
+
+        public int FailCount { get; private set; }
+
+        public Task CompleteAsync(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            ImmichReverseGeo.Core.Models.ProcessingRunResult result,
+            CancellationToken cancellationToken)
+        {
+            CompleteCount++;
+            return completionHook
+                ? Task.FromException(new WorkerNdjsonTransportException(WorkerNdjsonFailureStage.Write))
+                : Task.CompletedTask;
+        }
+
+        public Task FailAsync(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            WorkerSafeFailure failure,
+            CancellationToken cancellationToken)
+        {
+            FailCount++;
+            return completionHook
+                ? Task.CompletedTask
+                : Task.FromException(new WorkerNdjsonTransportException(WorkerNdjsonFailureStage.Write));
+        }
+    }
+
+    private sealed class OutOfMemoryAcceptedFinality(OutOfMemoryException failure, bool completionPath) : IWorkerAcceptedRunFinality
+    {
+        public int CompleteCount { get; private set; }
+        public int FailCount { get; private set; }
+
+        public Task CompleteAsync(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            ImmichReverseGeo.Core.Models.ProcessingRunResult result,
+            CancellationToken cancellationToken)
+        {
+            CompleteCount++;
+            return completionPath ? Task.FromException(failure) : Task.CompletedTask;
+        }
+
+        public Task FailAsync(
+            ImmichReverseGeo.Core.Models.ProcessingRunRequest request,
+            WorkerSafeFailure safeFailure,
+            CancellationToken cancellationToken)
+        {
+            FailCount++;
+            return completionPath ? Task.CompletedTask : Task.FromException(failure);
+        }
+    }
+
     private sealed class FaultingAcceptedFinality(bool failureFault, Exception? completionFault) : IWorkerAcceptedRunFinality
     {
         public int CompleteCount { get; private set; }
@@ -2426,13 +3969,24 @@ public sealed class InternalWorkerHostTests
         public Task CompleteAsync(ImmichReverseGeo.Core.Models.ProcessingRunRequest request, ImmichReverseGeo.Core.Models.ProcessingRunResult result, CancellationToken cancellationToken)
         {
             CompleteCount++;
-            return completionFault is null ? Task.CompletedTask : Task.FromException(completionFault);
+            return completionFault is null
+                ? Task.CompletedTask
+                : Task.FromException(completionFault);
         }
         public Task FailAsync(ImmichReverseGeo.Core.Models.ProcessingRunRequest request, WorkerSafeFailure failure, CancellationToken cancellationToken)
         {
             FailCount++;
-            return failureFault ? Task.FromException(new InvalidOperationException("failure-finality-secondary")) : Task.CompletedTask;
+            return failureFault
+                ? Task.FromException(new InvalidOperationException("failure-finality-secondary"))
+                : Task.CompletedTask;
         }
+    }
+
+    private sealed class OutOfMemoryThrowingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
+    {
+        public IDisposable? BeginScope<TState>(TState state) where TState : notnull => null;
+        public bool IsEnabled(Microsoft.Extensions.Logging.LogLevel logLevel) => true;
+        public void Log<TState>(Microsoft.Extensions.Logging.LogLevel logLevel, Microsoft.Extensions.Logging.EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter) => throw new OutOfMemoryException("controlled-boundary-logger-oom");
     }
 
     private sealed class ThrowingLogger<T> : Microsoft.Extensions.Logging.ILogger<T>
@@ -2489,6 +4043,94 @@ public sealed class InternalWorkerHostTests
         {
             Interlocked.Increment(ref _flushCount);
             return Task.CompletedTask;
+        }
+    }
+
+    private sealed class FaultingOutputStreamFactory : IWorkerNdjsonOutputStreamFactory
+    {
+        public FaultingOutputStreamFactory(string failureMode)
+        {
+            Output = new FaultingOutputStream(failureMode, Ledger);
+        }
+
+        public int OpenCount { get; private set; }
+
+        public List<string> Ledger { get; } = [];
+
+        public FaultingOutputStream Output { get; }
+
+        public Stream OpenStandardOutput()
+        {
+            OpenCount++;
+            Ledger.Add("open");
+            return Output;
+        }
+    }
+
+    private sealed class FaultingOutputStream(string failureMode, List<string> ledger) : MemoryStream
+    {
+        public int WriteCount { get; private set; }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            WriteCount++;
+            ledger.Add("write");
+            if (failureMode == "partial-write")
+            {
+                base.Write(buffer.Span[..Math.Max(1, buffer.Length / 2)]);
+            }
+
+            if (failureMode is "write" or "partial-write" or "broken-pipe")
+            {
+                return ValueTask.FromException(new IOException(failureMode));
+            }
+
+            return base.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            ledger.Add("flush");
+            return failureMode == "flush"
+                ? Task.FromException(new IOException(failureMode))
+                : Task.CompletedTask;
+        }
+    }
+
+    private sealed class TerminalFlushFailingOutputStreamFactory : IWorkerNdjsonOutputStreamFactory
+    {
+        public TerminalFlushFailingOutputStream Output { get; } = new();
+
+        public Stream OpenStandardOutput()
+        {
+            return Output;
+        }
+    }
+
+    private sealed class TerminalFlushFailingOutputStream : MemoryStream
+    {
+        public int WriteCount { get; private set; }
+
+        public int FlushCount { get; private set; }
+
+        public override void Write(byte[] buffer, int offset, int count)
+        {
+            WriteCount++;
+            base.Write(buffer, offset, count);
+        }
+
+        public override ValueTask WriteAsync(ReadOnlyMemory<byte> buffer, CancellationToken cancellationToken = default)
+        {
+            WriteCount++;
+            return base.WriteAsync(buffer, cancellationToken);
+        }
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+        {
+            FlushCount++;
+            return FlushCount == 4
+                ? Task.FromException(new IOException("terminal-flush"))
+                : Task.CompletedTask;
         }
     }
 
