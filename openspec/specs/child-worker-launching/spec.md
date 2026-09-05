@@ -1,11 +1,13 @@
+# child-worker-launching Specification
+
 ## Purpose
 
 Defines reliable Web-side startup, protocol handshaking, stream drainage, observation, and ownership for one child worker while preserving later policy boundaries.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Launch returns typed process ownership
-The launcher SHALL consume one validated block-24 `WorkerCommandInvocation` for production worker launches. Its process factory SHALL consume the general shell-free `ChildProcessStartDescriptor`, allowing test support to start a fixture through the same mechanics without treating fixture arguments as a production worker invocation. and one immutable processing request and SHALL return either a typed start failure with no session or a session that exclusively owns the started process and its redirected standard streams. A started session SHALL expose the operating-system process ID and the request's exact run ID; “job ID” SHALL be only an alias for that run ID. The platform process object SHALL NOT be exposed to callers.
+The launcher SHALL consume one validated block-24 `WorkerCommandInvocation` and one immutable processing request for production worker launches. Its process factory SHALL consume the general shell-free `ChildProcessStartDescriptor`, allowing test support to start a fixture through the same mechanics without treating fixture arguments as a production worker invocation. The launcher SHALL return either a typed start failure with no session or a session that exclusively owns the started process and its redirected standard streams. A started session SHALL expose the operating-system process ID and the request's exact run ID; “job ID” SHALL be only an alias for that run ID. The platform process object SHALL NOT be exposed to callers.
 
 #### Scenario: Operating-system start succeeds
 - **WHEN** the command descriptor starts a child process successfully
