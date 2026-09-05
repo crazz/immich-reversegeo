@@ -84,13 +84,17 @@ Cancellation supplied by a caller waiting for startup or completion SHALL cancel
 - **WHEN** caller cancellation occurs while the owned session is waiting for ready, request completion, or exit
 - **THEN** the caller wait is cancelled while session ownership, pumps, and observable lifecycle remain active
 
-### Requirement: Session disposal is single-owner and non-escalating
-The session SHALL implement idempotent asynchronous disposal. Disposal SHALL close controller stdin, suppress future sink callbacks, await the already-running exit and stream-finality observation, and dispose redirected streams and the process adapter exactly once. It SHALL NOT send a cancel command or forcibly terminate a process; therefore disposal MAY remain incomplete until the worker exits, pending block 28's bounded graceful/forced policy. Completion and disposal SHALL share one lifecycle rather than race duplicate waits or readers.
+### Requirement: Session disposal joins the owned cancellation lifecycle
+The session SHALL implement idempotent asynchronous disposal. Disposal SHALL immediately suppress future sink callbacks and settle an unaccepted startup as disposed. If the exact process is still live, disposal SHALL start or join its existing cancellation operation, preserving the first Stop deadline and accepted-only cancel delivery. If process exit is already confirmed, disposal SHALL join settlement without creating another Stop request or deadline. The owner SHALL await actual process exit, both existing stream drains, and the cancellation deadline callback before closing controller stdin. It SHALL then join remaining control work and readiness timer callbacks before disposing other redirected streams, cancellation sources, and the process adapter exactly once. Raw completion SHALL remain independently observable, while Stop and disposal SHALL await resource settlement. A failed tree-kill attempt while the process remains live SHALL retain ownership and leave settlement incomplete.
 
 #### Scenario: Completed session is disposed repeatedly
-- **WHEN** asynchronous disposal is invoked more than once after process completion
-- **THEN** resources are released once and every caller observes the same settled lifecycle
+- **WHEN** asynchronous disposal is invoked more than once after confirmed process exit
+- **THEN** every caller joins the same resource settlement, resources are released once, and no new cancellation command or deadline is created
 
 #### Scenario: Live session is disposed before request acceptance
-- **WHEN** disposal begins while the worker is waiting for input
-- **THEN** controller stdin closes, pumps remain active until process/stream finality, and no cancel command or forced termination is attempted
+- **WHEN** disposal begins while the worker is waiting for readiness
+- **THEN** future sink callbacks and execute delivery are suppressed, startup settles as disposed, stdin remains owned until exit and drain finality, and the single cancellation deadline may escalate against the exact live process without sending an unaccepted cancel command
+
+#### Scenario: An admitted sink callback is active when disposal begins
+- **WHEN** disposal races with a callback that already crossed admission
+- **THEN** that callback is allowed to settle, later callbacks are suppressed, and resource disposal waits for its owning stream pump and process finality
