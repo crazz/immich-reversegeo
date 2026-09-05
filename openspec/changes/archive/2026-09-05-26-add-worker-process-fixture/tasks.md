@@ -78,3 +78,5 @@
 - `LC_ALL=en_US.UTF-8 npm run test` passed 1,208/1,208 with the standard Integration/Performance exclusions.
 - No fixture processes or per-case resource directories remained after the final published-output run.
 - Brooks review verified exact process identity, retryable cleanup, actual failure unwinding, completed-faulted drain cleanup, and the existing production policy boundary with no remaining findings.
+
+- Feature-branch CI passed all six jobs for implementation commit `e1d4c6b80a27ef2f765833bef8336df2002a55f6`: https://github.com/crazz/immich-reversegeo/actions/runs/33985215502. This includes the full Linux test/Docker gate and Build/Publish fixture tests on Linux, Windows, and macOS.
