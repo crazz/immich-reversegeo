@@ -28,6 +28,7 @@ internal sealed partial class ChildWorkerSession
     private Task? _inputCloseTask;
     private Task? _resourceDisposalTask;
     private bool _processExitConfirmed;
+    private bool _escalationDecisionInProgress;
     private int _inputClosed;
 
     internal TimeProvider Clock => _timeProvider;
@@ -506,7 +507,12 @@ internal sealed partial class ChildWorkerSession
             if (!_processExitConfirmed && _cancellationState is not null)
             {
                 _cancellationState.GraceExpired = true;
+                _escalationDecisionInProgress = true;
                 signal = deadline.TrySetResult();
+                if (!signal)
+                {
+                    _escalationDecisionInProgress = false;
+                }
             }
         }
 
@@ -571,6 +577,7 @@ internal sealed partial class ChildWorkerSession
 
     private void ConfirmProcessExit()
     {
+        bool publishConfirmedExit;
         lock (_cancellationGate)
         {
             if (_processExitConfirmed)
@@ -579,11 +586,15 @@ internal sealed partial class ChildWorkerSession
             }
 
             _processExitConfirmed = true;
+            publishConfirmedExit = !_escalationDecisionInProgress;
         }
 
         CancelWithoutFailure(_inputLifetimeCancellation);
         CancelWithoutFailure(_controlCancellation);
-        _confirmedExit.TrySetResult();
+        if (publishConfirmedExit)
+        {
+            _confirmedExit.TrySetResult();
+        }
     }
 
     private ChildProcessExitState GetExitState()
@@ -774,10 +785,18 @@ internal sealed partial class ChildWorkerSession
 
     private void SetEscalation(bool attempted, ChildProcessKillOutcome outcome)
     {
+        bool publishConfirmedExit;
         lock (_cancellationGate)
         {
             _cancellationState!.KillAttempted = attempted;
             _cancellationState.KillOutcome = outcome;
+            _escalationDecisionInProgress = false;
+            publishConfirmedExit = _processExitConfirmed;
+        }
+
+        if (publishConfirmedExit)
+        {
+            _confirmedExit.TrySetResult();
         }
     }
 
