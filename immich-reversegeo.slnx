@@ -12,6 +12,7 @@
     <Project Path="tests/ImmichReverseGeo.Legacy.Tests/ImmichReverseGeo.Legacy.Tests.csproj" />
     <Project Path="tests/ImmichReverseGeo.Overture.Tests/ImmichReverseGeo.Overture.Tests.csproj" />
     <Project Path="tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj" />
+    <Project Path="tests/ImmichReverseGeo.WorkerProcessFixture/ImmichReverseGeo.WorkerProcessFixture.csproj" />
   </Folder>
   <Folder Name="/Solution Items/">
     <File Path=".dockerignore" />

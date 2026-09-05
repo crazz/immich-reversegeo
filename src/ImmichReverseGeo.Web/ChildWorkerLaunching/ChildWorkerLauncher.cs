@@ -33,6 +33,17 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(invocation);
+        return await LaunchDescriptorAsync(invocation.Descriptor, request, eventSink, options, cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async ValueTask<ChildWorkerLaunchResult> LaunchDescriptorAsync(
+        ChildProcessStartDescriptor descriptor,
+        ProcessingRunRequest request,
+        IWorkerProtocolEventSink eventSink,
+        ChildWorkerLauncherOptions options,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(eventSink);
         ArgumentNullException.ThrowIfNull(options);
@@ -42,7 +53,7 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
         IChildProcess? process;
         try
         {
-            process = await _processFactory.StartAsync(invocation.Descriptor, CancellationToken.None);
+            process = await _processFactory.StartAsync(descriptor, CancellationToken.None);
         }
         catch
         {

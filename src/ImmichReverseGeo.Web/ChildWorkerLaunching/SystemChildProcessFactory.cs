@@ -76,7 +76,7 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
         return startInfo;
     }
 
-    private sealed class SystemChildProcess : IChildProcess
+    internal sealed class SystemChildProcess : IChildProcess
     {
         private readonly Process _process;
         private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -93,6 +93,9 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
                 OnExited(this, EventArgs.Empty);
             }
         }
+
+        // Borrowed identity for observers; this adapter retains disposal ownership.
+        internal Process NativeProcess => _process;
 
         public int ProcessId => _process.Id;
         public Stream StandardInput { get; }

@@ -51,3 +51,30 @@ jobs:
 
       - name: Run Change 23 focused tests
         run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --filter "TestCategory=Change23"
+
+  change26:
+    name: Change 26 fixture staging (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build fixture staging
+        run: dotnet build tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release
+
+      - name: Run Change 26 focused tests without rebuilding
+        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --no-build --filter "TestCategory=Change26"
+
+      - name: Publish fixture staging
+        run: dotnet publish tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --output _out/change26-publish
+
+      - name: Smoke published fixture staging without rebuilding
+        run: dotnet _out/change26-publish/ImmichReverseGeo.Tests.dll --filter "TestCategory=Change26"

@@ -5,6 +5,10 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <WorkerProcessFixtureProject>$(MSBuildThisFileDirectory)..\ImmichReverseGeo.WorkerProcessFixture\ImmichReverseGeo.WorkerProcessFixture.csproj</WorkerProcessFixtureProject>
+    <WorkerProcessFixtureAssemblyName>ImmichReverseGeo.WorkerProcessFixture</WorkerProcessFixtureAssemblyName>
+    <WorkerProcessFixtureTargetFramework>net10.0</WorkerProcessFixtureTargetFramework>
+    <WorkerProcessFixtureStageDirectory>worker-process-fixture</WorkerProcessFixtureStageDirectory>
   </PropertyGroup>
 
   <ItemGroup>
@@ -19,6 +23,7 @@
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Core\ImmichReverseGeo.Core.csproj" />
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Overture\ImmichReverseGeo.Overture.csproj" />
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Web\ImmichReverseGeo.Web.csproj" />
+    <ProjectReference Include="$(WorkerProcessFixtureProject)" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
@@ -28,5 +33,49 @@
     <Content Include="WorkerProtocol\Compatibility\Fixtures\v1\**\*" CopyToOutputDirectory="PreserveNewest" />
     <EmbeddedResource Include="processing-run-executor-contracts.json" LogicalName="ImmichReverseGeo.Tests.processing-run-executor-contracts.json" />
   </ItemGroup>
+
+  <Target Name="StageWorkerProcessFixtureForBuild" AfterTargets="Build">
+    <MSBuild Projects="$(WorkerProcessFixtureProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(WorkerProcessFixtureTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_WorkerProcessFixtureTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_WorkerProcessFixtureRuntimeFile Include="%(_WorkerProcessFixtureTargetPath.RootDir)%(_WorkerProcessFixtureTargetPath.Directory)**\*" />
+      <_WorkerProcessFixtureAppHost Include="@(_WorkerProcessFixtureRuntimeFile)"
+                                            Condition="'%(Filename)%(Extension)' == '$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)'" />
+    </ItemGroup>
+    <Error Condition="'@(_WorkerProcessFixtureAppHost)' == ''"
+           Text="Worker-process fixture apphost was not built: $(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)." />
+    <Copy SourceFiles="@(_WorkerProcessFixtureRuntimeFile)"
+          DestinationFiles="@(_WorkerProcessFixtureRuntimeFile->'$(TargetDir)$(WorkerProcessFixtureStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(TargetDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Worker-process fixture apphost was not staged to $(TargetDir)$(WorkerProcessFixtureStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(TargetDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
+
+  <Target Name="StageWorkerProcessFixtureForPublish" AfterTargets="Publish">
+    <MSBuild Projects="$(WorkerProcessFixtureProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(WorkerProcessFixtureTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_WorkerProcessFixturePublishTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_WorkerProcessFixturePublishRuntimeFile Include="%(_WorkerProcessFixturePublishTargetPath.RootDir)%(_WorkerProcessFixturePublishTargetPath.Directory)**\*" />
+      <_WorkerProcessFixturePublishAppHost Include="@(_WorkerProcessFixturePublishRuntimeFile)"
+                                                   Condition="'%(Filename)%(Extension)' == '$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)'" />
+    </ItemGroup>
+    <Error Condition="'@(_WorkerProcessFixturePublishAppHost)' == ''"
+           Text="Worker-process fixture apphost was not built: $(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)." />
+    <Copy SourceFiles="@(_WorkerProcessFixturePublishRuntimeFile)"
+          DestinationFiles="@(_WorkerProcessFixturePublishRuntimeFile->'$(PublishDir)$(WorkerProcessFixtureStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Worker-process fixture apphost was not staged to $(PublishDir)$(WorkerProcessFixtureStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(PublishDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
 
 </Project>
