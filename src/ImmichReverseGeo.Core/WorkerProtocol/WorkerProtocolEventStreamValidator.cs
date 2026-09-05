@@ -35,18 +35,25 @@ public sealed class WorkerProtocolEventStreamValidator
     private bool _terminal;
     private readonly HashSet<Guid> _openActivities = [];
 
-    public WorkerProtocolParseResult Validate(WorkerProtocolEvent @event)
+    // Lets typed consumers validate before their own projection without advancing this cursor.
+    internal WorkerProtocolParseResult Preview(WorkerProtocolEvent @event)
     {
         ArgumentNullException.ThrowIfNull(@event);
-
         var failure = ValidateWithoutMutation(@event);
-        if (failure is not null)
+        return failure is null
+            ? WorkerProtocolParseResult.Success(@event)
+            : WorkerProtocolParseResult.Failed(failure.Code, failure.Diagnostic);
+    }
+
+    public WorkerProtocolParseResult Validate(WorkerProtocolEvent @event)
+    {
+        var result = Preview(@event);
+        if (result.IsSuccess)
         {
-            return WorkerProtocolParseResult.Failed(failure.Code, failure.Diagnostic);
+            Commit(@event);
         }
 
-        Commit(@event);
-        return WorkerProtocolParseResult.Success(@event);
+        return result;
     }
 
     public WorkerProtocolStreamFinalizationResult FinalizeStream()

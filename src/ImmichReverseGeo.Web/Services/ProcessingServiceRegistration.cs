@@ -18,6 +18,8 @@ internal static class ProcessingServiceRegistration
     {
         services.AddSingleton<ProcessingState>();
         services.AddSingleton<ProcessingStateEventReporter>();
+        services.AddSingleton(sp => new ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridgeFactory(
+            sp.GetRequiredService<ProcessingStateEventReporter>()));
         services.AddSingleton<IProcessingEventReporter>(sp => sp.GetRequiredService<ProcessingStateEventReporter>());
         services.AddSingleton<IProcessingScheduleConfiguration>(sp => sp.GetRequiredService<ConfigService>());
         services.AddSingleton(sp => new ProcessingRunCoordinator(

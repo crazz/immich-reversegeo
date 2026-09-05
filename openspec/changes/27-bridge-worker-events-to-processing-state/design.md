@@ -2,7 +2,7 @@
 
 See [proposal.md](proposal.md) for motivation and [specs/worker-event-state-bridge/spec.md](specs/worker-event-state-bridge/spec.md) for behavior. Block 9 defines the singleton Web adapter that owns request correlation, absolute state projection, activity scopes, terminal ordering, and `OnChanged`; block 15 defines typed accepted worker envelopes and stream order; block 21 maps the transport-neutral run events to worker frames; block 25 exposes a serialized asynchronous accepted-event sink and retains sink/protocol observations.
 
-The inspected checkout currently contains only the pre-migration `ProcessingState` and direct `ProcessingBackgroundService` mutations. The block-7/8/9/15/21/25 source APIs do not yet exist even though their planning artifacts are complete. Apply must therefore re-read and consume their applied APIs, and stop for prerequisite reconciliation if they remain absent. This change must not invent parallel request, reporter, protocol, launcher, or terminal types.
+The prerequisite source APIs from blocks 7–9, 15, 21, and 25 are applied and were reconciled before implementation. Their exact shared contracts and the narrow adapter seams used here are recorded below. This change introduces no parallel request, reporter, protocol, launcher, or terminal contracts.
 
 The launcher calls its sink for `ready` before writing execute. Ready is process-scoped (sequence 1, null run ID); the existing adapter is run-scoped and deliberately defers `StartRun(total)` until eligibility. Launcher stream validation normally rejects malformed or illegal events before the sink, but the state boundary still needs fail-closed projection preconditions so direct/synthetic callers cannot mutate state with mismatched accepted-event objects.
 
@@ -42,7 +42,7 @@ The controller admission path remains responsible for `MarkPending` and adapter 
 
 ### Add a projection cursor as a defense-in-depth gate, not a second wire parser
 
-Under one async serialization gate, track expected sequence, ready/run-start/eligibility/terminal state, expected run ID, latest coherent progress, and open activity IDs. Before calling the adapter, check:
+Use the finalized `WorkerProtocolEventStreamValidator` as the typed projection cursor under one async serialization gate. Its narrow internal `Preview` operation validates without mutation; the existing `Validate` operation commits only after successful adapter projection. Do not mirror sequence, lifecycle, progress, or activity state in the bridge. Before calling the adapter, the shared cursor and admitted-request checks enforce:
 - exact next sequence and the block-15 closed category/type/payload combination;
 - null run ID only for ready and the exact request run ID for every later event;
 - legal cardinality/order, terminal finality, and non-empty unique activity IDs;
@@ -81,7 +81,7 @@ Exit code, accepted terminal versus exit contradiction, and missing-terminal int
 
 ### Separate normal terminal cleanup from nonterminal abandonment
 
-Activity mapping uses the exact protocol activity ID and label. The block-9 adapter owns the actual `BeginActivity(label)` scopes; the bridge cursor mirrors IDs only to validate pairing. Normal terminal invokes adapter finish, which ends all remaining scopes before completion. A duplicate/unknown end is rejected before adapter mutation.
+Activity mapping uses the exact protocol activity ID and label. The block-9 adapter owns the actual `BeginActivity(label)` scopes; the shared protocol cursor validates activity pairing without a second bridge-owned ID collection. Normal terminal invokes adapter finish, which ends all remaining scopes before completion. A duplicate/unknown end is rejected before adapter mutation.
 
 The bridge is idempotently asynchronously disposable. Disposal suppresses new callbacks and waits for an in-flight accepted projection. If no terminal succeeded, it invokes a narrow adapter abandonment/cleanup operation for the expected run that disposes only that run's projected activity scopes and cannot affect a later arm. It does not call `CompleteRun`, append a summary/fatal line, clear or reuse run correlation as if terminal succeeded, or fabricate a protocol event. It returns a bounded nonterminal observation to the owner for block 30. The finalized adapter API should expose this narrow cleanup; do not expose protocol types from the adapter or change general `ProcessingState` lifecycle.
 
@@ -95,7 +95,7 @@ Boundary tests also prove that no production class in this change parses stdout,
 
 ## Risks / Trade-offs
 
-- [Predecessor source APIs are absent in the current checkout] → Make source verification the first apply task and stop for reconciliation rather than guessing signatures or recreating contracts.
+- [Predecessor API assumptions can become stale] → Reconcile source before implementation and consume the applied contracts recorded below.
 - [Defense-in-depth cursor can drift from the Phase 3 validator] → Limit it to typed projection preconditions and reuse finalized enums/value validators; keep codec compatibility and raw lifecycle authority in block 15.
 - [Awaiting synchronous UI projection slows stdout consumption] → This is intentional lossless backpressure; block 25 keeps both drains active and event volume is bounded by existing worker reporting.
 - [Adapter projection could fail after partially mutating state] → Keep adapter operations atomic under its existing projection gate and never retry an uncertain accepted event; surface the sink observation to block 30.
@@ -116,3 +116,12 @@ Rollback removes the bridge registration/factory and narrow abandonment operatio
 
 A terminal received while this bridge has any open projected activity is a typed terminal-coherence rejection, not an instruction to close activities. Only a coherent accepted terminal performs normal terminal cleanup. Forced activity cleanup is limited to nonterminal bridge/session abandonment. A terminal that follows eligibility but no accepted progress is coherent only when all four result counts (`ProcessedCount`, `UpdatedCount`, `SkippedCount`, and `FailedCount`) are zero; eligibility alone never permits nonzero counts.
 
+
+## Applied prerequisite reconciliation
+
+- All prerequisite APIs are now applied. The existing Web adapter is `ProcessingStateEventReporter`; its `IProcessingEventReporter` alias and coordinator share one singleton.
+- Worker events reuse the adapter through internal `TryProjectAsync`, which reports stale ownership without opening another reporter session. `IsArmed` validates admission; `AbandonProjectedActivities` clears only matching scopes, leaves the arm intact, and produces no terminal/error/summary. Existing fatal `Abandon` remains unchanged for its in-process owner.
+- Core already grants Web and tests internal visibility. Internal `WorkerProtocolEventStreamValidator.Preview` exposes the existing pure validation, while `Validate` still commits. The bridge performs expected-request checks and mapping, previews, awaits projection with cancellation suppressed after gate admission, then commits the same immutable event under its exclusive gate. A projection exception poisons further projection rather than retrying uncertain mutations.
+- Immutable `WorkerProtocolEvent` and payload constructors own closed shape, type, value, count, and UTC validation. Tests exercise those constructor guarantees instead of fabricating malformed objects by reflection or reparsing raw JSON.
+- Block 25 retains its generic `ChildWorkerProtocolObservation.SinkFailure`. The run-scoped bridge exposes a separate bounded first observation and throws a bounded exception; no launcher-specific projection classifications or raw exception details are added.
+- Brooks review exposed an activity-scope ownership gap when `OnChanged` throws before `BeginActivity` returns. The scope acquisition now cleans up its own reference before rethrowing the original observer exception. This narrow exception-safety correction preserves independent/equal-label scopes and the public state model; it lets poisoned bridge disposal meet the no-orphan cleanup contract.

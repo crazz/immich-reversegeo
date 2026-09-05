@@ -64,6 +64,8 @@ public class ProcessingState
 
     public IDisposable BeginActivity(string activity)
     {
+        var scope = new ActivityScope(this, activity);
+
         lock (_activityLock)
         {
             _activityCounts.TryGetValue(activity, out var currentCount);
@@ -71,8 +73,24 @@ public class ProcessingState
             _currentActivity = activity;
         }
 
-        Notify();
-        return new ActivityScope(this, activity);
+        try
+        {
+            Notify();
+            return scope;
+        }
+        catch
+        {
+            try
+            {
+                scope.Dispose();
+            }
+            catch
+            {
+                // Preserve the original observer failure after the activity is released.
+            }
+
+            throw;
+        }
     }
 
     public event Action? OnChanged;

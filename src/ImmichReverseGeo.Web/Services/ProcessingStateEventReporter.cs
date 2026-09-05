@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
@@ -61,6 +62,45 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
             _armedProgress = _state.ReadProgressSnapshot();
             _eligibilityProjected = false;
             _controlObserver?.Invoke("arm", request);
+            return true;
+        }
+    }
+
+    internal bool IsArmed(ProcessingRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        lock (_projectionGate)
+        {
+            return ReferenceEquals(_armedRequest, request) && !_terminal;
+        }
+    }
+
+    internal bool AbandonProjectedActivities(ProcessingRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        lock (_projectionGate)
+        {
+            if (!ReferenceEquals(_armedRequest, request) || _terminal)
+            {
+                return false;
+            }
+
+            var activities = _activities.Values.ToArray();
+            _activities.Clear();
+            ExceptionDispatchInfo? firstFailure = null;
+            foreach (var activity in activities)
+            {
+                try
+                {
+                    activity.Dispose();
+                }
+                catch (Exception failure)
+                {
+                    firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+                }
+            }
+
+            firstFailure?.Throw();
             return true;
         }
     }
@@ -145,13 +185,22 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 
     protected override ValueTask AcceptAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken)
     {
+        Project(processingEvent, cancellationToken);
+        return ValueTask.CompletedTask;
+    }
+
+    internal ValueTask<bool> TryProjectAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken)
+        => ValueTask.FromResult(Project(processingEvent, cancellationToken));
+
+    private bool Project(ProcessingEvent processingEvent, CancellationToken cancellationToken)
+    {
         cancellationToken.ThrowIfCancellationRequested();
 
         lock (_projectionGate)
         {
             if (!ReferenceEquals(_armedRequest, processingEvent.Request) || _terminal)
             {
-                return ValueTask.CompletedTask;
+                return false;
             }
 
             if (processingEvent is ProgressChanged attemptedProgress)
@@ -194,7 +243,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
             }
         }
 
-        return ValueTask.CompletedTask;
+        return true;
     }
 
     private void ProjectLog(LogEmitted log)
