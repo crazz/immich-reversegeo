@@ -71,7 +71,11 @@ public sealed class SharedCompositionTests
             typeof(WorkerCommandRuntimeFactsCapture),
             typeof(IWorkerCommandRuntimeFactsCapture),
             typeof(WorkerCommandInvocationBuilder),
-            typeof(IWorkerCommandInvocationBuilder)
+            typeof(IWorkerCommandInvocationBuilder),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.SystemChildProcessFactory),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher)
         };
         var shared = new ServiceCollection();
         shared.AddSharedComposition(ApplicationCompositionContext.Create(CompositionEnvironment.Development, "/composition/shared", null, null));

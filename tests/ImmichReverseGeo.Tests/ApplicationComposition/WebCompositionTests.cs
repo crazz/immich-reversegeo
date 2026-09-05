@@ -231,6 +231,44 @@ public sealed class WebCompositionTests
     }
 
     [TestMethod]
+    public void WebComposition_RegistersConcreteChildWorkerOwnersAndStableAliasesWithoutEagerWork()
+    {
+        var fixtureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        try
+        {
+            var services = CreateWebServices(fixtureRoot, Path.Combine(fixtureRoot, "data"), Path.Combine(fixtureRoot, "config"));
+            AssertChildWorkerConcreteDescriptor(
+                services,
+                typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.SystemChildProcessFactory));
+            AssertChildWorkerConcreteDescriptor(
+                services,
+                typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher));
+            AssertChildWorkerAliasDescriptor(
+                services,
+                typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory));
+            AssertChildWorkerAliasDescriptor(
+                services,
+                typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher));
+
+            using var provider = services.BuildServiceProvider();
+            var concreteFactory = provider.GetRequiredService<ImmichReverseGeo.Web.ChildWorkerLaunching.SystemChildProcessFactory>();
+            var launcher = provider.GetRequiredService<ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher>();
+            Assert.AreSame(
+                concreteFactory,
+                provider.GetRequiredService<ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory>(),
+                "child-worker-factory-alias");
+            Assert.AreSame(
+                launcher,
+                provider.GetRequiredService<ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher>(),
+                "child-worker-launcher-alias");
+        }
+        finally
+        {
+            DeleteFixture(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
     public void WebComposition_CommandBuilderOwnerAliasesShareIdentityWithoutCapture()
     {
         var fixtureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
@@ -384,6 +422,24 @@ public sealed class WebCompositionTests
             TotalCalls++;
             return path == "/app" ? WorkerTargetObservation.Directory : WorkerTargetObservation.File;
         }
+    }
+
+    private static void AssertChildWorkerConcreteDescriptor(IServiceCollection services, Type concreteType)
+    {
+        var descriptors = services.Where(descriptor => descriptor.ServiceType == concreteType).ToArray();
+        Assert.AreEqual(1, descriptors.Length, "child-worker-" + concreteType.Name + "-concrete-count");
+        Assert.AreEqual(ServiceLifetime.Singleton, descriptors[0].Lifetime, "child-worker-" + concreteType.Name + "-concrete-lifetime");
+        Assert.IsTrue(
+            descriptors[0].ImplementationType == concreteType || descriptors[0].ImplementationFactory is not null,
+            "child-worker-" + concreteType.Name + "-concrete-activation");
+    }
+
+    private static void AssertChildWorkerAliasDescriptor(IServiceCollection services, Type serviceType)
+    {
+        var descriptors = services.Where(descriptor => descriptor.ServiceType == serviceType).ToArray();
+        Assert.AreEqual(1, descriptors.Length, "child-worker-" + serviceType.Name + "-alias-count");
+        Assert.AreEqual(ServiceLifetime.Singleton, descriptors[0].Lifetime, "child-worker-" + serviceType.Name + "-alias-lifetime");
+        Assert.IsNotNull(descriptors[0].ImplementationFactory, "child-worker-" + serviceType.Name + "-alias-factory");
     }
 
     private static ServiceCollection CreateWebServices(string contentRoot, string dataDirectory, string configDirectory)

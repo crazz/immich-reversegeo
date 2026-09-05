@@ -76,7 +76,11 @@ public sealed class InternalWorkerCompositionTests
             typeof(WorkerCommandRuntimeFactsCapture),
             typeof(IWorkerCommandRuntimeFactsCapture),
             typeof(WorkerCommandInvocationBuilder),
-            typeof(IWorkerCommandInvocationBuilder)
+            typeof(IWorkerCommandInvocationBuilder),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.SystemChildProcessFactory),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher)
         };
 
         foreach (var commandType in commandTypes)
@@ -115,7 +119,11 @@ public sealed class InternalWorkerCompositionTests
             typeof(WorkerCommandRuntimeFactsCapture),
             typeof(IWorkerCommandRuntimeFactsCapture),
             typeof(WorkerCommandInvocationBuilder),
-            typeof(IWorkerCommandInvocationBuilder)
+            typeof(IWorkerCommandInvocationBuilder),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.SystemChildProcessFactory),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher),
+            typeof(ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher)
         };
 
         foreach (var serviceType in forbiddenServices)
