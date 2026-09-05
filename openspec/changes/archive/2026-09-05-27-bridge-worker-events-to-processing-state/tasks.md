@@ -64,3 +64,4 @@ A terminal received while this bridge has any open projected activity is a typed
 - Final `LC_ALL=en_US.UTF-8 npm run test`: 1260/1260 passed with default Integration/Performance exclusions. The explicit locale preserves the existing executor snapshot baseline on macOS.
 - Brooks review identified and resolved unowned activity scopes after a throwing start observer, and stale ready acceptance after an adapter arm was replaced. Regression coverage verifies cleanup, independent same-label scopes, original exception retention, and unchanged stale-ready state.
 - OpenSpec strict validation and whitespace checks passed. Block-26 fixture/source/artifacts, existing backend routing, and Razor components remain unchanged.
+- Feature-branch implementation commit `76f5817d7dd1cf1b9f4e11be0753b589cc62c352`: all six CI jobs passed, including Docker build and Linux/Windows/macOS fixture checks. Run: https://github.com/crazz/immich-reversegeo/actions/runs/33987678962
