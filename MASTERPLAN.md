@@ -615,7 +615,7 @@ Compose `HostOptions.ShutdownTimeout` around the remaining portion of block 28's
 
 **Dependencies and sequencing** — Re-read the applied exact APIs from blocks 13, 25, 27, and finalized 28 immediately before implementation; consume block 28's one shared 10-second `TimeProvider` operation rather than adding another timeout or escalation surface. Stop for reconciliation only if applied coordinator/session names or ownership attachment differ. Block 30 alone classifies raw startup, protocol, terminal, exit, and kill evidence. Do not edit block 28 here.
 
-**OpenSpec** — [29-stop-active-worker-on-web-shutdown](openspec/changes/29-stop-active-worker-on-web-shutdown/)
+**OpenSpec** — [29-stop-active-worker-on-web-shutdown](openspec/changes/archive/2026-09-05-29-stop-active-worker-on-web-shutdown/)
 
 ### 30. `feat: handle worker crash and protocol failure`
 
