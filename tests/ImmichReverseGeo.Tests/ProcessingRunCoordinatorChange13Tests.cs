@@ -271,12 +271,13 @@ public sealed class ProcessingRunCoordinatorChange13Tests
 
         var firstStop = fixture.Coordinator.StopAsync(CancellationToken.None);
         var secondStop = fixture.Coordinator.StopAsync(CancellationToken.None);
-        Assert.IsTrue(invocation.Token.IsCancellationRequested);
         Assert.AreEqual(ProcessingRunAdmissionResult.Stopping, await fixture.Coordinator.TriggerManualAsync());
         Assert.AreEqual(ScheduledTriggerResult.RejectedAlreadyRunning,
             await ((IScheduledRunTrigger)fixture.Coordinator).TriggerScheduledAsync(CancellationToken.None));
         Assert.AreEqual(1, fixture.IdCalls);
         Assert.AreEqual(1, fixture.Executor.CallCount);
+        await plan.TerminalResult.Task.WaitAsync(TestTimeout);
+        Assert.IsTrue(invocation.Token.IsCancellationRequested);
         await Task.WhenAll(firstStop, secondStop).WaitAsync(TestTimeout);
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
         Assert.AreEqual(ProcessingRunOutcome.Cancelled, (await plan.TerminalResult.Task.WaitAsync(TestTimeout)).Outcome);

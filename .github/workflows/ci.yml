@@ -53,7 +53,7 @@ jobs:
         run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --filter "TestCategory=Change23"
 
   change26:
-    name: Worker fixture and cancellation (${{ matrix.os }})
+    name: Worker fixture, cancellation and shutdown (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
@@ -70,11 +70,11 @@ jobs:
       - name: Build fixture staging
         run: dotnet build tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release
 
-      - name: Run worker fixture and cancellation tests without rebuilding
-        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --no-build --filter "TestCategory=Change26|TestCategory=Change28"
+      - name: Run worker fixture, cancellation and shutdown tests without rebuilding
+        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --no-build --filter "TestCategory=Change26|TestCategory=Change28|TestCategory=Change29"
 
       - name: Publish fixture staging
         run: dotnet publish tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --output _out/change26-publish
 
       - name: Smoke published fixture staging without rebuilding
-        run: dotnet _out/change26-publish/ImmichReverseGeo.Tests.dll --filter "TestCategory=Change26|TestCategory=Change28"
+        run: dotnet _out/change26-publish/ImmichReverseGeo.Tests.dll --filter "TestCategory=Change26|TestCategory=Change28|TestCategory=Change29"

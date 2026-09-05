@@ -35,7 +35,7 @@ The control plane SHALL create or join one idempotent shutdown operation for the
 - **THEN** shutdown joins completion, stream finality, disposal, and exact-handle cleanup without starting a second cancellation operation
 
 ### Requirement: Host shutdown reuses the finalized bounded cancellation policy
-For a live child session, host shutdown SHALL invoke or join the same block-28 exact-session task used by explicit Stop. Its one injected-`TimeProvider` deadline SHALL begin at the first accepted Stop and SHALL use block 28's validated internal 10-second production default. The host lifecycle SHALL NOT create, reset, shorten, or replace that deadline, cancel-command writer, whole-process-tree kill attempt, stream-drain lifecycle, or session disposal. Stop latched before request acceptance SHALL retain block 28's rule that no cancel is written until the same session has successfully written and flushed execute.
+For a live child session, host shutdown SHALL invoke or join the same block-28 exact-session task used by explicit Stop. Its one injected-`TimeProvider` deadline SHALL begin at the first accepted Stop and SHALL use block 28's fixed internal 10-second grace. The host lifecycle SHALL NOT create, reset, shorten, or replace that deadline, cancel-command writer, whole-process-tree kill attempt, stream-drain lifecycle, or session disposal. Stop latched before request acceptance SHALL retain block 28's rule that no cancel is written until the same session has successfully written and flushed execute.
 
 #### Scenario: User Stop and host shutdown overlap
 - **WHEN** explicit Stop and Web-host shutdown target the same active session concurrently
@@ -92,7 +92,7 @@ The earliest application-stopping notification SHALL close admission synchronous
 
 #### Scenario: Host startup fails
 - **WHEN** Web-host startup fails after shutdown ownership has been registered or a child session has been captured
-- **THEN** admission remains closed and the same bounded cleanup completes without leaving a child or resource lease behind
+- **THEN** admission remains closed and the same owned cleanup completes without leaving a child or resource lease behind
 
 ## Audit Reconciliation
 

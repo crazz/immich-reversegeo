@@ -50,11 +50,12 @@ internal interface IProcessingRunCoordinatorObserver
     void CoordinatorStopped() { }
     void BeforeRequestCancellation(ProcessingRunRequest request) { }
     void AfterRequestCancellation(ProcessingRunRequest request) { }
+    ValueTask BeforeChildSettlementAsync(ProcessingRunRequest request, CancellationToken activeToken) => ValueTask.CompletedTask;
     ValueTask BeforeDetachAsync(ProcessingRunRequest request, CancellationToken activeToken) => ValueTask.CompletedTask;
     ValueTask BeforeDisposeAsync(ProcessingRunRequest request, CancellationToken activeToken) => ValueTask.CompletedTask;
 }
 
-public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, IScheduledRunTrigger, IHostedService
+public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, IScheduledRunTrigger, IHostedService, IDisposable, IAsyncDisposable
 {
     private readonly object _admissionGate = new();
     private readonly ProcessingState _state;
@@ -65,8 +66,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private readonly IProcessingRunCancellationFactory _cancellationFactory;
     private readonly IProcessingRunCoordinatorObserver? _observer;
     private readonly TimeProvider _timeProvider;
+    private readonly TaskCompletionSource _applicationStoppingRegistrationReady =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenRegistration _applicationStoppingRegistration;
     private ActiveRun? _active;
+    private Task? _shutdownTask;
     private bool _admissionOpen = true;
 
     public ProcessingRunCoordinator(
@@ -158,8 +162,15 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         _cancellationFactory = cancellationFactory;
         _observer = observer;
         _timeProvider = timeProvider ?? TimeProvider.System;
-        _applicationStoppingRegistration = applicationLifetime?.ApplicationStopping.Register(CloseAdmissionAndCancel)
-            ?? default;
+        try
+        {
+            _applicationStoppingRegistration = applicationLifetime?.ApplicationStopping.Register(BeginShutdownFromApplicationStopping)
+                ?? default;
+        }
+        finally
+        {
+            _applicationStoppingRegistrationReady.TrySetResult();
+        }
     }
 
     public async Task<ProcessingRunAdmissionResult> TriggerManualAsync()
@@ -305,22 +316,57 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
     public Task StartAsync(CancellationToken cancellationToken)
     {
-        _observer?.CoordinatorStarted();
-        return Task.CompletedTask;
+        try
+        {
+            _observer?.CoordinatorStarted();
+            return Task.CompletedTask;
+        }
+        catch (Exception failure)
+        {
+            return CompleteFailedStartAsync(failure);
+        }
     }
 
-    public async Task StopAsync(CancellationToken cancellationToken)
+    public Task StopAsync(CancellationToken cancellationToken)
     {
-        await BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt.Stop).ConfigureAwait(false);
-        _observer?.CoordinatorStopping();
-        var handle = CloseAdmissionAndCapture();
-        if (handle is not null)
+        _ = cancellationToken;
+        return BeginShutdown();
+    }
+
+    public ValueTask DisposeAsync()
+    {
+        return new ValueTask(BeginShutdown());
+    }
+
+    public void Dispose()
+    {
+        BeginShutdown().GetAwaiter().GetResult();
+    }
+
+    internal Task BeginShutdown()
+    {
+        TaskCompletionSource start;
+        Task shutdown;
+        lock (_admissionGate)
         {
-            await handle.PreparationCompleted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
-            RequestCancellation(handle);
-            await handle.CleanupCompleted.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (_shutdownTask is not null)
+            {
+                return _shutdownTask;
+            }
+
+            _admissionOpen = false;
+            var handle = _active;
+            handle?.MarkShutdownRequested();
+            ActiveRun.StopClaim? stopClaim = handle?.ClaimStop(
+                _timeProvider,
+                trackCancellationDispatch: true);
+            start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            shutdown = CompleteShutdownAsync(handle, stopClaim, start.Task);
+            _shutdownTask = shutdown;
         }
-        _observer?.CoordinatorStopped();
+
+        start.TrySetResult();
+        return shutdown;
     }
 
     private ValueTask BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt attempt)
@@ -375,11 +421,14 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     {
         try
         {
+            ThrowIfShutdownCancellationRequested(handle);
             _state.MarkPending();
+            ThrowIfShutdownCancellationRequested(handle);
             if (!_reporter.Arm(handle.Request))
             {
                 throw new InvalidOperationException("Processing event reporter is already armed.");
             }
+            ThrowIfShutdownCancellationRequested(handle);
 
             Task<ProcessingRunResult> execution;
             try
@@ -407,6 +456,14 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
     }
 
+    private static void ThrowIfShutdownCancellationRequested(ActiveRun handle)
+    {
+        if (handle.IsShutdownRequested)
+        {
+            throw new OperationCanceledException(handle.Cancellation.Token);
+        }
+    }
+
     private async Task FailPreparationAsync(ActiveRun handle, Exception failure)
     {
         if (!handle.TryBeginCleanup())
@@ -417,8 +474,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         try
         {
-            ObserveInfrastructureFailure(handle, failure);
-            TryAbandon(handle.Request, failure);
+            ObserveRunFailure(handle, failure);
+            if (!handle.IsShutdownRequested)
+            {
+                CleanupProjectionAfterFailure(handle, failure);
+            }
         }
         finally
         {
@@ -440,8 +500,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         catch (Exception ex)
         {
             failure = ExceptionDispatchInfo.Capture(ex);
-            ObserveInfrastructureFailure(handle, ex);
-            TryAbandon(handle.Request, ex);
+            ObserveRunFailure(handle, ex);
+            if (!handle.IsShutdownRequested)
+            {
+                CleanupProjectionAfterFailure(handle, ex);
+            }
         }
         finally
         {
@@ -471,6 +534,35 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         _logger.LogError(failure, "Processing run {RunId} faulted outside a domain terminal", handle.Request.RunId);
     }
 
+    private void ObserveRunFailure(ActiveRun handle, Exception failure)
+    {
+        if (!handle.IsShutdownRequested)
+        {
+            ObserveInfrastructureFailure(handle, failure);
+            return;
+        }
+
+        if (failure is OperationCanceledException cancellation
+            && cancellation.CancellationToken == handle.Cancellation.Token)
+        {
+            _logger.LogDebug(
+                "Processing run {RunId} ended through the host shutdown cancellation boundary",
+                handle.Request.RunId);
+        }
+        else if (failure is OutOfMemoryException)
+        {
+            _logger.LogCritical(
+                "Processing run {RunId} exhausted memory during host shutdown",
+                handle.Request.RunId);
+        }
+        else
+        {
+            _logger.LogError(
+                "Processing run {RunId} faulted during host shutdown",
+                handle.Request.RunId);
+        }
+    }
+
     private void TryAbandon(ProcessingRunRequest request, Exception failure)
     {
         try
@@ -484,6 +576,40 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         catch (Exception abandonmentFailure)
         {
             _logger.LogError(abandonmentFailure, "Processing run {RunId} projection abandonment faulted", request.RunId);
+        }
+    }
+
+    private void CleanupProjectionAfterFailure(
+        ActiveRun handle,
+        Exception failure)
+    {
+        if (!handle.IsShutdownRequested)
+        {
+            TryAbandon(handle.Request, failure);
+            return;
+        }
+
+        try
+        {
+            if (!_reporter.AbandonProjectedActivities(handle.Request))
+            {
+                _reporter.RollbackPendingAfterArmRejection(handle.Request);
+            }
+        }
+        catch (Exception abandonmentFailure)
+        {
+            if (abandonmentFailure is OutOfMemoryException)
+            {
+                _logger.LogCritical(
+                    "Processing run {RunId} shutdown activity cleanup exhausted memory",
+                    handle.Request.RunId);
+            }
+            else
+            {
+                _logger.LogError(
+                    "Processing run {RunId} shutdown activity cleanup faulted",
+                    handle.Request.RunId);
+            }
         }
     }
 
@@ -503,12 +629,30 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         try
         {
+            if (_observer is not null)
+            {
+                await _observer.BeforeChildSettlementAsync(handle.Request, handle.Cancellation.Token).ConfigureAwait(false);
+            }
+        }
+        catch (Exception failure)
+        {
+            cleanupFailure = ExceptionDispatchInfo.Capture(failure);
+            ObserveCleanupFailure(handle, failure);
+        }
+
+        try
+        {
             await handle.SettleAttachedChildAsync().ConfigureAwait(false);
         }
         catch (Exception failure)
         {
             cleanupFailure ??= ExceptionDispatchInfo.Capture(failure);
             ObserveCleanupFailure(handle, failure);
+        }
+
+        if (handle.IsShutdownRequested && primaryFailure is not null)
+        {
+            CleanupProjectionAfterFailure(handle, primaryFailure.SourceException);
         }
 
         try
@@ -563,6 +707,24 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
     private void ObserveCleanupFailure(ActiveRun handle, Exception failure)
     {
+        if (handle.IsShutdownRequested)
+        {
+            if (failure is OutOfMemoryException)
+            {
+                _logger.LogCritical(
+                    "Processing run {RunId} host shutdown cleanup exhausted memory",
+                    handle.Request.RunId);
+            }
+            else
+            {
+                _logger.LogError(
+                    "Processing run {RunId} host shutdown cleanup faulted",
+                    handle.Request.RunId);
+            }
+
+            return;
+        }
+
         if (failure is OutOfMemoryException)
         {
             _logger.LogCritical(failure, "Processing run {RunId} cleanup exhausted memory", handle.Request.RunId);
@@ -573,12 +735,102 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
     }
 
-    private void CloseAdmissionAndCancel()
+    private void BeginShutdownFromApplicationStopping()
     {
-        var handle = CloseAdmissionAndCapture();
-        if (handle is not null)
+        _ = BeginShutdown();
+    }
+
+    private async Task CompleteFailedStartAsync(Exception startupFailure)
+    {
+        var capturedFailure = ExceptionDispatchInfo.Capture(startupFailure);
+        try
         {
-            RequestCancellation(handle);
+            await BeginShutdown().ConfigureAwait(false);
+        }
+        catch
+        {
+            // CompleteShutdownAsync records every shutdown phase failure before preserving startup failure.
+        }
+
+        capturedFailure.Throw();
+    }
+
+    private async Task CompleteShutdownAsync(
+        ActiveRun? handle,
+        ActiveRun.StopClaim? stopClaim,
+        Task start)
+    {
+        await start.ConfigureAwait(false);
+        ExceptionDispatchInfo? firstFailure = null;
+
+        async Task AttemptAsync(Func<Task> operation)
+        {
+            try
+            {
+                await operation().ConfigureAwait(false);
+            }
+            catch (Exception failure)
+            {
+                firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+                ObserveShutdownFailure(failure);
+            }
+        }
+
+        await AttemptAsync(async () =>
+            await BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt.Stop).ConfigureAwait(false)).ConfigureAwait(false);
+        await AttemptAsync(() =>
+        {
+            _observer?.CoordinatorStopping();
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+
+        if (handle is not null && stopClaim is not null)
+        {
+            await AttemptAsync(() => StartOrJoinShutdownStop(handle, stopClaim.Value)).ConfigureAwait(false);
+        }
+
+        await AttemptAsync(() =>
+        {
+            _observer?.CoordinatorStopped();
+            return Task.CompletedTask;
+        }).ConfigureAwait(false);
+        await AttemptAsync(async () =>
+        {
+            await _applicationStoppingRegistrationReady.Task.ConfigureAwait(false);
+            await _applicationStoppingRegistration.DisposeAsync().ConfigureAwait(false);
+        }).ConfigureAwait(false);
+
+        firstFailure?.Throw();
+    }
+
+    private Task StartOrJoinShutdownStop(
+        ActiveRun handle,
+        ActiveRun.StopClaim claim)
+    {
+        try
+        {
+            if (claim.IsFirst)
+            {
+                DispatchCancellation(handle, claim.CancellationDispatch!);
+            }
+        }
+        finally
+        {
+            handle.StartAttachedStop();
+        }
+
+        return claim.Settlement;
+    }
+
+    private void ObserveShutdownFailure(Exception failure)
+    {
+        if (failure is OutOfMemoryException)
+        {
+            _logger.LogCritical("Processing coordinator shutdown exhausted memory");
+        }
+        else
+        {
+            _logger.LogError("Processing coordinator shutdown faulted");
         }
     }
 
@@ -589,6 +841,24 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         _observer?.AfterRequestCancellation(handle.Request);
         if (failure is null || !handle.TryMarkCancellationFailureObserved())
         {
+            return;
+        }
+
+        if (handle.IsShutdownRequested)
+        {
+            if (failure.SourceException is OutOfMemoryException)
+            {
+                _logger.LogCritical(
+                    "Processing run {RunId} host shutdown cancellation exhausted memory",
+                    handle.Request.RunId);
+            }
+            else
+            {
+                _logger.LogError(
+                    "Processing run {RunId} host shutdown cancellation faulted",
+                    handle.Request.RunId);
+            }
+
             return;
         }
 
@@ -634,15 +904,6 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
     }
 
-    private ActiveRun? CloseAdmissionAndCapture()
-    {
-        lock (_admissionGate)
-        {
-            _admissionOpen = false;
-            return _active;
-        }
-    }
-
     private sealed class ProcessingRunCancellationFactory : IProcessingRunCancellationFactory
     {
         public IProcessingRunCancellation Create(ProcessingRunRequest request, CancellationToken linkedToken)
@@ -665,6 +926,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     {
         private int _cleanupStarted;
         private int _cancellationFailureObserved;
+        private int _shutdownRequested;
         private Task? _ownedExecution;
         private readonly object _cancellationGate = new();
         private readonly object _childGate = new();
@@ -695,6 +957,12 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         public TaskCompletionSource CleanupCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ExceptionDispatchInfo? ExecutionFailure { get; set; }
         public bool HasOwnedExecution => Volatile.Read(ref _ownedExecution) is not null;
+        public bool IsShutdownRequested => Volatile.Read(ref _shutdownRequested) != 0;
+
+        public void MarkShutdownRequested()
+        {
+            Volatile.Write(ref _shutdownRequested, 1);
+        }
 
         public void SetOwnedExecution(Task execution)
         {

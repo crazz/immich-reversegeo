@@ -92,7 +92,7 @@ public sealed class ProcessingCompositionTurn2Tests
         await schedulerStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
 
         var coordinator = host.Services.GetRequiredService<ProcessingRunCoordinator>();
-        var scheduler = host.Services.GetRequiredService<ProcessingBackgroundService>();
+        var scheduler = (ObservedScheduler)host.Services.GetRequiredService<ProcessingBackgroundService>();
         var hosted = host.Services.GetServices<IHostedService>().ToArray();
         Assert.AreSame(coordinator, host.Services.GetRequiredService<IManualProcessingRunCoordinator>());
         Assert.AreSame(coordinator, host.Services.GetRequiredService<IScheduledRunTrigger>());
@@ -103,19 +103,37 @@ public sealed class ProcessingCompositionTurn2Tests
         await executor.Entered.Task.WaitAsync(TimeSpan.FromSeconds(10));
         using var stopBound = new CancellationTokenSource(TimeSpan.FromSeconds(10));
         var stopping = host.StopAsync(stopBound.Token);
-        await executor.CancelObserved.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        await lifecycle.Stopping.Task.WaitAsync(TimeSpan.FromSeconds(10));
-        Assert.IsFalse(stopping.IsCompleted);
-        CollectionAssert.AreEqual(
-            new[] { "coordinator:started", "scheduler:started", "executor:entered", "executor:cancelled", "scheduler:stopping", "scheduler:stopped", "coordinator:stopping" },
-            operations.ToArray());
+        try
+        {
+            Assert.AreEqual(ProcessingRunAdmissionResult.Stopping, await coordinator.TriggerManualAsync());
+            await Task.WhenAll(
+                    executor.CancelObserved.Task,
+                    lifecycle.Stopping.Task,
+                    scheduler.Stopped.Task)
+                .WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.IsFalse(stopping.IsCompleted);
+            var beforeRelease = operations.ToArray();
+            CollectionAssert.AreEquivalent(
+                new[] { "coordinator:started", "scheduler:started", "executor:entered", "executor:cancelled", "scheduler:stopping", "scheduler:stopped", "coordinator:stopping" },
+                beforeRelease);
+            AssertInOrder(beforeRelease, "coordinator:started", "scheduler:started", "executor:entered");
+            AssertInOrder(beforeRelease, "coordinator:stopping", "executor:cancelled");
+            AssertInOrder(beforeRelease, "scheduler:stopping", "scheduler:stopped");
+        }
+        finally
+        {
+            executor.Release.TrySetResult();
+        }
 
-        executor.Release.TrySetResult();
         await stopping.WaitAsync(TimeSpan.FromSeconds(10));
-        CollectionAssert.AreEqual(
+        var completed = operations.ToArray();
+        CollectionAssert.AreEquivalent(
             new[] { "coordinator:started", "scheduler:started", "executor:entered", "executor:cancelled", "scheduler:stopping", "scheduler:stopped", "coordinator:stopping", "executor:released", "coordinator:stopped" },
-            operations.ToArray(),
+            completed,
             string.Join(" | ", operations));
+        AssertInOrder(completed, "coordinator:started", "scheduler:started", "executor:entered");
+        AssertInOrder(completed, "coordinator:stopping", "executor:cancelled", "executor:released", "coordinator:stopped");
+        AssertInOrder(completed, "scheduler:stopping", "scheduler:stopped", "coordinator:stopped");
     }
 
     [TestMethod]
@@ -191,11 +209,31 @@ public sealed class ProcessingCompositionTurn2Tests
         ConcurrentQueue<string> operations)
         : ProcessingBackgroundService(logger, state, configuration, initialise, timeProvider, trigger)
     {
+        public TaskCompletionSource Stopped { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         public override async Task StopAsync(CancellationToken cancellationToken)
         {
             operations.Enqueue("scheduler:stopping");
             await base.StopAsync(cancellationToken);
             operations.Enqueue("scheduler:stopped");
+            Stopped.TrySetResult();
+        }
+    }
+
+    private static void AssertInOrder(IReadOnlyList<string> actual, params string[] expected)
+    {
+        var actualIndex = 0;
+        foreach (var operation in expected)
+        {
+            while (actualIndex < actual.Count && actual[actualIndex] != operation)
+            {
+                actualIndex++;
+            }
+
+            Assert.IsTrue(
+                actualIndex < actual.Count,
+                $"Missing ordered operation '{operation}' in: {string.Join(" | ", actual)}");
+            actualIndex++;
         }
     }
 }

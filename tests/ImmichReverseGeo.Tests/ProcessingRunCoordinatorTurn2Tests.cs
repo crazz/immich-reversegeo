@@ -277,8 +277,20 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         var cancellation = fixture.Cancellations.Created.Single();
         Assert.AreEqual(1, cancellation.CancelCount);
         Assert.AreEqual(1, cancellation.DisposeCount);
-        Assert.AreEqual(1, fixture.Logger.Entries.Count(entry => ReferenceEquals(entry.Exception, cancellationFailure)));
-        Assert.AreEqual(directOom ? LogLevel.Critical : LogLevel.Error, fixture.Logger.Entries.Single().Level);
+        var cancellationLog = fixture.Logger.Entries.Single();
+        Assert.AreEqual(directOom ? LogLevel.Critical : LogLevel.Error, cancellationLog.Level);
+        if (path == "manual")
+        {
+            Assert.AreSame(cancellationFailure, cancellationLog.Exception);
+        }
+        else
+        {
+            Assert.IsNull(cancellationLog.Exception);
+            Assert.AreEqual(
+                $"Processing run {id} host shutdown cancellation {(directOom ? "exhausted memory" : "faulted")}",
+                cancellationLog.Message);
+            Assert.IsFalse(cancellationLog.Message.Contains(cancellationFailure.Message, StringComparison.Ordinal));
+        }
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
         var terminal = fixture.Events.OfType<RunFinished>().Single();
         Assert.AreSame(terminal.Request, terminal.Result.Request);
@@ -810,6 +822,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         var ownedToken = fixture.Cancellations.Created[0].Token;
         Task? secondaryRequest = null;
         var secondaryManualResult = false;
+        using var secondaryRequestIssued = new ManualResetEventSlim(false);
         using var stopBound = new CancellationTokenSource(TestTimeout);
         using var crossThreadCallback = invocation.Token.Register(() =>
         {
@@ -817,10 +830,22 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
             secondaryRequest = path switch
             {
                 "manual" => Task.Run(() => secondaryManualResult = fixture.Coordinator.CancelActiveRun()),
-                "lifetime" => Task.Run(lifetime.StopApplication),
-                _ => Task.Run(async () => await fixture.Coordinator.StopAsync(stopBound.Token))
+                "lifetime" => Task.Run(() =>
+                {
+                    lifetime.StopApplication();
+                    secondaryRequestIssued.Set();
+                }),
+                _ => Task.Run(async () =>
+                {
+                    var stop = fixture.Coordinator.StopAsync(stopBound.Token);
+                    secondaryRequestIssued.Set();
+                    await stop;
+                })
             };
-            if (!observer.RequestReturned.Wait(TestTimeout))
+            var returned = path == "manual"
+                ? observer.RequestReturned.Wait(TestTimeout)
+                : secondaryRequestIssued.Wait(TestTimeout);
+            if (!returned)
             {
                 throw new TimeoutException("Cross-thread cancellation request did not return from the active handle.");
             }
@@ -903,7 +928,9 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         var observer = new CancellationRaceObserver();
         var overlap = new CancellationOverlapGate();
         var fixture = new DirectFixture([first, second], lifetime: lifetime, overlapGate: overlap, observer: observer);
-        var plan = fixture.Executor.Enqueue(completeOnCancellation: true);
+        var plan = fixture.Executor.Enqueue(
+            completeOnCancellation: true,
+            gateBeforeTerminalProjection: true);
         Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await fixture.Coordinator.TriggerManualAsync());
         var invocation = await plan.Entered.Task.WaitAsync(TestTimeout);
         var ownedToken = fixture.Cancellations.Created[0].Token;
@@ -929,17 +956,35 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         {
             await overlap.CancelEntered.Task.WaitAsync(TestTimeout);
             await overlap.CallbackCompleted.Task.WaitAsync(TestTimeout);
+            await plan.TerminalProjectionReached.Task.WaitAsync(TestTimeout);
             Assert.IsTrue(reentrantCancel);
-            await observer.DisposeAttempted.Task.WaitAsync(TestTimeout);
             Assert.AreSame(invocation.Request, fixture.Coordinator.ActiveRequest);
             Assert.AreEqual(1, fixture.IdCalls);
             Assert.AreEqual(path == "manual" ? ProcessingRunAdmissionResult.AlreadyRunning : ProcessingRunAdmissionResult.Stopping, await fixture.Coordinator.TriggerManualAsync());
             Assert.AreEqual(1, fixture.IdCalls);
+
+            plan.TerminalProjectionRelease.TrySetResult();
+            if (path == "manual")
+            {
+                await observer.DisposeAttempted.Task.WaitAsync(TestTimeout);
+            }
+            else
+            {
+                Assert.IsFalse(observer.DisposeAttempted.Task.IsCompleted);
+            }
             Assert.IsFalse(overlap.DisposeEntered.Task.IsCompleted);
-            Assert.IsFalse(cancellationRequest.IsCompleted);
+            if (path == "lifetime")
+            {
+                await cancellationRequest.WaitAsync(TestTimeout);
+            }
+            else
+            {
+                Assert.IsFalse(cancellationRequest.IsCompleted);
+            }
         }
         finally
         {
+            plan.TerminalProjectionRelease.TrySetResult();
             overlap.ReleaseCancel();
             plan.Release.TrySetResult();
         }
@@ -958,9 +1003,40 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         Assert.AreEqual(1, source.CancelCount);
         Assert.AreEqual(1, source.DisposeCount);
         Assert.AreEqual(0, fixture.Logger.Entries.Count);
-        CollectionAssert.AreEqual(
-            new[] { $"id:{first}", "cts:create:Manual", $"pending:{first}", $"arm:{first}", $"dispatch:{first}", $"cancel-enter:{first}", $"callback:{first}", $"event:RunStarted:{first}", $"event:EligibilityDetermined:{first}", $"event:RunFinished:{first}", $"release:{first}", $"cancel-exit:{first}", $"dispose-enter:{first}", $"dispose-exit:{first}" },
-            fixture.Operations.ToArray());
+        var expectedFirstRun = new[] { $"id:{first}", "cts:create:Manual", $"pending:{first}", $"arm:{first}", $"dispatch:{first}", $"cancel-enter:{first}", $"callback:{first}", $"event:RunStarted:{first}", $"event:EligibilityDetermined:{first}", $"event:RunFinished:{first}", $"release:{first}", $"cancel-exit:{first}", $"dispose-enter:{first}", $"dispose-exit:{first}" };
+        var actualFirstRun = fixture.Operations.ToArray();
+        if (path == "manual")
+        {
+            CollectionAssert.AreEqual(expectedFirstRun, actualFirstRun);
+        }
+        else
+        {
+            CollectionAssert.AreEquivalent(expectedFirstRun, actualFirstRun);
+            AssertInOrder(
+                actualFirstRun,
+                $"id:{first}",
+                "cts:create:Manual",
+                $"pending:{first}",
+                $"arm:{first}",
+                $"dispatch:{first}",
+                $"cancel-enter:{first}",
+                $"callback:{first}");
+            AssertInOrder(
+                actualFirstRun,
+                $"event:RunStarted:{first}",
+                $"event:EligibilityDetermined:{first}",
+                $"event:RunFinished:{first}",
+                $"release:{first}",
+                $"dispose-enter:{first}",
+                $"dispose-exit:{first}");
+            AssertInOrder(
+                actualFirstRun,
+                $"cancel-enter:{first}",
+                $"callback:{first}",
+                $"cancel-exit:{first}",
+                $"dispose-enter:{first}",
+                $"dispose-exit:{first}");
+        }
 
         if (path == "manual")
         {
@@ -1029,12 +1105,29 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         {
             await observer.CancellationPaused.Task.WaitAsync(TestTimeout);
             plan.Release.TrySetResult();
-            await overlap.DisposeExited.Task.WaitAsync(TestTimeout);
-            Assert.IsFalse(cancellationRequest.IsCompleted);
+            await plan.ExecutionCompleted.Task.WaitAsync(TestTimeout);
+            if (path == "manual")
+            {
+                await overlap.DisposeExited.Task.WaitAsync(TestTimeout);
+            }
+            else
+            {
+                Assert.IsFalse(overlap.DisposeEntered.Task.IsCompleted);
+                Assert.AreSame(invocation.Request, fixture.Coordinator.ActiveRequest);
+            }
+            if (path == "lifetime")
+            {
+                await cancellationRequest.WaitAsync(TestTimeout);
+            }
+            else
+            {
+                Assert.IsFalse(cancellationRequest.IsCompleted);
+            }
         }
         finally
         {
             observer.ReleaseCancellation();
+            overlap.ReleaseCancel();
             plan.Release.TrySetResult();
         }
         await cancellationRequest.WaitAsync(TestTimeout);
@@ -1048,11 +1141,14 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         CollectionAssert.AreEqual(new[] { typeof(RunStarted), typeof(EligibilityDetermined), typeof(RunFinished) }, fixture.Events.Select(item => item.GetType()).ToArray());
         Assert.IsTrue(fixture.Events.All(item => ReferenceEquals(invocation.Request, item.Request)));
         Assert.AreEqual(ProcessingRunOutcome.Completed, terminal.Result.Outcome);
-        Assert.AreEqual(0, source.CancelCount);
+        Assert.AreEqual(path == "manual" ? 0 : 1, source.CancelCount);
         Assert.AreEqual(1, source.DisposeCount);
         Assert.AreEqual(0, fixture.Logger.Entries.Count);
+        var firstRunOperations = path == "manual"
+            ? new[] { $"id:{first}", "cts:create:Manual", $"pending:{first}", $"arm:{first}", $"dispatch:{first}", $"event:RunStarted:{first}", $"event:EligibilityDetermined:{first}", $"event:RunFinished:{first}", $"release:{first}", $"dispose-enter:{first}", $"dispose-exit:{first}" }
+            : new[] { $"id:{first}", "cts:create:Manual", $"pending:{first}", $"arm:{first}", $"dispatch:{first}", $"event:RunStarted:{first}", $"event:EligibilityDetermined:{first}", $"event:RunFinished:{first}", $"release:{first}", $"cancel-enter:{first}", $"callback:{first}", $"cancel-exit:{first}", $"dispose-enter:{first}", $"dispose-exit:{first}" };
         CollectionAssert.AreEqual(
-            new[] { $"id:{first}", "cts:create:Manual", $"pending:{first}", $"arm:{first}", $"dispatch:{first}", $"event:RunStarted:{first}", $"event:EligibilityDetermined:{first}", $"event:RunFinished:{first}", $"release:{first}", $"dispose-enter:{first}", $"dispose-exit:{first}" },
+            firstRunOperations,
             fixture.Operations.ToArray());
 
         if (path == "manual")
@@ -1078,7 +1174,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
             await fixture.Coordinator.StopAsync(repeatedBound.Token);
             await fixture.Coordinator.StopAsync(repeatedBound.Token);
         }
-        Assert.AreEqual(0, source.CancelCount);
+        Assert.AreEqual(path == "manual" ? 0 : 1, source.CancelCount);
         Assert.AreEqual(1, source.DisposeCount);
         Assert.AreEqual(0, fixture.Logger.Entries.Count);
         if (path == "manual")
@@ -1093,7 +1189,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         else
         {
             CollectionAssert.AreEqual(
-                new[] { $"id:{first}", "cts:create:Manual", $"pending:{first}", $"arm:{first}", $"dispatch:{first}", $"event:RunStarted:{first}", $"event:EligibilityDetermined:{first}", $"event:RunFinished:{first}", $"release:{first}", $"dispose-enter:{first}", $"dispose-exit:{first}" },
+                new[] { $"id:{first}", "cts:create:Manual", $"pending:{first}", $"arm:{first}", $"dispatch:{first}", $"event:RunStarted:{first}", $"event:EligibilityDetermined:{first}", $"event:RunFinished:{first}", $"release:{first}", $"cancel-enter:{first}", $"callback:{first}", $"cancel-exit:{first}", $"dispose-enter:{first}", $"dispose-exit:{first}" },
                 fixture.Operations.ToArray());
         }
     }
@@ -1190,12 +1286,11 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
     [DataRow("manual-first")]
     [DataRow("stop-first")]
     [DataRow("together")]
-    public async Task ConcurrentShutdownAdmissionCommonGate_HasOnlyTwoCompleteLegalLinearizations(string releaseOrder)
+    public async Task ShutdownFence_PrecedesAdmissionObserverReleaseForEveryInterleaving(string releaseOrder)
     {
         var id = Guid.NewGuid();
         var observer = new AdmissionBarrierObserver();
         var fixture = new DirectFixture([id], observer: observer);
-        var plan = fixture.Executor.Enqueue();
         using var stopBound = new CancellationTokenSource(TestTimeout);
         var manual = fixture.Coordinator.TriggerManualAsync();
         var stop = fixture.Coordinator.StopAsync(stopBound.Token);
@@ -1204,8 +1299,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         if (releaseOrder == "manual-first")
         {
             observer.ManualRelease.TrySetResult();
-            Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await manual.WaitAsync(TestTimeout));
-            await plan.Entered.Task.WaitAsync(TestTimeout);
+            Assert.AreEqual(ProcessingRunAdmissionResult.Stopping, await manual.WaitAsync(TestTimeout));
             observer.StopRelease.TrySetResult();
         }
         else if (releaseOrder == "stop-first")
@@ -1221,34 +1315,15 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         }
 
         var admission = await manual.WaitAsync(TestTimeout);
-        if (admission == ProcessingRunAdmissionResult.Accepted)
-        {
-            await plan.Entered.Task.WaitAsync(TestTimeout);
-            await plan.CancelObserved.Task.WaitAsync(TestTimeout);
-            plan.Release.TrySetResult();
-            await stop.WaitAsync(TestTimeout);
-            Assert.AreEqual(1, fixture.IdCalls);
-            Assert.AreEqual(1, fixture.Cancellations.Created.Count);
-            Assert.AreEqual(1, fixture.Executor.CallCount);
-            Assert.AreEqual(1, fixture.Cancellations.Created.Single().CancelCount);
-            Assert.AreEqual(1, fixture.Cancellations.Created.Single().DisposeCount);
-            Assert.AreEqual(1, fixture.Events.OfType<RunFinished>().Count());
-            CollectionAssert.AreEqual(new[] { "stop:closing", "stop:closed" }, observer.Lifecycle.ToArray());
-            var expected = new[] { $"id:{id}", "cts:create:Manual", $"pending:{id}", $"arm:{id}", $"dispatch:{id}", $"cts:cancel:{id}", $"event:RunStarted:{id}", $"event:EligibilityDetermined:{id}", $"event:RunFinished:{id}", $"release:{id}", $"cts:dispose:{id}" };
-            CollectionAssert.AreEqual(expected, fixture.Operations.ToArray(), string.Join(" | ", fixture.Operations));
-        }
-        else
-        {
-            Assert.AreEqual(ProcessingRunAdmissionResult.Stopping, admission);
-            await stop.WaitAsync(TestTimeout);
-            Assert.AreEqual(0, fixture.IdCalls);
-            Assert.AreEqual(0, fixture.Cancellations.Created.Count);
-            Assert.AreEqual(0, fixture.Executor.CallCount);
-            Assert.AreEqual(0, fixture.Events.Count);
-            Assert.AreEqual(0, fixture.Messages().Length);
-            Assert.AreEqual(0, fixture.Operations.Count);
-            CollectionAssert.AreEqual(new[] { "stop:closing", "stop:closed" }, observer.Lifecycle.ToArray());
-        }
+        Assert.AreEqual(ProcessingRunAdmissionResult.Stopping, admission);
+        await stop.WaitAsync(TestTimeout);
+        Assert.AreEqual(0, fixture.IdCalls);
+        Assert.AreEqual(0, fixture.Cancellations.Created.Count);
+        Assert.AreEqual(0, fixture.Executor.CallCount);
+        Assert.AreEqual(0, fixture.Events.Count);
+        Assert.AreEqual(0, fixture.Messages().Length);
+        Assert.AreEqual(0, fixture.Operations.Count);
+        CollectionAssert.AreEqual(new[] { "stop:closing", "stop:closed" }, observer.Lifecycle.ToArray());
     }
 
     private sealed class DirectFixture
@@ -1477,9 +1552,21 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         private int _calls;
         public int CallCount => Volatile.Read(ref _calls);
 
-        public DirectPlan Enqueue(Exception? synchronousFailure = null, Exception? asyncFailure = null, bool mismatchedResult = false, bool completeOnCancellation = false, ProcessingRunOutcome? forcedOutcome = null)
+        public DirectPlan Enqueue(
+            Exception? synchronousFailure = null,
+            Exception? asyncFailure = null,
+            bool mismatchedResult = false,
+            bool completeOnCancellation = false,
+            ProcessingRunOutcome? forcedOutcome = null,
+            bool gateBeforeTerminalProjection = false)
         {
-            var plan = new DirectPlan(synchronousFailure, asyncFailure, mismatchedResult, completeOnCancellation, forcedOutcome);
+            var plan = new DirectPlan(
+                synchronousFailure,
+                asyncFailure,
+                mismatchedResult,
+                completeOnCancellation,
+                forcedOutcome,
+                gateBeforeTerminalProjection);
             _plans.Enqueue(plan);
             return plan;
         }
@@ -1518,26 +1605,42 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
                 plan.ReturnedRequest = other;
                 return Result(other, ProcessingRunOutcome.Completed);
             }
+            if (plan.GateBeforeTerminalProjection)
+            {
+                plan.TerminalProjectionReached.TrySetResult();
+                await plan.TerminalProjectionRelease.Task.WaitAsync(TestTimeout).ConfigureAwait(false);
+            }
             var session = await reporter.OpenRunAsync(request, Now, CancellationToken.None).ConfigureAwait(false);
             await session.DetermineEligibilityAsync(0, CancellationToken.None).ConfigureAwait(false);
             var outcome = plan.ForcedOutcome ?? (token.IsCancellationRequested ? ProcessingRunOutcome.Cancelled : ProcessingRunOutcome.Completed);
             var result = Result(request, outcome);
             await session.FinishAsync(result).ConfigureAwait(false);
+            plan.ExecutionCompleted.TrySetResult();
             return result;
         }
     }
 
-    private sealed class DirectPlan(Exception? synchronousFailure, Exception? asyncFailure, bool mismatchedResult, bool completeOnCancellation, ProcessingRunOutcome? forcedOutcome)
+    private sealed class DirectPlan(
+        Exception? synchronousFailure,
+        Exception? asyncFailure,
+        bool mismatchedResult,
+        bool completeOnCancellation,
+        ProcessingRunOutcome? forcedOutcome,
+        bool gateBeforeTerminalProjection)
     {
         public Exception? SynchronousFailure { get; } = synchronousFailure;
         public Exception? AsyncFailure { get; } = asyncFailure;
         public bool MismatchedResult { get; } = mismatchedResult;
         public bool CompleteOnCancellation { get; } = completeOnCancellation;
         public ProcessingRunOutcome? ForcedOutcome { get; } = forcedOutcome;
+        public bool GateBeforeTerminalProjection { get; } = gateBeforeTerminalProjection;
         public ProcessingRunRequest? ReturnedRequest { get; set; }
         public TaskCompletionSource<Invocation> Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CancelObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource ExecutionCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TerminalProjectionReached { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public TaskCompletionSource TerminalProjectionRelease { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     }
 
     private sealed record Invocation(ProcessingRunRequest Request, IProcessingEventReporter Reporter, CancellationToken Token);
@@ -1803,6 +1906,21 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
         {
             Entries.Enqueue(new CapturedLog(logLevel, formatter(state, exception), exception));
+        }
+    }
+
+    private static void AssertInOrder(IReadOnlyList<string> actual, params string[] expected)
+    {
+        var actualIndex = 0;
+        foreach (var operation in expected)
+        {
+            while (actualIndex < actual.Count && actual[actualIndex] != operation)
+            {
+                actualIndex++;
+            }
+
+            Assert.IsTrue(actualIndex < actual.Count, $"Missing ordered operation '{operation}' in: {string.Join(" | ", actual)}");
+            actualIndex++;
         }
     }
 

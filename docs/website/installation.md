@@ -58,6 +58,12 @@ Then start the stack:
 docker compose up -d
 ```
 
+## Stopping or updating the service
+
+Keep `stop_grace_period: 40s` on the Immich ReverseGeo service in your Compose file. During shutdown, the app rejects new processing runs, requests cancellation of active work, and waits for process and output cleanup. The setting gives the app time to finish before Docker forces the container to stop.
+
+Use `docker compose stop immich-reversegeo` for a planned stop. For an update, pull the new image and recreate the service with `docker compose up -d immich-reversegeo`. A forced stop or power loss can still interrupt processing; after restarting, check the Dashboard and logs before starting another run.
+
 ## VPS and firewall notes
 
 Do not expose the web UI publicly. Docker-published ports can bypass host firewall rules such as UFW, so do not rely on the host firewall alone to hide a broadly published `8080:8080` mapping on an internet-facing server.

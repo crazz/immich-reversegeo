@@ -40,6 +40,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     private int _treeKillCalls;
     private readonly TaskCompletionSource<ChildProcessKillOutcome> _treeKillObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
     internal int TreeKillCalls => Volatile.Read(ref _treeKillCalls);
+    internal ChildProcessKillOutcome? TreeKillOutcomeOverride { get; init; }
     internal Task<ChildProcessKillOutcome> TreeKillObserved => _treeKillObserved.Task;
     internal ChildWorkerLauncherOptions LauncherOptions { get; init; } = ChildWorkerLauncherOptions.Default;
 
@@ -53,7 +54,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
 
     internal string Root { get; }
     internal string CapturePath => Path.Combine(Root, "request.ndjson");
-    internal ProcessingRunRequest Request { get; } = new(Guid.NewGuid(), ProcessingRunTrigger.Manual);
+    internal ProcessingRunRequest Request { get; init; } = new(Guid.NewGuid(), ProcessingRunTrigger.Manual);
     internal FixtureEventSink Sink { get; } = new();
     internal ChildWorkerSession? Session { get; private set; }
     internal int? ProcessId { get; private set; }
@@ -86,11 +87,16 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         return arguments.ToArray();
     }
 
-    internal async Task<ChildWorkerSession> LaunchAsync(string scenario, bool capture = true, params string[] options)
+    internal Task<ChildWorkerSession> LaunchAsync(string scenario, bool capture = true, params string[] options)
+    {
+        return LaunchAsync(scenario, Sink, capture, options);
+    }
+
+    internal async Task<ChildWorkerSession> LaunchAsync(string scenario, IWorkerProtocolEventSink sink, bool capture = true, params string[] options)
     {
         var descriptor = Descriptor(Arguments(scenario, capture, options));
         var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
-        var result = await launcher.LaunchDescriptorAsync(descriptor, Request, Sink,
+        var result = await launcher.LaunchDescriptorAsync(descriptor, Request, sink,
             LauncherOptions, CancellationToken.None).AsTask().WaitAsync(Watchdog);
         Session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result).Session;
         Assert.AreEqual(ProcessId, Session.ProcessId);
@@ -495,7 +501,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         public ChildProcessKillOutcome KillProcessTree()
         {
             Interlocked.Increment(ref _owner._treeKillCalls);
-            var outcome = _inner.KillProcessTree();
+            var outcome = _owner.TreeKillOutcomeOverride ?? _inner.KillProcessTree();
             _owner._treeKillObserved.TrySetResult(outcome);
             return outcome;
         }
