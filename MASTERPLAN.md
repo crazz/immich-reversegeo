@@ -629,7 +629,7 @@ Compose `HostOptions.ShutdownTimeout` around the remaining portion of block 28's
 
 **Dependencies and sequencing** — Requires finalized blocks 15, 17, 21–23, and 25–29; consume their applied contracts rather than adding protocol, launcher, bridge, cancel, shutdown, or exit owners. Add evidence/classifier contracts first, shared finalization receipt and abnormal-state surface second, cleanup/release composition third, then deterministic seam and fixture matrices. Future block 31 only supplies the already-reserved typed busy fact and remains untouched.
 
-**OpenSpec** — [30-handle-worker-crash-and-protocol-failure](openspec/changes/30-handle-worker-crash-and-protocol-failure/)
+**OpenSpec** — [30-handle-worker-crash-and-protocol-failure](openspec/changes/archive/2026-09-06-30-handle-worker-crash-and-protocol-failure/)
 
 ### 31. `feat: add PostgreSQL advisory run lock`
 
