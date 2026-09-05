@@ -50,39 +50,44 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
         options.Validate();
         cancellationToken.ThrowIfCancellationRequested();
 
-        IChildProcess? process;
+        ChildWorkerObserverArmingAcknowledgements observerArming;
         try
         {
-            process = await _processFactory.StartAsync(descriptor, CancellationToken.None);
+            observerArming = _createObserverArming()
+                ?? throw new InvalidOperationException(
+                    "Observer arming acknowledgements were not created.");
         }
         catch
         {
-            return new ChildWorkerLaunchResult.StartFailed(ChildWorkerStartFailureCategory.ProcessStartFailed);
+            return new ChildWorkerLaunchResult.StartFailed(
+                ChildWorkerStartFailureCategory.ProcessStartFailed);
+        }
+
+        IChildProcess? process;
+        try
+        {
+            process = await _processFactory
+                .StartAsync(descriptor, CancellationToken.None)
+                .ConfigureAwait(false);
+        }
+        catch
+        {
+            return new ChildWorkerLaunchResult.StartFailed(
+                ChildWorkerStartFailureCategory.ProcessStartFailed);
         }
 
         if (process is null)
         {
-            return new ChildWorkerLaunchResult.StartFailed(ChildWorkerStartFailureCategory.ProcessStartFailed);
+            return new ChildWorkerLaunchResult.StartFailed(
+                ChildWorkerStartFailureCategory.ProcessStartFailed);
         }
 
-        try
-        {
-            var observerArming = _createObserverArming()
-                ?? throw new InvalidOperationException("Observer arming acknowledgements were not created.");
-            var session = await ChildWorkerSession.CreateAsync(process, request, eventSink, options, observerArming).ConfigureAwait(false);
-            return new ChildWorkerLaunchResult.Started(session);
-        }
-        catch
-        {
-            try
-            {
-                await process.DisposeAsync().ConfigureAwait(false);
-            }
-            catch
-            {
-            }
-
-            return new ChildWorkerLaunchResult.StartFailed(ChildWorkerStartFailureCategory.ProcessStartFailed);
-        }
+        ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
+            process,
+            request,
+            eventSink,
+            options,
+            observerArming).ConfigureAwait(false);
+        return new ChildWorkerLaunchResult.Started(session);
     }
 }

@@ -16,6 +16,8 @@ public sealed record WorkerProtocolStreamFinalizationResult
 
     public static WorkerProtocolStreamFinalizationResult Complete() => new(true, null);
     public static WorkerProtocolStreamFinalizationResult Incomplete(string diagnostic) => new(false, new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidLifecycle, diagnostic));
+
+    public static WorkerProtocolStreamFinalizationResult Incomplete(string diagnostic, WorkerProtocolFailureDetail detail) => new(false, new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidLifecycle, diagnostic, detail));
 }
 
 public sealed class WorkerProtocolEventStreamValidator
@@ -42,7 +44,7 @@ public sealed class WorkerProtocolEventStreamValidator
         var failure = ValidateWithoutMutation(@event);
         return failure is null
             ? WorkerProtocolParseResult.Success(@event)
-            : WorkerProtocolParseResult.Failed(failure.Code, failure.Diagnostic);
+            : WorkerProtocolParseResult.Failed(failure.Code, failure.Diagnostic, failure.Detail);
     }
 
     public WorkerProtocolParseResult Validate(WorkerProtocolEvent @event)
@@ -60,7 +62,7 @@ public sealed class WorkerProtocolEventStreamValidator
     {
         if (_lastSequence == 0)
         {
-            return WorkerProtocolStreamFinalizationResult.Incomplete("The stream is missing its required ready event.");
+            return WorkerProtocolStreamFinalizationResult.Incomplete("The stream is missing its required ready event.", WorkerProtocolFailureDetail.Readiness);
         }
 
         if (!_started)
@@ -70,7 +72,7 @@ public sealed class WorkerProtocolEventStreamValidator
 
         if (!_terminal)
         {
-            return WorkerProtocolStreamFinalizationResult.Incomplete("The accepted run is missing its terminal event.");
+            return WorkerProtocolStreamFinalizationResult.Incomplete("The accepted run is missing its terminal event.", WorkerProtocolFailureDetail.MissingTerminal);
         }
 
         return WorkerProtocolStreamFinalizationResult.Complete();
@@ -82,7 +84,7 @@ public sealed class WorkerProtocolEventStreamValidator
         {
             if (@event.Type != WorkerProtocolV1.ReadyType || @event.Sequence != 1)
             {
-                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "The first event must be ready at sequence one.");
+                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "The first event must be ready at sequence one.", WorkerProtocolFailureDetail.Readiness);
             }
         }
         else if (WorkerProtocolSequence.ValidateSuccessor(_lastSequence, @event.Sequence) is { } sequenceFailure)
@@ -107,14 +109,14 @@ public sealed class WorkerProtocolEventStreamValidator
 
         if (@event.Type == WorkerProtocolV1.ReadyType)
         {
-            return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Ready may occur only once and only first.");
+            return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Ready may occur only once and only first.", WorkerProtocolFailureDetail.Readiness);
         }
 
         if (!_started)
         {
             return @event.Type == WorkerProtocolV1.RunStartedType
                 ? null
-                : Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Run-started must follow ready.");
+                : Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Run-started must follow ready.", WorkerProtocolFailureDetail.Readiness);
         }
 
         if (@event.RunId != _runId)
@@ -138,32 +140,32 @@ public sealed class WorkerProtocolEventStreamValidator
         {
             if (@event.Payload is not TerminalPayload terminal || terminal.StartedAtUtc != _startedAtUtc)
             {
-                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Terminal start time must match run-started.");
+                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Terminal start time must match run-started.", WorkerProtocolFailureDetail.TerminalConsistency);
             }
 
             if (terminal.Trigger != _trigger)
             {
-                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Terminal trigger must match run-started.");
+                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Terminal trigger must match run-started.", WorkerProtocolFailureDetail.TerminalConsistency);
             }
 
             if (@event.Type == WorkerProtocolV1.CompletedType && !_eligibility)
             {
-                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Completed requires eligibility.");
+                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Completed requires eligibility.", WorkerProtocolFailureDetail.TerminalConsistency);
             }
 
             if (_openActivities.Count != 0)
             {
-                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "All activities must end before terminal.");
+                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "All activities must end before terminal.", WorkerProtocolFailureDetail.ActivityCardinality);
             }
 
             if (_eligibility && (terminal.ProcessedCount != _processedCount || terminal.UpdatedCount != _updatedCount || terminal.SkippedCount != _skippedCount || terminal.FailedCount != _failedCount))
             {
-                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Terminal counts must match accepted progress.");
+                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Terminal counts must match accepted progress.", WorkerProtocolFailureDetail.TerminalConsistency);
             }
 
             if (!_eligibility && terminal.ProcessedCount != 0)
             {
-                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "A pre-count terminal must have zero progress.");
+                return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "A pre-count terminal must have zero progress.", WorkerProtocolFailureDetail.TerminalConsistency);
             }
 
             return null;
@@ -176,11 +178,11 @@ public sealed class WorkerProtocolEventStreamValidator
 
         return @event.Payload switch
         {
-            ProgressChangedPayload progress when progress.ProcessedCount > _eligibleCount => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress must not exceed eligibility."),
-            ProgressChangedPayload progress when progress.ProcessedCount != _processedCount + 1 => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress must advance by one disposition."),
-            ProgressChangedPayload progress when progress.UpdatedCount < _updatedCount || progress.SkippedCount < _skippedCount || progress.FailedCount < _failedCount => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress counts must not regress."),
-            ActivityStartedPayload started when _openActivities.Contains(started.ActivityId) => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "An activity may not start twice."),
-            ActivityEndedPayload ended when !_openActivities.Contains(ended.ActivityId) => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Activity end requires a matching start."),
+            ProgressChangedPayload progress when progress.ProcessedCount > _eligibleCount => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress must not exceed eligibility.", WorkerProtocolFailureDetail.ProgressConsistency),
+            ProgressChangedPayload progress when progress.ProcessedCount != _processedCount + 1 => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress must advance by one disposition.", WorkerProtocolFailureDetail.ProgressConsistency),
+            ProgressChangedPayload progress when progress.UpdatedCount < _updatedCount || progress.SkippedCount < _skippedCount || progress.FailedCount < _failedCount => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress counts must not regress.", WorkerProtocolFailureDetail.ProgressConsistency),
+            ActivityStartedPayload started when _openActivities.Contains(started.ActivityId) => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "An activity may not start twice.", WorkerProtocolFailureDetail.ActivityCardinality),
+            ActivityEndedPayload ended when !_openActivities.Contains(ended.ActivityId) => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Activity end requires a matching start.", WorkerProtocolFailureDetail.ActivityCardinality),
             _ => null
         };
     }
@@ -223,5 +225,5 @@ public sealed class WorkerProtocolEventStreamValidator
         }
     }
 
-    private static WorkerProtocolFailure Failure(WorkerProtocolFailureCode code, string diagnostic) => new(code, diagnostic);
+    private static WorkerProtocolFailure Failure(WorkerProtocolFailureCode code, string diagnostic, WorkerProtocolFailureDetail detail = WorkerProtocolFailureDetail.None) => new(code, diagnostic, detail);
 }

@@ -90,8 +90,14 @@ public sealed record WorkerProtocolFailure
 {
     public WorkerProtocolFailureCode Code { get; }
     public string Diagnostic { get; }
+    public WorkerProtocolFailureDetail Detail { get; }
 
     public WorkerProtocolFailure(WorkerProtocolFailureCode code, string diagnostic)
+        : this(code, diagnostic, WorkerProtocolFailureDetail.None)
+    {
+    }
+
+    public WorkerProtocolFailure(WorkerProtocolFailureCode code, string diagnostic, WorkerProtocolFailureDetail detail)
     {
         if (string.IsNullOrWhiteSpace(diagnostic) || diagnostic.Length > 256)
         {
@@ -100,6 +106,7 @@ public sealed record WorkerProtocolFailure
 
         Code = code;
         Diagnostic = diagnostic;
+        Detail = detail;
     }
 }
 
@@ -122,6 +129,8 @@ public sealed record WorkerProtocolParseResult
     }
 
     public static WorkerProtocolParseResult Failed(WorkerProtocolFailureCode code, string diagnostic) => new(null, new WorkerProtocolFailure(code, diagnostic));
+
+    public static WorkerProtocolParseResult Failed(WorkerProtocolFailureCode code, string diagnostic, WorkerProtocolFailureDetail detail) => new(null, new WorkerProtocolFailure(code, diagnostic, detail));
 }
 
 public abstract record WorkerProtocolPayload;

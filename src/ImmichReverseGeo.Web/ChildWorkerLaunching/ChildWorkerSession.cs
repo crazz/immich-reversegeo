@@ -63,6 +63,8 @@ internal sealed class ChildWorkerObserverArmingAcknowledgements
 internal sealed partial class ChildWorkerSession : IAsyncDisposable
 {
     private const int ReadBufferBytes = 4096;
+    private const string TerminalPreventingObservationTimestampFailureDiagnostic =
+        "The terminal-preventing observation timestamp was unavailable.";
     private readonly IChildProcess _process;
     private readonly Stream _standardInputStream;
     private readonly Stream _standardOutputStream;
@@ -73,15 +75,20 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private readonly TimeSpan _readyTimeout;
     private readonly TaskCompletionSource<ChildWorkerStartupObservation> _startup = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _observationGate = new();
+    private readonly object _terminalPreventingObservationGate = new();
     private readonly object _disposeGate = new();
     private readonly StandardErrorRing _standardError = new();
     private readonly Task<ChildWorkerStreamFinality> _standardOutputTask;
     private readonly Task<ChildWorkerStreamFinality> _standardErrorTask;
     private readonly Task<ExitObservation> _exitTask;
     private readonly Task<ChildWorkerCompletionObservation> _completion;
+    private readonly Task<ChildWorkerCompletionObservation> _evidenceFinality;
     private readonly Task<ChildWorkerCompletionObservation> _settlement;
     private readonly Task _readyDeadlineTask;
     private Task? _disposeTask;
+    private readonly TaskCompletionSource<ChildWorkerTerminalPreventingObservation> _firstTerminalPreventingObservation =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly ChildWorkerEvidenceFinalityGate? _evidenceFinalityGate;
     private ChildWorkerProtocolObservation? _firstProtocolObservation;
     private WorkerProtocolEvent? _terminal;
     private int _startupAuthority;
@@ -103,19 +110,147 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         options.Validate();
         _timeProvider = options.TimeProvider;
         _readyTimeout = options.ReadyTimeout;
+        _evidenceFinalityGate = options.EvidenceFinalityGate;
 
-        ProcessId = process.ProcessId;
-        _standardInputStream = process.StandardInput;
-        _standardOutputStream = process.StandardOutput;
-        _standardErrorStream = process.StandardError;
+        ChildProcessResources resources = CaptureProcessResources(process);
+        ProcessId = resources.ProcessId;
+        _standardInputStream = resources.StandardInput;
+        _standardOutputStream = resources.StandardOutput;
+        _standardErrorStream = resources.StandardError;
         RunId = request.RunId;
+
+        if (resources.SetupFailed)
+        {
+            _startupAuthority = 2;
+            _startup.SetResult(
+                ChildWorkerStartupObservation.PostStartSetupFailed.Instance);
+            _suppressCallbacks = true;
+            PublishTerminalPreventingObservation(
+                ChildWorkerFaultContainmentReason.PostStartSetupFailed.Instance);
+        }
 
         _standardOutputTask = DrainStandardOutputAsync(observerActivation, observerArming);
         _standardErrorTask = DrainStandardErrorAsync(observerActivation, observerArming);
         _exitTask = ObserveExitAsync(observerActivation, observerArming);
         _completion = ObserveCompletionAsync();
+        _evidenceFinality = ObserveEvidenceFinalityAsync();
         _settlement = ObserveSettledCompletionAsync();
         _readyDeadlineTask = ObserveReadyDeadlineAsync(observerActivation, observerArming.All);
+    }
+
+    private static ChildProcessResources CaptureProcessResources(
+        IChildProcess process)
+    {
+        var setupFailed = false;
+        int processId;
+        try
+        {
+            processId = process.ProcessId;
+        }
+        catch
+        {
+            setupFailed = true;
+            processId = 0;
+        }
+
+        Stream standardInput = CaptureProcessStream(
+            () => process.StandardInput,
+            ref setupFailed);
+        Stream standardOutput = CaptureProcessStream(
+            () => process.StandardOutput,
+            ref setupFailed);
+        Stream standardError = CaptureProcessStream(
+            () => process.StandardError,
+            ref setupFailed);
+        return new ChildProcessResources(
+            processId,
+            standardInput,
+            standardOutput,
+            standardError,
+            setupFailed);
+    }
+
+    private static Stream CaptureProcessStream(
+        Func<Stream> capture,
+        ref bool setupFailed)
+    {
+        try
+        {
+            return capture()
+                ?? throw new InvalidOperationException(
+                    "The child process stream was unavailable after start.");
+        }
+        catch
+        {
+            setupFailed = true;
+            return new UnavailableChildProcessStream();
+        }
+    }
+
+    private readonly record struct ChildProcessResources(
+        int ProcessId,
+        Stream StandardInput,
+        Stream StandardOutput,
+        Stream StandardError,
+        bool SetupFailed);
+
+    private sealed class UnavailableChildProcessStream : Stream
+    {
+        private const string FailureDiagnostic =
+            "The child process stream was unavailable after start.";
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => true;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => throw new NotSupportedException();
+            set => throw new NotSupportedException();
+        }
+
+        public override void Flush() => throw CreateFailure();
+
+        public override Task FlushAsync(CancellationToken cancellationToken)
+            => Task.FromException(CreateFailure());
+
+        public override int Read(byte[] buffer, int offset, int count)
+            => throw CreateFailure();
+
+        public override Task<int> ReadAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+            => Task.FromException<int>(CreateFailure());
+
+        public override ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException<int>(CreateFailure());
+
+        public override long Seek(long offset, SeekOrigin origin)
+            => throw new NotSupportedException();
+
+        public override void SetLength(long value)
+            => throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count)
+            => throw CreateFailure();
+
+        public override Task WriteAsync(
+            byte[] buffer,
+            int offset,
+            int count,
+            CancellationToken cancellationToken)
+            => Task.FromException(CreateFailure());
+
+        public override ValueTask WriteAsync(
+            ReadOnlyMemory<byte> buffer,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromException(CreateFailure());
+
+        private static IOException CreateFailure() => new(FailureDiagnostic);
     }
 
     internal static async ValueTask<ChildWorkerSession> CreateAsync(
@@ -144,7 +279,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     internal Guid RunId { get; }
     internal Task<ChildWorkerStartupObservation> Startup => _startup.Task;
     internal Task<ChildWorkerCompletionObservation> Completion => _completion;
+    internal Task<ChildWorkerCompletionObservation> EvidenceFinality => _evidenceFinality;
     internal Task<ChildWorkerCompletionObservation> Settlement => _settlement;
+    internal Task<ChildWorkerTerminalPreventingObservation> FirstTerminalPreventingObservation
+        => _firstTerminalPreventingObservation.Task;
     internal Task<ChildWorkerStartupObservation> WaitForStartupAsync(CancellationToken cancellationToken = default) => Startup.WaitAsync(cancellationToken);
     internal Task<ChildWorkerCompletionObservation> WaitForCompletionAsync(CancellationToken cancellationToken = default) => Completion.WaitAsync(cancellationToken);
 
@@ -183,9 +321,11 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             return;
         }
 
-        if (await WaitForTimeAsync(_timeProvider, _readyTimeout, _startup.Task).ConfigureAwait(false))
+        if (await WaitForTimeAsync(_timeProvider, _readyTimeout, _startup.Task).ConfigureAwait(false)
+            && TryCommitPreReady(ChildWorkerStartupObservation.ReadyTimedOut.Instance))
         {
-            TryCommitPreReady(ChildWorkerStartupObservation.ReadyTimedOut.Instance);
+            PublishTerminalPreventingObservation(
+                ChildWorkerFaultContainmentReason.ReadyTimedOut.Instance);
         }
     }
 
@@ -204,10 +344,16 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
         catch
         {
-            TryCommitPreReady(ChildWorkerStartupObservation.PreReadyExitObservationFailed.Instance);
+            var failedBeforeReady = TryCommitPreReady(
+                ChildWorkerStartupObservation.PreReadyExitObservationFailed.Instance);
             if (GetExitState() == ChildProcessExitState.Exited)
             {
                 ConfirmProcessExit();
+            }
+            else if (failedBeforeReady)
+            {
+                PublishTerminalPreventingObservation(
+                    ChildWorkerFaultContainmentReason.ExitObservationFailed.Instance);
             }
 
             return new ExitObservation(false, null);
@@ -247,10 +393,16 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                 pendingRead = null;
                 if (result.Kind is StandardOutputReadKind.EndOfStream)
                 {
-                    TryCommitPreReady(ChildWorkerStartupObservation.PreReadyEndOfStream.Instance);
-                    if (!reader.Failed && !validator.FinalizeStream().IsComplete)
+                    TryCommitPreReady(
+                        ChildWorkerStartupObservation.PreReadyEndOfStream.Instance);
+                    if (!reader.Failed)
                     {
-                        RecordProtocolFailure(new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidLifecycle, "Protocol stream is incomplete."));
+                        WorkerProtocolStreamFinalizationResult finalization =
+                            validator.FinalizeStream();
+                        if (!finalization.IsComplete)
+                        {
+                            RecordProtocolFailure(finalization.Failure!);
+                        }
                     }
 
                     return ChildWorkerStreamFinality.EndOfStream.Instance;
@@ -258,7 +410,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
 
                 if (result.Kind is StandardOutputReadKind.FramingFailure)
                 {
-                    RecordProtocolFailure(new WorkerProtocolFailure(result.FailureCode, "The standard-output frame was invalid."));
+                    RecordProtocolFailure(new WorkerProtocolFailure(
+                        result.FailureCode,
+                        "The standard-output frame was invalid."));
                     reader.StopParsing();
                     continue;
                 }
@@ -280,7 +434,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                 if ((@event.Type == WorkerProtocolV1.ReadyType && @event.RunId is not null)
                     || (@event.Type != WorkerProtocolV1.ReadyType && @event.RunId != _request.RunId))
                 {
-                    RecordProtocolFailure(new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidCorrelation, "Event correlation did not match this session."));
+                    RecordProtocolFailure(new WorkerProtocolFailure(
+                        WorkerProtocolFailureCode.InvalidCorrelation,
+                        "Event correlation did not match this session."));
                     reader.StopParsing();
                     continue;
                 }
@@ -320,6 +476,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         catch
         {
             TryCommitPreReady(ChildWorkerStartupObservation.PreReadyReadFailed.Instance);
+            PublishTerminalPreventingObservation(
+                ChildWorkerFaultContainmentReason.StandardOutputReadFailed.Instance);
             return ChildWorkerStreamFinality.ReadFailed.Instance;
         }
     }
@@ -340,7 +498,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
         catch
         {
-            _startup.TrySetResult(ChildWorkerStartupObservation.RequestSerializationFailed.Instance);
+            _startup.TrySetResult(
+                ChildWorkerStartupObservation.RequestSerializationFailed.Instance);
+            PublishTerminalPreventingObservation(
+                ChildWorkerFaultContainmentReason.RequestSerializationFailed.Instance);
             return;
         }
 
@@ -410,7 +571,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
         catch
         {
-            RecordSinkFailure();
+            RecordSinkFailure(@event);
             return false;
         }
         finally
@@ -435,11 +596,47 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
     }
 
-    private void TryCommitPreReady(ChildWorkerStartupObservation observation)
+    private bool TryCommitPreReady(ChildWorkerStartupObservation observation)
     {
-        if (Interlocked.CompareExchange(ref _startupAuthority, 2, 0) == 0)
+        if (Interlocked.CompareExchange(ref _startupAuthority, 2, 0) != 0)
         {
-            _startup.TrySetResult(observation);
+            return false;
+        }
+
+        _startup.TrySetResult(observation);
+        return true;
+    }
+
+    private void PublishTerminalPreventingObservation(
+        ChildWorkerFaultContainmentReason reason)
+    {
+        ArgumentNullException.ThrowIfNull(reason);
+        lock (_terminalPreventingObservationGate)
+        {
+            if (_firstTerminalPreventingObservation.Task.IsCompleted)
+            {
+                return;
+            }
+
+            ChildWorkerStopRequest observedAt;
+            try
+            {
+                observedAt = ChildWorkerStopRequest.CaptureFaultObservation(
+                    _timeProvider);
+            }
+            catch
+            {
+                _firstTerminalPreventingObservation.SetException(
+                    new InvalidOperationException(
+                        TerminalPreventingObservationTimestampFailureDiagnostic));
+                _ = _firstTerminalPreventingObservation.Task.Exception;
+                return;
+            }
+
+            var observation = new ChildWorkerTerminalPreventingObservation(
+                observedAt,
+                reason);
+            _firstTerminalPreventingObservation.SetResult(observation);
         }
     }
 
@@ -447,21 +644,29 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     {
         lock (_observationGate)
         {
-            _firstProtocolObservation ??= new ChildWorkerProtocolObservation.ProtocolFailure(failure);
+            _firstProtocolObservation ??=
+                new ChildWorkerProtocolObservation.ProtocolFailure(failure);
         }
 
         TryCommitPreReady(new ChildWorkerStartupObservation.ProtocolFailure(failure));
+        PublishTerminalPreventingObservation(
+            new ChildWorkerFaultContainmentReason.ProtocolFailure(failure));
     }
 
-    private void RecordSinkFailure()
+    private void RecordSinkFailure(WorkerProtocolEvent @event)
     {
         lock (_observationGate)
         {
-            _firstProtocolObservation ??= ChildWorkerProtocolObservation.SinkFailure.Instance;
+            _firstProtocolObservation ??=
+                ChildWorkerProtocolObservation.SinkFailure.Instance;
             _suppressCallbacks = true;
         }
 
         TryCommitPreReady(ChildWorkerStartupObservation.SinkFailed.Instance);
+        PublishTerminalPreventingObservation(
+            @event.Type == WorkerProtocolV1.ReadyType
+                ? ChildWorkerFaultContainmentReason.ReadyRejected.Instance
+                : ChildWorkerFaultContainmentReason.SinkFailure.Instance);
     }
 
 

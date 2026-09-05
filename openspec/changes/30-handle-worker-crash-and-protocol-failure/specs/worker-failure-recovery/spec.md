@@ -95,8 +95,8 @@ A terminal SHALL be authoritative only when it passed protocol and bridge valida
 - **THEN** the terminal outcome stands and code-6 evidence is supplementary
 
 #### Scenario: Projection rejection before commit
-- **WHEN** a valid terminal frame is accepted but bridge projection is rejected before the atomic state finalization gate commits
-- **THEN** the classifier commits that same validated terminal semantics through the gate; if another outcome already won, that recorded winner remains authoritative
+- **WHEN** a terminal has passed semantic Preview validation but its projection definitely fails before the atomic state finalization receipt is claimed
+- **THEN** the finalizer submits those exact validated terminal semantics through the gate once; semantic rejection never permits that submission; if another outcome already won, that recorded winner remains authoritative
 
 #### Scenario: Indeterminate projection response
 - **WHEN** projection returns no reliable acknowledgement
@@ -157,6 +157,10 @@ Each admitted run SHALL have one linearizable finalization gate shared by normal
 #### Scenario: Activity cleanup before release
 - **WHEN** abnormal finalization occurs with activities still open
 - **THEN** all run-owned activities are closed and visible state is terminal before the matching coordinator handle is released
+
+#### Scenario: Worker and host wall clocks disagree
+- **WHEN** abnormal finality observes an end time earlier than the accepted or admitted start, or a later UTC observation fails
+- **THEN** the result uses a bounded non-regressing timestamp, records its one receipt, and does not retain a settled run merely because wall-clock observation disagreed; the original monotonic cancellation deadline remains unchanged
 
 ### Requirement: Verification is deterministic and preserves fixture ownership
 Block-26 real-process modes SHALL verify existing process-boundary classifications, while OS-start, readiness-timeout, execute-write/flush, sink/projection, and kill-rejection cases SHALL use deterministic injected seams where block 26 has no corresponding mode. Tests SHALL use gates, fake time, explicit exit/EOF signals, complete drainage, and unconditional process cleanup rather than sleeps, polling, or automatic retry.

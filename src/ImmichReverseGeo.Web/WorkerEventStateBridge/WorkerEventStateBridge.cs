@@ -25,7 +25,7 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
     private readonly object _disposeGate = new();
 
     private WorkerEventStateBridgeObservation? _firstObservation;
-    private WorkerEventStateBridgeObservation.ProjectionFailed? _poisonObservation;
+    private WorkerEventStateBridgeObservation? _poisonObservation;
     private Task? _disposeTask;
     private int _disposeStarted;
     private int _isReady;
@@ -40,6 +40,7 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
     }
 
     internal ProcessingRunRequest Request { get; }
+    internal ProcessingStateEventReporter Reporter => _reporter;
     internal bool IsReady => Volatile.Read(ref _isReady) != 0;
     internal bool IsTerminal => Volatile.Read(ref _isTerminal) != 0;
     internal WorkerEventStateBridgeObservation? FirstObservation => Volatile.Read(ref _firstObservation);
@@ -113,7 +114,7 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
         }
 
         await ProjectAsync(processingEvent).ConfigureAwait(false);
-        Commit(@event, processingEvent is not null);
+        Commit(@event, processingEvent);
 
         if (@event.Type == WorkerProtocolV1.ReadyType)
         {
@@ -148,18 +149,32 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
         }
         catch
         {
-            throw Poison(ProjectionFailureDiagnostic);
+            if (processingEvent is RunFinished failedTerminal)
+            {
+                throw _reporter.GetFinalizationReceipt(Request) is null
+                    ? Poison(new WorkerEventStateBridgeObservation.TerminalProjectionNotCommitted(failedTerminal.Result))
+                    : Poison(WorkerEventStateBridgeObservation.ProjectionResponseIndeterminate.Instance);
+            }
+
+            throw Poison(new WorkerEventStateBridgeObservation.ProjectionFailed(ProjectionFailureDiagnostic));
         }
 
         if (!projected)
         {
+            if (processingEvent is RunFinished rejectedTerminal)
+            {
+                throw _reporter.GetFinalizationReceipt(Request) is null
+                    ? Poison(new WorkerEventStateBridgeObservation.TerminalProjectionNotCommitted(rejectedTerminal.Result))
+                    : Poison(WorkerEventStateBridgeObservation.ProjectionResponseIndeterminate.Instance);
+            }
+
             throw Reject(new WorkerProtocolFailure(
                 WorkerProtocolFailureCode.InvalidCorrelation,
                 StateRejectionDiagnostic));
         }
     }
 
-    private void Commit(WorkerProtocolEvent @event, bool stateWasProjected)
+    private void Commit(WorkerProtocolEvent @event, ProcessingEvent? processingEvent)
     {
         WorkerProtocolParseResult committed;
         try
@@ -168,7 +183,9 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
         }
         catch
         {
-            throw Poison(ProjectionFailureDiagnostic);
+            throw processingEvent is RunFinished
+                ? Poison(WorkerEventStateBridgeObservation.ProjectionResponseIndeterminate.Instance)
+                : Poison(new WorkerEventStateBridgeObservation.ProjectionFailed(ProjectionFailureDiagnostic));
         }
 
         if (committed.IsSuccess)
@@ -176,9 +193,14 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
             return;
         }
 
-        if (stateWasProjected)
+        if (processingEvent is RunFinished)
         {
-            throw Poison(ProjectionFailureDiagnostic);
+            throw Poison(WorkerEventStateBridgeObservation.ProjectionResponseIndeterminate.Instance);
+        }
+
+        if (processingEvent is not null)
+        {
+            throw Poison(new WorkerEventStateBridgeObservation.ProjectionFailed(ProjectionFailureDiagnostic));
         }
 
         throw Reject(committed.Failure!);
@@ -332,11 +354,11 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
         return new WorkerEventStateBridgeException(observation);
     }
 
-    private WorkerEventStateBridgeException Poison(string diagnostic)
+    private WorkerEventStateBridgeException Poison(WorkerEventStateBridgeObservation observation)
     {
-        _poisonObservation = new WorkerEventStateBridgeObservation.ProjectionFailed(diagnostic);
-        RecordObservation(_poisonObservation);
-        return new WorkerEventStateBridgeException(_poisonObservation);
+        _poisonObservation = observation;
+        RecordObservation(observation);
+        return new WorkerEventStateBridgeException(observation);
     }
 
     private void RecordObservation(WorkerEventStateBridgeObservation observation)

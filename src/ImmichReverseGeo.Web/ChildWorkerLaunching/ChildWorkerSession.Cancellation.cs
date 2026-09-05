@@ -15,19 +15,27 @@ internal sealed partial class ChildWorkerSession
     private readonly CancellationTokenSource _inputLifetimeCancellation = new();
     private readonly CancellationTokenSource _controlCancellation = new();
     private readonly TaskCompletionSource _confirmedExit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _executeRequestAccepted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<ChildWorkerTerminationRequest> _firstTerminationRequest =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
 
     private CancellationState? _cancellationState;
     private Task<ChildWorkerCancellationResult>? _stopTask;
     private Task? _cancelDeliveryTask;
     private TaskCompletionSource? _deadlineObserverSettled;
+    private Task? _containmentInputCloseTask;
     private Task? _inputCloseTask;
     private Task? _resourceDisposalTask;
     private bool _processExitConfirmed;
-    private int _requestAccepted;
     private int _inputClosed;
 
     internal TimeProvider Clock => _timeProvider;
     internal ProcessingRunRequest Request => _request;
+    internal Task ExecuteRequestAccepted => _executeRequestAccepted.Task;
+    internal Task<ChildWorkerTerminationRequest> FirstTerminationRequest
+        => _firstTerminationRequest.Task;
+    internal Task PhysicalExitConfirmed => _confirmedExit.Task;
 
     internal ChildWorkerCancellationFacts? CancellationFacts
     {
@@ -45,43 +53,86 @@ internal sealed partial class ChildWorkerSession
     internal Task<ChildWorkerCancellationResult> RequestStop(
         ChildWorkerStopRequest? stopRequest = null)
     {
+        stopRequest ??= ChildWorkerStopRequest.Capture(_timeProvider);
+        return RequestTermination(new ChildWorkerTerminationRequest(
+            stopRequest,
+            ChildWorkerTerminationIntent.Stop));
+    }
+
+    internal Task<ChildWorkerCancellationResult> RequestTermination(
+        ChildWorkerTerminationRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (!ReferenceEquals(request.Deadline.Clock, _timeProvider))
+        {
+            throw new ArgumentException(
+                "The termination request clock must match the child-worker session clock.",
+                nameof(request));
+        }
+
+        if (GetExitState() == ChildProcessExitState.Exited)
+        {
+            ConfirmProcessExit();
+        }
+
+        Task<ChildWorkerCancellationResult> result;
+        var closeInputForContainment = false;
         lock (_cancellationGate)
         {
-            if (stopRequest is not null
-                && !ReferenceEquals(stopRequest.Clock, _timeProvider))
-            {
-                throw new ArgumentException(
-                    "The Stop request clock must match the child-worker session clock.",
-                    nameof(stopRequest));
-            }
-
             if (_stopTask is not null)
             {
-                return _stopTask;
-            }
+                if (request.Intent == ChildWorkerTerminationIntent.FaultContainment
+                    && _cancellationState!.FirstContainmentReason is null)
+                {
+                    _cancellationState.FirstContainmentReason = request.Reason;
+                    closeInputForContainment = !_processExitConfirmed;
+                }
 
-            stopRequest ??= ChildWorkerStopRequest.Capture(_timeProvider);
-
-            _cancellationState = new CancellationState(
-                stopRequest.FirstStopAtUtc,
-                stopRequest.FirstStopAtUtc + ChildWorkerCancellationPolicy.Grace);
-
-            if (_processExitConfirmed)
-            {
-                _cancellationState.DeliveryPhase = ChildWorkerCancelDeliveryPhase.AlreadyExited;
-                _cancellationState.ExitRace = ChildWorkerCancellationExitRace.BeforeControl;
-                _stopTask = CompleteKnownExitStopAsync();
+                result = _stopTask;
             }
             else
             {
-                _deadlineObserverSettled = new TaskCompletionSource(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
-                var remainingGrace = GetRemainingGrace(stopRequest);
-                _stopTask = StopCoreAsync(remainingGrace, _deadlineObserverSettled);
-            }
+                _cancellationState = new CancellationState(
+                    request.Deadline.FirstStopAtUtc,
+                    request.Deadline.FirstStopAtUtc
+                        + ChildWorkerCancellationPolicy.Grace,
+                    request.Intent,
+                    request.Reason,
+                    request.Deadline.UtcObservationFailed);
+                _firstTerminationRequest.SetResult(request);
 
-            return _stopTask;
+                if (_processExitConfirmed)
+                {
+                    _cancellationState.DeliveryPhase =
+                        ChildWorkerCancelDeliveryPhase.AlreadyExited;
+                    _cancellationState.ExitRace =
+                        ChildWorkerCancellationExitRace.BeforeControl;
+                    _stopTask = CompleteKnownExitStopAsync();
+                }
+                else
+                {
+                    _deadlineObserverSettled = new TaskCompletionSource(
+                        TaskCreationOptions.RunContinuationsAsynchronously);
+                    var remainingGrace = GetRemainingGrace(request.Deadline);
+                    _stopTask = StopCoreAsync(
+                        remainingGrace,
+                        _deadlineObserverSettled,
+                        request.Intent);
+                    closeInputForContainment =
+                        request.Intent ==
+                            ChildWorkerTerminationIntent.FaultContainment;
+                }
+
+                result = _stopTask;
+            }
         }
+
+        if (closeInputForContainment)
+        {
+            _ = StartContainmentInputClose();
+        }
+
+        return result;
     }
 
     internal Task<ChildWorkerCancellationResult> WaitForStopAsync(
@@ -101,9 +152,11 @@ internal sealed partial class ChildWorkerSession
 
     private async Task<ChildWorkerCancellationResult> StopCoreAsync(
         TimeSpan remainingGrace,
-        TaskCompletionSource deadlineObserverSettled)
+        TaskCompletionSource deadlineObserverSettled,
+        ChildWorkerTerminationIntent intent)
     {
-        var deadline = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var deadline = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
         ITimer timer = _timeProvider.CreateTimer(
             static state =>
             {
@@ -114,7 +167,9 @@ internal sealed partial class ChildWorkerSession
             remainingGrace,
             Timeout.InfiniteTimeSpan);
 
-        var delivery = DeliverCancelAsync(deadline.Task);
+        Task delivery = intent == ChildWorkerTerminationIntent.FaultContainment
+            ? DeliverContainmentInputCloseAsync()
+            : DeliverCancelAsync(deadline.Task);
         lock (_cancellationGate)
         {
             _cancelDeliveryTask = delivery;
@@ -122,7 +177,9 @@ internal sealed partial class ChildWorkerSession
 
         try
         {
-            var winner = await Task.WhenAny(_confirmedExit.Task, deadline.Task).ConfigureAwait(false);
+            var winner = await Task.WhenAny(
+                _confirmedExit.Task,
+                deadline.Task).ConfigureAwait(false);
             if (ReferenceEquals(winner, deadline.Task))
             {
                 EscalateAtDeadline();
@@ -136,7 +193,9 @@ internal sealed partial class ChildWorkerSession
 
         var completion = await _settlement.ConfigureAwait(false);
         await delivery.ConfigureAwait(false);
-        return new ChildWorkerCancellationResult(GetCancellationFacts(), completion);
+        return new ChildWorkerCancellationResult(
+            GetCancellationFacts(),
+            completion);
     }
 
     private async Task<ChildWorkerCancellationResult> CompleteKnownExitStopAsync()
@@ -145,7 +204,7 @@ internal sealed partial class ChildWorkerSession
         return new ChildWorkerCancellationResult(GetCancellationFacts(), completion);
     }
 
-    private async Task<ChildWorkerCompletionObservation> ObserveSettledCompletionAsync()
+    private async Task<ChildWorkerCompletionObservation> ObserveEvidenceFinalityAsync()
     {
         var completion = await _completion.ConfigureAwait(false);
         if (completion.ExitObserved || GetExitState() == ChildProcessExitState.Exited)
@@ -154,11 +213,23 @@ internal sealed partial class ChildWorkerSession
         }
 
         await _confirmedExit.Task.ConfigureAwait(false);
+        return completion;
+    }
+
+    private async Task<ChildWorkerCompletionObservation> ObserveSettledCompletionAsync()
+    {
+        var completion = await _evidenceFinality.ConfigureAwait(false);
+        if (_evidenceFinalityGate is not null)
+        {
+            await _evidenceFinalityGate.WaitForReleaseAsync().ConfigureAwait(false);
+        }
+
         await EnsureResourcesDisposedAsync().ConfigureAwait(false);
         return completion;
     }
 
-    private async Task<ChildWorkerStartupObservation> WriteExecuteFrameAsync(byte[] frame)
+    private async Task<ChildWorkerStartupObservation> WriteExecuteFrameAsync(
+        byte[] frame)
     {
         var entered = false;
         try
@@ -168,19 +239,27 @@ internal sealed partial class ChildWorkerSession
                 .ConfigureAwait(false);
             entered = true;
 
-            if (IsInputClosed || TryConfirmKnownExit(ChildWorkerCancellationExitRace.BeforeControl))
+            if (IsInputClosed
+                || TryConfirmKnownExit(
+                    ChildWorkerCancellationExitRace.BeforeControl))
             {
+                PublishTerminalPreventingObservation(
+                    ChildWorkerFaultContainmentReason.RequestWriteFailed.Instance);
                 return ChildWorkerStartupObservation.RequestWriteFailed.Instance;
             }
 
             try
             {
                 await _standardInputStream
-                    .WriteAsync(frame.AsMemory(), _inputLifetimeCancellation.Token)
+                    .WriteAsync(
+                        frame.AsMemory(),
+                        _inputLifetimeCancellation.Token)
                     .ConfigureAwait(false);
             }
             catch
             {
+                PublishTerminalPreventingObservation(
+                    ChildWorkerFaultContainmentReason.RequestWriteFailed.Instance);
                 return ChildWorkerStartupObservation.RequestWriteFailed.Instance;
             }
 
@@ -192,14 +271,18 @@ internal sealed partial class ChildWorkerSession
             }
             catch
             {
+                PublishTerminalPreventingObservation(
+                    ChildWorkerFaultContainmentReason.RequestFlushFailed.Instance);
                 return ChildWorkerStartupObservation.RequestFlushFailed.Instance;
             }
 
-            Volatile.Write(ref _requestAccepted, 1);
+            _executeRequestAccepted.TrySetResult();
             return ChildWorkerStartupObservation.ReadyAccepted.Instance;
         }
         catch
         {
+            PublishTerminalPreventingObservation(
+                ChildWorkerFaultContainmentReason.RequestWriteFailed.Instance);
             return ChildWorkerStartupObservation.RequestWriteFailed.Instance;
         }
         finally
@@ -209,6 +292,20 @@ internal sealed partial class ChildWorkerSession
                 _inputWriterGate.Release();
             }
         }
+    }
+
+    private async Task DeliverContainmentInputCloseAsync()
+    {
+        await Task.CompletedTask.ConfigureAwait(
+            ConfigureAwaitOptions.ForceYielding);
+        await StartContainmentInputClose().ConfigureAwait(false);
+        if (TryConfirmKnownExit(ChildWorkerCancellationExitRace.BeforeControl))
+        {
+            SetDeliveryPhase(ChildWorkerCancelDeliveryPhase.AlreadyExited);
+            return;
+        }
+
+        SetDeliveryPhase(ChildWorkerCancelDeliveryPhase.InputClosed);
     }
 
     private async Task DeliverCancelAsync(Task deadline)
@@ -523,7 +620,20 @@ internal sealed partial class ChildWorkerSession
             await deadlineObserver.ConfigureAwait(false);
         }
 
-        await BeginInputClose().ConfigureAwait(false);
+        Task? containmentInputClose;
+        lock (_resourceGate)
+        {
+            containmentInputClose = _containmentInputCloseTask;
+        }
+
+        if (containmentInputClose is not null)
+        {
+            await containmentInputClose.ConfigureAwait(false);
+        }
+        else
+        {
+            await BeginInputClose().ConfigureAwait(false);
+        }
 
         Task? delivery;
         lock (_cancellationGate)
@@ -554,6 +664,35 @@ internal sealed partial class ChildWorkerSession
             _inputLifetimeCancellation.Dispose();
             _controlCancellation.Dispose();
             _inputWriterGate.Dispose();
+        }
+    }
+
+    private Task StartContainmentInputClose()
+    {
+        Volatile.Write(ref _inputClosed, 1);
+        CancelWithoutFailure(_inputLifetimeCancellation);
+        CancelWithoutFailure(_controlCancellation);
+        lock (_resourceGate)
+        {
+            _containmentInputCloseTask ??=
+                CloseInputAfterWriterAsync();
+            return _containmentInputCloseTask;
+        }
+    }
+
+    private async Task CloseInputAfterWriterAsync()
+    {
+        await Task.CompletedTask.ConfigureAwait(
+            ConfigureAwaitOptions.ForceYielding);
+        await _inputWriterGate.WaitAsync(CancellationToken.None)
+            .ConfigureAwait(false);
+        try
+        {
+            await BeginInputClose().ConfigureAwait(false);
+        }
+        finally
+        {
+            _inputWriterGate.Release();
         }
     }
 
@@ -593,16 +732,20 @@ internal sealed partial class ChildWorkerSession
         }
     }
 
-    private ChildWorkerCancellationFacts Snapshot(CancellationState state)
+    private ChildWorkerCancellationFacts Snapshot(
+        CancellationState state)
         => new(
             state.FirstStopAtUtc,
             state.DeadlineUtc,
-            Volatile.Read(ref _requestAccepted) != 0,
+            _executeRequestAccepted.Task.IsCompletedSuccessfully,
             state.DeliveryPhase,
             state.ExitRace,
             state.GraceExpired,
             state.KillAttempted,
-            state.KillOutcome);
+            state.KillOutcome,
+            state.FirstIntent,
+            state.FirstContainmentReason,
+            state.FirstStopUtcObservationFailed);
 
     private void SetDeliveryPhase(ChildWorkerCancelDeliveryPhase phase)
     {
@@ -651,10 +794,18 @@ internal sealed partial class ChildWorkerSession
 
     private sealed class CancellationState(
         DateTimeOffset firstStopAtUtc,
-        DateTimeOffset deadlineUtc)
+        DateTimeOffset deadlineUtc,
+        ChildWorkerTerminationIntent firstIntent,
+        ChildWorkerFaultContainmentReason? firstContainmentReason,
+        bool firstStopUtcObservationFailed)
     {
         internal DateTimeOffset FirstStopAtUtc { get; } = firstStopAtUtc;
         internal DateTimeOffset DeadlineUtc { get; } = deadlineUtc;
+        internal ChildWorkerTerminationIntent FirstIntent { get; } = firstIntent;
+        internal ChildWorkerFaultContainmentReason? FirstContainmentReason { get; set; } =
+            firstContainmentReason;
+        internal bool FirstStopUtcObservationFailed { get; } =
+            firstStopUtcObservationFailed;
         internal ChildWorkerCancelDeliveryPhase DeliveryPhase { get; set; }
         internal ChildWorkerCancellationExitRace ExitRace { get; set; }
         internal bool GraceExpired { get; set; }

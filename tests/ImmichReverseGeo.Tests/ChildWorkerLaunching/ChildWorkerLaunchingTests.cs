@@ -94,7 +94,7 @@ public sealed partial class ChildWorkerLaunchingTests
     [DataRow("standard-input", false)]
     [DataRow("standard-output", false)]
     [DataRow("standard-error", true)]
-    public async Task LaunchAsync_PostStartSetupFailureDisposesChildAndReturnsSafeStartFailed(
+    public async Task LaunchAsync_PostStartSetupFailureRetainsSessionThroughExitDrainAndDisposal(
         string failingGetter,
         bool disposeThrows)
     {
@@ -105,12 +105,24 @@ public sealed partial class ChildWorkerLaunchingTests
         var result = await new ChildWorkerLauncher(factory).LaunchAsync(
             CreateInvocation(), CreateRequest(), sink, TestOptions(), CancellationToken.None);
 
-        var failure = Assert.IsInstanceOfType<ChildWorkerLaunchResult.StartFailed>(result, $"{failingGetter}: no-started-session-reference");
-        Assert.AreEqual(ChildWorkerStartFailureCategory.ProcessStartFailed, failure.Category, $"{failingGetter}: safe-typed-failure");
-        Assert.AreEqual(1, factory.StartCalls, $"{failingGetter}: factory-returned-one-child");
-        Assert.AreEqual(1, process.DisposeCalls, $"{failingGetter}: child-cleanup-attempted-once");
-        Assert.AreEqual(0, process.WaitCalls, $"{failingGetter}: observers-never-started");
-        Assert.AreEqual(0, sink.AcceptCalls, $"{failingGetter}: no-callback-escaped");
+        var session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result).Session;
+        var evidence = await session.EvidenceFinality;
+        Assert.IsInstanceOfType<ChildWorkerStartupObservation.PostStartSetupFailed>(evidence.Startup);
+        Assert.IsTrue(evidence.ExitObserved);
+        if (disposeThrows)
+        {
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await session.Settlement);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(async () => await session.DisposeAsync());
+        }
+        else
+        {
+            await session.Settlement;
+            await session.DisposeAsync();
+        }
+        Assert.AreEqual(1, factory.StartCalls);
+        Assert.AreEqual(1, process.DisposeCalls);
+        Assert.AreEqual(1, process.WaitCalls);
+        Assert.AreEqual(0, sink.AcceptCalls);
     }
 
     [TestMethod]

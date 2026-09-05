@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using WorkerStateBridge = ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridge;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -235,53 +236,152 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 return false;
             }
 
-            claim = handle.ClaimStop(_timeProvider, trackCancellationDispatch: false);
+            claim = handle.ClaimStop(
+                _timeProvider,
+                ChildWorkerTerminationIntent.Stop,
+                trackCancellationDispatch: false);
         }
 
         if (claim.IsFirst)
         {
-            handle.StartAttachedStop();
+            StartAttachedTermination(handle);
         }
 
         RequestCancellation(handle);
         return true;
     }
 
+    internal bool TryClaimChildExecution(
+        ProcessingRunRequest request,
+        WorkerRunFinalizer finalizer)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(finalizer);
+
+        lock (_admissionGate)
+        {
+            if (_active is null
+                || !ReferenceEquals(_active.Request, request)
+                || !ReferenceEquals(finalizer.Request, request)
+                || !ReferenceEquals(finalizer.Reporter, _reporter)
+                || !ReferenceEquals(finalizer.Clock, _timeProvider))
+            {
+                return false;
+            }
+
+            return _active.TryClaimChildExecution(finalizer);
+        }
+    }
+
     internal bool TryAttachChildSession(
         ProcessingRunRequest request,
         ChildWorkerSession session,
-        WorkerStateBridge? bridge = null)
+        WorkerStateBridge? bridge = null,
+        WorkerRunFinalizer? finalizer = null)
     {
         ArgumentNullException.ThrowIfNull(request);
         ArgumentNullException.ThrowIfNull(session);
 
+        var claimDefaultFinalizer = bridge is not null && finalizer is null;
+        finalizer ??= bridge is null
+            ? null
+            : new WorkerRunFinalizer(request, _reporter, _timeProvider);
+        if ((bridge is null) != (finalizer is null)
+            || (bridge is not null
+                && (!ReferenceEquals(bridge.Request, request)
+                    || !ReferenceEquals(bridge.Reporter, _reporter)))
+            || (finalizer is not null
+                && (!ReferenceEquals(finalizer.Request, request)
+                    || !ReferenceEquals(finalizer.Reporter, _reporter)
+                    || !ReferenceEquals(finalizer.Clock, _timeProvider))))
+        {
+            return false;
+        }
+
         ActiveRun handle;
-        var startStop = false;
+        ActiveRun.ChildAttachment? attachment;
         lock (_admissionGate)
         {
             if (_active is null
                 || !ReferenceEquals(_active.Request, request)
                 || session.RunId != request.RunId
                 || !ReferenceEquals(session.Request, request)
-                || !ReferenceEquals(session.Clock, _timeProvider)
-                || (bridge is not null && !ReferenceEquals(bridge.Request, request)))
+                || !ReferenceEquals(session.Clock, _timeProvider))
             {
                 return false;
             }
 
             handle = _active;
-            if (!handle.TryAttachChildSession(session, bridge, out startStop))
+            if (!handle.TryAttachChildSession(
+                    session,
+                    bridge,
+                    finalizer,
+                    claimDefaultFinalizer,
+                    out attachment))
             {
                 return false;
             }
         }
 
-        if (startStop)
+        if (attachment!.Finalizer is not null)
         {
-            handle.StartAttachedStop();
+            try
+            {
+                var completion = attachment.Finalizer.Start(
+                    session,
+                    bridge!,
+                    observation => RequestFaultContainment(handle, observation),
+                    () => handle.IsShutdownRequested);
+                if (!ReferenceEquals(completion, attachment.Finalizer.Completion))
+                {
+                    throw new InvalidOperationException(
+                        "The child finalizer did not return its owned completion task.");
+                }
+
+                attachment.FinalizerStarted.TrySetResult();
+            }
+            catch (Exception failure)
+            {
+                attachment.FinalizerStarted.TrySetException(failure);
+                throw;
+            }
         }
 
+        StartAttachedTermination(handle);
+
         return true;
+    }
+
+    private void StartAttachedTermination(ActiveRun handle)
+    {
+        if (!handle.OwnsFinalization)
+        {
+            handle.StartAttachedTermination(allowFaultContainment: false);
+            return;
+        }
+
+        var allowFaultContainment =
+            _reporter.GetFinalizationReceipt(handle.Request) is null;
+        handle.StartAttachedTermination(allowFaultContainment);
+    }
+
+    private void RequestFaultContainment(
+        ActiveRun handle,
+        ChildWorkerTerminalPreventingObservation observation)
+    {
+        ArgumentNullException.ThrowIfNull(observation);
+        if (!ReferenceEquals(observation.ObservedAt.Clock, _timeProvider))
+        {
+            throw new InvalidOperationException(
+                "The child fault observation clock does not match the active run clock.");
+        }
+
+        if (_reporter.GetFinalizationReceipt(handle.Request) is not null)
+        {
+            return;
+        }
+
+        handle.StartFaultContainment(observation);
     }
 
     private Task? StopActiveRunCore()
@@ -296,7 +396,10 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 return null;
             }
 
-            claim = handle.ClaimStop(_timeProvider, trackCancellationDispatch: true);
+            claim = handle.ClaimStop(
+                _timeProvider,
+                ChildWorkerTerminationIntent.Stop,
+                trackCancellationDispatch: true);
         }
 
         if (claim.IsFirst)
@@ -307,7 +410,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             }
             finally
             {
-                handle.StartAttachedStop();
+                StartAttachedTermination(handle);
             }
         }
 
@@ -359,6 +462,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             handle?.MarkShutdownRequested();
             ActiveRun.StopClaim? stopClaim = handle?.ClaimStop(
                 _timeProvider,
+                ChildWorkerTerminationIntent.Shutdown,
                 trackCancellationDispatch: true);
             start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             shutdown = CompleteShutdownAsync(handle, stopClaim, start.Task);
@@ -583,6 +687,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ActiveRun handle,
         Exception failure)
     {
+        if (handle.OwnsFinalization)
+        {
+            return;
+        }
+
         if (!handle.IsShutdownRequested)
         {
             TryAbandon(handle.Request, failure);
@@ -698,6 +807,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                     && ReferenceEquals(_active.Request, handle.Request))
                 {
                     _active = null;
+                    handle.MarkFinalizerReleased();
                 }
             }
             handle.ExecutionFailure = primaryFailure ?? cleanupFailure;
@@ -816,7 +926,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
         finally
         {
-            handle.StartAttachedStop();
+            StartAttachedTermination(handle);
         }
 
         return claim.Settlement;
@@ -941,8 +1051,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         private bool _childAttachmentClosed;
         private ExceptionDispatchInfo? _cancellationFailure;
         private ChildAttachment? _child;
+        private WorkerRunFinalizer? _finalizer;
         private ChildWorkerStopRequest? _stopRequest;
-        private Lazy<Task<ChildWorkerCancellationResult>>? _childStop;
+        private ChildWorkerTerminationIntent _stopIntent;
+        private Lazy<Task<ChildWorkerCancellationResult>>? _childTermination;
+        private ChildWorkerTerminationIntent? _childTerminationIntent;
         private Task? _cancellationDispatch;
 
         public ActiveRun(ProcessingRunRequest request, IProcessingRunCancellation cancellation)
@@ -958,6 +1071,16 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         public ExceptionDispatchInfo? ExecutionFailure { get; set; }
         public bool HasOwnedExecution => Volatile.Read(ref _ownedExecution) is not null;
         public bool IsShutdownRequested => Volatile.Read(ref _shutdownRequested) != 0;
+        public bool OwnsFinalization
+        {
+            get
+            {
+                lock (_childGate)
+                {
+                    return _finalizer is not null;
+                }
+            }
+        }
 
         public void MarkShutdownRequested()
         {
@@ -979,8 +1102,15 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         public StopClaim ClaimStop(
             TimeProvider timeProvider,
+            ChildWorkerTerminationIntent intent,
             bool trackCancellationDispatch)
         {
+            if (intent is not ChildWorkerTerminationIntent.Stop
+                and not ChildWorkerTerminationIntent.Shutdown)
+            {
+                throw new ArgumentOutOfRangeException(nameof(intent));
+            }
+
             lock (_childGate)
             {
                 if (_stopRequest is not null)
@@ -994,13 +1124,13 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 }
 
                 _stopRequest = ChildWorkerStopRequest.Capture(timeProvider);
+                _stopIntent = intent;
                 TaskCompletionSource? cancellationDispatch = null;
                 if (trackCancellationDispatch)
                 {
                     cancellationDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
                     _cancellationDispatch = cancellationDispatch.Task;
                 }
-                EnsureChildStopUnderGate();
                 return new StopClaim(true, CleanupCompleted.Task, cancellationDispatch);
             }
         }
@@ -1014,37 +1144,101 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             }
         }
 
+        public bool TryClaimChildExecution(WorkerRunFinalizer finalizer)
+        {
+            lock (_childGate)
+            {
+                if (_childAttachmentClosed || _finalizer is not null || _child is not null)
+                {
+                    return false;
+                }
+
+                _finalizer = finalizer;
+                return true;
+            }
+        }
+
         public bool TryAttachChildSession(
             ChildWorkerSession session,
             WorkerStateBridge? bridge,
-            out bool startStop)
+            WorkerRunFinalizer? finalizer,
+            bool claimDefaultFinalizer,
+            out ChildAttachment? attachment)
         {
             lock (_childGate)
             {
                 if (_childAttachmentClosed || _child is not null)
                 {
-                    startStop = false;
+                    attachment = null;
                     return false;
                 }
 
-                _child = new ChildAttachment(session, bridge);
-                EnsureChildStopUnderGate();
-                startStop = _childStop is not null;
+                if (finalizer is not null)
+                {
+                    if (_finalizer is null)
+                    {
+                        if (!claimDefaultFinalizer)
+                        {
+                            attachment = null;
+                            return false;
+                        }
+
+                        _finalizer = finalizer;
+                    }
+                    else if (!ReferenceEquals(_finalizer, finalizer))
+                    {
+                        attachment = null;
+                        return false;
+                    }
+                }
+                else if (_finalizer is not null)
+                {
+                    attachment = null;
+                    return false;
+                }
+
+                attachment = new ChildAttachment(session, bridge, finalizer);
+                _child = attachment;
                 return true;
             }
         }
 
-        public void StartAttachedStop()
+        public void StartAttachedTermination(bool allowFaultContainment)
         {
-            Lazy<Task<ChildWorkerCancellationResult>>? childStop;
+            ChildTerminationDispatch? dispatch;
             lock (_childGate)
             {
-                childStop = _childStop;
+                dispatch = EnsureChildTerminationUnderGate(
+                    allowFaultContainment
+                        ? GetCompletedTerminalPreventingObservationUnderGate()
+                        : null);
             }
 
-            if (childStop is not null)
+            if (dispatch is not null)
             {
-                _ = childStop.Value;
+                _finalizer?.State.AdvanceTransport(WorkerRunTransportPhase.Draining);
+                dispatch.Start();
+            }
+        }
+
+        public void StartFaultContainment(
+            ChildWorkerTerminalPreventingObservation observation)
+        {
+            ChildTerminationDispatch? dispatch;
+            lock (_childGate)
+            {
+                if (_child is null || _child.Session.EvidenceFinality.IsCompleted)
+                {
+                    return;
+                }
+
+                dispatch = EnsureChildTerminationUnderGate(observation);
+            }
+
+            if (dispatch is not null)
+            {
+                _finalizer?.State.AdvanceTransport(WorkerRunTransportPhase.Draining);
+                dispatch.Start();
             }
         }
 
@@ -1059,14 +1253,16 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         public async Task SettleAttachedChildAsync()
         {
             ChildAttachment? child;
-            Lazy<Task<ChildWorkerCancellationResult>>? childStop;
+            WorkerRunFinalizer? finalizer;
+            Lazy<Task<ChildWorkerCancellationResult>>? childTermination;
             lock (_childGate)
             {
                 child = _child;
-                childStop = _childStop;
+                finalizer = _finalizer;
+                childTermination = _childTermination;
             }
 
-            if (child is null)
+            if (child is null && finalizer is null)
             {
                 return;
             }
@@ -1085,20 +1281,59 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 }
             }
 
-            if (childStop is not null)
+            if (childTermination is not null && finalizer is null)
             {
-                await AttemptAsync(async () => await childStop.Value.ConfigureAwait(false)).ConfigureAwait(false);
+                await AttemptAsync(async () => await childTermination.Value.ConfigureAwait(false)).ConfigureAwait(false);
+            }
+            else if (childTermination is not null)
+            {
+                _ = childTermination.Value;
             }
 
-            await AttemptAsync(async () => await child.Session.Settlement.ConfigureAwait(false)).ConfigureAwait(false);
-            await AttemptAsync(async () => await child.Session.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
-
-            if (child.Bridge is not null)
+            if (finalizer is not null)
             {
-                await AttemptAsync(async () => await child.Bridge.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+                if (child is not null)
+                {
+                    await AttemptAsync(async () => await child.FinalizerStarted.Task.ConfigureAwait(false)).ConfigureAwait(false);
+                }
+
+                await finalizer.StateFinality.ConfigureAwait(false);
+                await AttemptAsync(async () => await finalizer.Completion.ConfigureAwait(false)).ConfigureAwait(false);
+
+                lock (_childGate)
+                {
+                    childTermination = _childTermination;
+                }
+
+                if (childTermination is not null)
+                {
+                    await AttemptAsync(async () => await childTermination.Value.ConfigureAwait(false)).ConfigureAwait(false);
+                }
+            }
+
+            if (child is not null)
+            {
+                await AttemptAsync(async () => await child.Session.Settlement.ConfigureAwait(false)).ConfigureAwait(false);
+                await AttemptAsync(async () => await child.Session.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+
+                if (child.Bridge is not null)
+                {
+                    await AttemptAsync(async () => await child.Bridge.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+                }
             }
 
             firstFailure?.Throw();
+        }
+
+        public void MarkFinalizerReleased()
+        {
+            WorkerRunFinalizer? finalizer;
+            lock (_childGate)
+            {
+                finalizer = _finalizer;
+            }
+
+            finalizer?.State.AdvanceTransport(WorkerRunTransportPhase.Released);
         }
 
         public ExceptionDispatchInfo? RequestCancellation()
@@ -1175,28 +1410,88 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             return _disposalCompleted.Task;
         }
 
-        private void EnsureChildStopUnderGate()
+        private ChildWorkerTerminalPreventingObservation?
+            GetCompletedTerminalPreventingObservationUnderGate()
         {
-            if (_childStop is not null || _child is null || _stopRequest is null)
+            if (_child?.Finalizer is null
+                || _child.Session.EvidenceFinality.IsCompleted
+                || !_child.Session.FirstTerminalPreventingObservation.IsCompletedSuccessfully)
             {
-                return;
+                return null;
             }
 
-            var child = _child;
-            var stopRequest = _stopRequest;
-            _childStop = new Lazy<Task<ChildWorkerCancellationResult>>(
-                () =>
+            return _child.Session.FirstTerminalPreventingObservation.Result;
+        }
+
+        private ChildTerminationDispatch? EnsureChildTerminationUnderGate(
+            ChildWorkerTerminalPreventingObservation? observation)
+        {
+            if (_child is null)
+            {
+                return null;
+            }
+
+            if (observation is not null
+                && !ReferenceEquals(observation.ObservedAt.Clock, _child.Session.Clock))
+            {
+                throw new InvalidOperationException(
+                    "The child fault observation clock does not match the attached session clock.");
+            }
+
+            var faultWins = observation is not null
+                && (_stopRequest is null
+                    || observation.ObservedAt.FirstStopTimestamp
+                        < _stopRequest.FirstStopTimestamp);
+
+            if (_childTermination is null)
+            {
+                ChildWorkerTerminationRequest request;
+                if (faultWins)
                 {
-                    try
+                    request = new ChildWorkerTerminationRequest(
+                        observation!.ObservedAt,
+                        ChildWorkerTerminationIntent.FaultContainment,
+                        observation.Reason);
+                }
+                else if (_stopRequest is not null)
+                {
+                    request = new ChildWorkerTerminationRequest(
+                        _stopRequest,
+                        _stopIntent);
+                }
+                else
+                {
+                    return null;
+                }
+
+                var child = _child;
+                _childTerminationIntent = request.Intent;
+                _childTermination = new Lazy<Task<ChildWorkerCancellationResult>>(
+                    () =>
                     {
-                        return child.Session.RequestStop(stopRequest);
-                    }
-                    catch (Exception failure)
-                    {
-                        return Task.FromException<ChildWorkerCancellationResult>(failure);
-                    }
-                },
-                LazyThreadSafetyMode.ExecutionAndPublication);
+                        try
+                        {
+                            return child.Session.RequestTermination(request);
+                        }
+                        catch (Exception failure)
+                        {
+                            return Task.FromException<ChildWorkerCancellationResult>(failure);
+                        }
+                    },
+                    LazyThreadSafetyMode.ExecutionAndPublication);
+            }
+
+            var containment = observation is not null
+                && _childTerminationIntent != ChildWorkerTerminationIntent.FaultContainment
+                    ? new ChildWorkerTerminationRequest(
+                        observation.ObservedAt,
+                        ChildWorkerTerminationIntent.FaultContainment,
+                        observation.Reason)
+                    : null;
+            return new ChildTerminationDispatch(
+                _child.Session,
+                _childTermination,
+                containment);
         }
 
         private void PerformDisposal()
@@ -1230,8 +1525,28 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             Task Settlement,
             TaskCompletionSource? CancellationDispatch);
 
-        private sealed record ChildAttachment(
+        public sealed record ChildAttachment(
             ChildWorkerSession Session,
-            WorkerStateBridge? Bridge);
+            WorkerStateBridge? Bridge,
+            WorkerRunFinalizer? Finalizer)
+        {
+            internal TaskCompletionSource FinalizerStarted { get; } =
+                new(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        private sealed record ChildTerminationDispatch(
+            ChildWorkerSession Session,
+            Lazy<Task<ChildWorkerCancellationResult>> Primary,
+            ChildWorkerTerminationRequest? Containment)
+        {
+            internal void Start()
+            {
+                _ = Primary.Value;
+                if (Containment is not null)
+                {
+                    _ = Session.RequestTermination(Containment);
+                }
+            }
+        }
     }
 }

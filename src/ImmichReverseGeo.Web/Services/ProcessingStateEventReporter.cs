@@ -12,15 +12,20 @@ namespace ImmichReverseGeo.Web.Services;
 /// <summary>Projects the one admitted in-process event run into the singleton Web state.</summary>
 public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 {
+    private const int MaxPostTerminalDiagnosticLength = 256;
+
     private readonly ProcessingState _state;
     private readonly object _projectionGate = new();
     private readonly Dictionary<Guid, IDisposable> _activities = [];
     private ProcessingRunRequest? _armedRequest;
     private ProcessingRunRequest? _lastReleasedRequest;
     private bool _terminal;
+    private DateTimeOffset? _startedAtUtc;
     private ProcessingProgress? _lastProgress;
     private ProcessingState.ProgressSnapshot? _armedProgress;
     private bool _eligibilityProjected;
+    private ProcessingRunFinalizationReceipt? _finalizationReceipt;
+    private bool _postTerminalDiagnosticAppended;
     private readonly Action<ProcessingEvent>? _beforeProjection;
     private readonly Action<string, ProcessingRunRequest>? _controlObserver;
 
@@ -58,9 +63,12 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
             _armedRequest = request;
             _lastReleasedRequest = null;
             _terminal = false;
+            _startedAtUtc = null;
             _lastProgress = null;
             _armedProgress = _state.ReadProgressSnapshot();
             _eligibilityProjected = false;
+            _finalizationReceipt = null;
+            _postTerminalDiagnosticAppended = false;
             _controlObserver?.Invoke("arm", request);
             return true;
         }
@@ -72,6 +80,129 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         lock (_projectionGate)
         {
             return ReferenceEquals(_armedRequest, request) && !_terminal;
+        }
+    }
+
+    internal ProcessingRunFinalizationReceipt? GetFinalizationReceipt(ProcessingRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        lock (_projectionGate)
+        {
+            return ReferenceEquals(_finalizationReceipt?.Request, request)
+                ? _finalizationReceipt
+                : null;
+        }
+    }
+
+    internal ProcessingRunFinalizationAttempt TryFinalize(
+        ProcessingRunRequest request,
+        ProcessingRunResult result,
+        ProcessingRunFinalizationOrigin origin)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(result);
+
+        if (!ReferenceEquals(result.Request, request))
+        {
+            throw new ArgumentException("The finalization result must retain the exact request instance.", nameof(result));
+        }
+
+        if (!Enum.IsDefined(origin))
+        {
+            throw new ArgumentOutOfRangeException(nameof(origin), origin, "The finalization origin must be defined.");
+        }
+
+        lock (_projectionGate)
+        {
+            return FinalizeUnderLock(request, result, origin, null);
+        }
+    }
+
+    internal ProcessingRunResult CreateAbnormalResult(
+        ProcessingRunRequest request,
+        ProcessingRunOutcome outcome,
+        DateTimeOffset fallbackStartedAtUtc,
+        DateTimeOffset endedAtUtc,
+        string? safeFailureMessage)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (outcome is not ProcessingRunOutcome.Failed and not ProcessingRunOutcome.Cancelled)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                outcome,
+                "Abnormal finalization may only synthesize a failed or cancelled result.");
+        }
+
+        if (fallbackStartedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("The fallback start timestamp must have a zero UTC offset.", nameof(fallbackStartedAtUtc));
+        }
+
+        if (endedAtUtc.Offset != TimeSpan.Zero)
+        {
+            throw new ArgumentException("The end timestamp must have a zero UTC offset.", nameof(endedAtUtc));
+        }
+
+        lock (_projectionGate)
+        {
+            if (!ReferenceEquals(_armedRequest, request) || _terminal || _finalizationReceipt is not null)
+            {
+                throw new InvalidOperationException("The reporter does not own uncommitted finalization for this request.");
+            }
+
+            var progress = _lastProgress;
+            var updated = progress?.UpdatedCount ?? 0;
+            var skipped = progress?.SkippedCount ?? 0;
+            var failed = progress?.FailedCount ?? 0;
+            var processed = checked(updated + skipped + failed);
+            var startedAtUtc = _startedAtUtc ?? fallbackStartedAtUtc;
+            // A wall-clock correction must not strand a settled run before its
+            // durable receipt can be claimed.
+            var effectiveEndedAtUtc = endedAtUtc < startedAtUtc
+                ? startedAtUtc
+                : endedAtUtc;
+            return new ProcessingRunResult(
+                request,
+                startedAtUtc,
+                effectiveEndedAtUtc,
+                processed,
+                updated,
+                skipped,
+                failed,
+                outcome,
+                safeFailureMessage);
+        }
+    }
+
+    internal bool TryAppendPostTerminalDiagnostic(
+        ProcessingRunFinalizationReceipt receipt,
+        string diagnostic)
+    {
+        ArgumentNullException.ThrowIfNull(receipt);
+        if (string.IsNullOrWhiteSpace(diagnostic) || diagnostic.Length > MaxPostTerminalDiagnosticLength)
+        {
+            throw new ArgumentException("A post-terminal diagnostic must be non-blank and bounded.", nameof(diagnostic));
+        }
+
+        lock (_projectionGate)
+        {
+            if (!ReferenceEquals(_finalizationReceipt, receipt) || _postTerminalDiagnosticAppended)
+            {
+                return false;
+            }
+
+            _postTerminalDiagnosticAppended = true;
+            try
+            {
+                _state.AppendLog($"[WARN] {diagnostic}");
+            }
+            catch
+            {
+                // AppendLog commits before notification; the diagnostic remains exactly once.
+            }
+
+            return true;
         }
     }
 
@@ -203,10 +334,24 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
                 return false;
             }
 
+            if (processingEvent is RunFinished finished)
+            {
+                var finalization = FinalizeUnderLock(
+                    processingEvent.Request,
+                    finished.Result,
+                    ProcessingRunFinalizationOrigin.WorkerTerminal,
+                    processingEvent);
+                return finalization.Disposition == ProcessingRunFinalizationDisposition.Committed;
+            }
+
             if (processingEvent is ProgressChanged attemptedProgress)
             {
                 // The disposition can follow an irreversible write/skip/failure decision.
                 _lastProgress = attemptedProgress.Progress;
+            }
+            else if (processingEvent is RunStarted attemptedStart)
+            {
+                _startedAtUtc = attemptedStart.StartedAtUtc;
             }
 
             _beforeProjection?.Invoke(processingEvent);
@@ -237,9 +382,6 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
                 case ActivityEnded activityEnded:
                     EndActivity(activityEnded.ActivityId);
                     break;
-                case RunFinished finished:
-                    ProjectTerminal(finished.Result);
-                    break;
             }
         }
 
@@ -265,14 +407,51 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         }
     }
 
-    private void ProjectTerminal(ProcessingRunResult result)
+    private ProcessingRunFinalizationAttempt FinalizeUnderLock(
+        ProcessingRunRequest request,
+        ProcessingRunResult result,
+        ProcessingRunFinalizationOrigin origin,
+        ProcessingEvent? terminalEvent)
     {
-        if (_terminal)
+        if (_finalizationReceipt is not null)
         {
-            return;
+            return ReferenceEquals(_finalizationReceipt.Request, request)
+                ? new ProcessingRunFinalizationAttempt(
+                    ProcessingRunFinalizationDisposition.ExistingWinner,
+                    _finalizationReceipt)
+                : new ProcessingRunFinalizationAttempt(
+                    ProcessingRunFinalizationDisposition.RejectedBeforeCommit,
+                    null);
         }
 
+        if (!ReferenceEquals(_armedRequest, request) || _terminal)
+        {
+            return new ProcessingRunFinalizationAttempt(
+                ProcessingRunFinalizationDisposition.RejectedBeforeCommit,
+                null);
+        }
+
+        var receipt = new ProcessingRunFinalizationReceipt(request, result, origin);
+        _finalizationReceipt = receipt;
+        ProjectTerminal(result, terminalEvent);
+        return new ProcessingRunFinalizationAttempt(
+            ProcessingRunFinalizationDisposition.Committed,
+            receipt);
+    }
+
+    private void ProjectTerminal(ProcessingRunResult result, ProcessingEvent? terminalEvent)
+    {
         ExceptionDispatchInfo? firstFailure = null;
+        var progress = _lastProgress;
+        var fallback = _eligibilityProjected
+            ? ProcessingState.ProgressSnapshot.Empty
+            : _armedProgress ?? _state.ReadProgressSnapshot();
+        var updated = progress?.UpdatedCount ?? fallback.Processed;
+        var skipped = progress?.SkippedCount ?? fallback.Skipped;
+        var failed = progress?.FailedCount ?? fallback.Errors;
+        var priorLastError = _state.LastError;
+        var priorLog = _state.GetRecentLog();
+        var completedAt = DateTime.UtcNow;
 
         void Attempt(Action mutation)
         {
@@ -288,6 +467,11 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 
         try
         {
+            if (terminalEvent is not null && _beforeProjection is not null)
+            {
+                Attempt(() => _beforeProjection(terminalEvent));
+            }
+
             if (result.Outcome == ProcessingRunOutcome.Cancelled)
             {
                 Attempt(() => _state.AppendLog("Run cancelled."));
@@ -303,17 +487,39 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
             }
 
             _activities.Clear();
-            Attempt(_state.CompleteRun);
+            Attempt(() => _state.CompleteRun(completedAt));
             Attempt(() => _state.AppendLog($"Run complete. Processed={_state.ProcessedThisRun} Skipped={_state.SkippedThisRun} Errors={_state.ErrorsThisRun}"));
 
             if (firstFailure is not null)
             {
-                RestoreFailureSnapshot(firstFailure.SourceException);
+                try
+                {
+                    _state.RestoreTerminalSnapshot(
+                        updated,
+                        skipped,
+                        failed,
+                        result.Outcome,
+                        result.FailureMessage,
+                        priorLastError,
+                        completedAt,
+                        priorLog);
+                }
+                catch
+                {
+                    // The canonical snapshot is committed before notification; preserve the first failure.
+                }
             }
         }
         finally
         {
-            ReleaseArm();
+            try
+            {
+                ReleaseArm();
+            }
+            catch (Exception failure)
+            {
+                firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+            }
         }
 
         firstFailure?.Throw();
@@ -344,6 +550,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         _terminal = true;
         _lastReleasedRequest = releasedRequest;
         _armedRequest = null;
+        _startedAtUtc = null;
         _lastProgress = null;
         _armedProgress = null;
         _eligibilityProjected = false;

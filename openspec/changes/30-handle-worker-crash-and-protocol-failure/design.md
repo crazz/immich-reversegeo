@@ -53,7 +53,7 @@ Alternative: make every fault an immediate terminal. Rejected because it loses t
 
 ### 3. Terminal authority requires a committed projection receipt
 
-A syntactically valid terminal frame is not by itself UI authority. Authority requires protocol/bridge acceptance plus an idempotent state-finalization receipt of `Committed` (or `AlreadyCommittedSameTerminal`). Block 27 remains the normal owner. The atomic gate durably records its winner before observable terminal mutations and returns one of: committed, already committed same terminal, rejected before mutation, or response indeterminate. A validated Completed/Cancelled/Failed terminal rejected before mutation is submitted once through that gate by the classifier; the same terminal commits unless another recorded outcome already won. For an indeterminate response, the classifier queries the durable receipt: a recorded terminal is authoritative, while no receipt proves the atomic operation did not mutate and the classifier commits Failed with category `projection-failure`. It never replays stdout or issues a blind second mutation.
+A syntactically valid terminal frame is not by itself UI authority. Authority requires protocol/bridge acceptance plus an idempotent state-finalization receipt of `Committed` (or `AlreadyCommittedSameTerminal`). Block 27 remains the normal owner. The atomic gate durably records its winner before observable terminal mutations and returns one of: committed, already committed same terminal, rejected before mutation, or response indeterminate. A Preview-valid Completed/Cancelled/Failed terminal whose projection definitely failed before receipt claim is submitted once through that gate by the finalizer; semantic validator/correlation rejection is never resubmitted; the same terminal commits unless another recorded outcome already won. For an indeterminate response, the classifier queries the durable receipt: a recorded terminal is authoritative, while no receipt proves the atomic operation did not mutate and the classifier commits Failed with category `projection-failure`. It never replays stdout or issues a blind second mutation.
 
 Once committed, later exit/input/output/disposal/shutdown contradictions are supplementary anomalies. They may add one bounded diagnostic through a post-terminal anomaly path, but cannot change outcome, counters, fatal count, summary, completion timestamp, or activities.
 
@@ -78,7 +78,7 @@ For orderly worker facts, supplementary exit consistency uses block-23 precedenc
 
 A readiness, protocol, sink, projection, or output fault can leave a worker alive even though no terminal can be trusted. Block 30 invokes an internal `FaultContainment` reason on the exact block-28 lifecycle owner. That reason joins the same one-operation gate, fixed deadline, whole-tree kill, exit/drain, and disposal mechanics; it creates no second timer or owner and is not user Stop or host shutdown. After protocol/output safety is lost it closes input as owned cleanup but sends no cancel or other protocol frame. An accepted kill under fault containment remains Failed; only an earlier exact-session Stop/shutdown intent can authorize Cancelled. Kill rejection retains ownership and fails visibly.
 
-Alternative: wait indefinitely for natural exit. Rejected because block 25 disposal is intentionally non-escalating and would leave state/coordinator ownership stuck.
+Alternative: wait indefinitely for natural exit. Rejected because waiting for natural exit alone can leave ownership stuck. Applied block 28 now owns escalation; containment joins that exact owner rather than adding another kill path.
 
 ### 6. Cancellation and shutdown use intent plus evidence
 
@@ -113,7 +113,7 @@ Alternative: append all retained stderr. Rejected because bounded data can still
 
 ### 9. Finalization and cleanup have one order
 
-For the exact admitted run:
+Normal terminal projection may claim the receipt before process exit. For evidence classification and abnormal finalization of the exact admitted run:
 
 1. finish process exit plus stdout/stderr pumps, or settle a typed no-process failure;
 2. freeze evidence and classify;
@@ -172,3 +172,16 @@ All tests use positive handshakes, gates, fake time, explicit EOF/exit, complete
 
 There is one exact-session internal deadline, started by whichever happens first: accepted Stop, host shutdown, or fault containment. It is the block-28 internal exact 10-second `TimeProvider` deadline, never a second timer. Classification must keep semantic rejection (a definite invalid/contradictory event), noncommit (no authoritative terminal commit), and indeterminate receipt (a terminal/projection attempt whose authoritative commit cannot be known) distinct; none may be silently upgraded to a committed terminal. The coordination and worker-event bridge capability contracts are modified to expose these bounded observations and finalization handoff without changing UI projection ownership.
 
+
+## Applied prerequisite reconciliation
+
+- Session completion contains an OS exit integer, not managed provenance. The child adapter never reconstructs `WorkerProcessExitFact` from that integer. The pure classifier accepts a separately owned managed fact only when such provenance exists; actual child cancellation without a terminal therefore requires an accepted exact-session grace kill. A raw 130 alone fails. A committed terminal may use its raw numeric pairing for supplementary consistency without promoting that number into domain authority.
+- `WorkerProtocolFailure.Detail` adds non-wire readiness, progress, terminal, activity-cardinality, and missing-terminal evidence. It preserves existing codes, diagnostics, codec bytes, and validation ordering; classification never parses diagnostic prose.
+- Normal and abnormal projection use the reporter's one in-memory receipt gate. An indeterminate response queries that gate; semantic rejection never authorizes replay.
+- New child execution opts into an evidence-finality hold: physical exit and both pumps publish evidence before owned resource disposal. After a receipt exists, the finalizer releases the hold, joins disposal/callback closure, and allows exact coordinator release. Legacy raw-session clients retain their existing disposal behavior.
+- `WorkerRunControlPlane` is explicitly callable and registered without replacing the current in-process executor. Backend selection remains a later change. One exact coordinator reservation precedes command resolution and prevents duplicate launch.
+- Optional excerpt export redacts the entire excerpt if any structured delimiter or sensitive marker is present, including multiline continuations. This deliberately sacrifices fidelity for unknown key/value and payload forms. Primary UI diagnostics never use stderr.
+
+- Post-start resource-access failures retain an owned session with typed setup-failure evidence; available streams still drain. Only failures before process creation are reported as no-process failures.
+- Abnormal result timestamps clamp an end observation earlier than the accepted/admitted start to that start, so wall-clock regression or worker/host skew cannot strand a settled run before receipt claim. Cancellation deadlines continue using the original monotonic clock.
+- Fault timing capture preserves the exact monotonic provider/timestamp if UTC observation fails and explicitly marks the UTC sentinel as unavailable. If monotonic capture itself fails, the bounded observation task records that failure without breaking the pumps; no replacement clock or invented deadline is used.

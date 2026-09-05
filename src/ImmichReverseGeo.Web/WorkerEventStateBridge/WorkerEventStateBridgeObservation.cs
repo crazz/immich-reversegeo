@@ -1,4 +1,5 @@
 using System;
+using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.Web.WorkerEventStateBridge;
@@ -35,6 +36,26 @@ internal abstract class WorkerEventStateBridgeObservation
         internal string Diagnostic { get; }
     }
 
+    internal sealed class TerminalProjectionNotCommitted : WorkerEventStateBridgeObservation
+    {
+        internal TerminalProjectionNotCommitted(ProcessingRunResult candidate)
+        {
+            ArgumentNullException.ThrowIfNull(candidate);
+            Candidate = candidate;
+        }
+
+        internal ProcessingRunResult Candidate { get; }
+    }
+
+    internal sealed class ProjectionResponseIndeterminate : WorkerEventStateBridgeObservation
+    {
+        internal static ProjectionResponseIndeterminate Instance { get; } = new();
+
+        private ProjectionResponseIndeterminate()
+        {
+        }
+    }
+
     internal sealed class NonterminalDisposed : WorkerEventStateBridgeObservation
     {
         internal static NonterminalDisposed Instance { get; } = new();
@@ -63,6 +84,8 @@ internal sealed class WorkerEventStateBridgeException : Exception
         {
             WorkerEventStateBridgeObservation.EventRejected rejected => rejected.Failure.Diagnostic,
             WorkerEventStateBridgeObservation.ProjectionFailed failed => failed.Diagnostic,
+            WorkerEventStateBridgeObservation.TerminalProjectionNotCommitted => "A validated terminal was not committed to processing state.",
+            WorkerEventStateBridgeObservation.ProjectionResponseIndeterminate => "The processing-state projection response was indeterminate.",
             WorkerEventStateBridgeObservation.NonterminalDisposed => "The worker event stream ended without a terminal event.",
             _ => "Worker event state projection failed."
         };

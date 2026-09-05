@@ -518,7 +518,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         Assert.AreEqual(1, logger.Entries.Count);
         Assert.AreSame(callbackFailure, logger.Entries.Single().Exception);
         Assert.IsFalse(state.IsRunning);
-        Assert.AreEqual($"Fatal: {callbackFailure.Message}", state.LastError);
+        Assert.IsNull(state.LastError);
         Assert.AreEqual(1, events.OfType<RunFinished>().Count());
         Assert.AreEqual(0, controls.Count(item => item.StartsWith("abandon:", StringComparison.Ordinal)));
         Assert.AreEqual(1, controls.Count(item => item.StartsWith("release:", StringComparison.Ordinal)));
@@ -627,7 +627,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         CollectionAssert.AreEqual(
             ExpectedFailureLogs(boundary, firstId, failure, cleanupFailure, observed),
             fixture.Logger.Entries.ToArray());
-        Assert.AreEqual(boundary == "cleanup" ? 0 : 1,
+        Assert.AreEqual(boundary is "cleanup" or "terminal-projection" ? 0 : 1,
             fixture.ControlOperations.Count(item => item == $"abandon:{firstId}"));
 
         var recovery = fixture.Executor.Enqueue();
@@ -1496,7 +1496,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         {
             operations.Add($"event:RunFinished:{first}");
         }
-        if (boundary != "cleanup")
+        if (boundary is not "cleanup" and not "terminal-projection")
         {
             operations.Add($"abandon:{first}");
         }

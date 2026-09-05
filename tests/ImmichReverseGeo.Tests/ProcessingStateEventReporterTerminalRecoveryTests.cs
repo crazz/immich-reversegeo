@@ -1,5 +1,3 @@
-using System.Reflection;
-using System.Runtime.ExceptionServices;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Web.Services;
@@ -8,9 +6,34 @@ namespace ImmichReverseGeo.Tests;
 
 [TestClass]
 [DoNotParallelize]
+[TestCategory("Change30")]
 public sealed class ProcessingStateEventReporterTerminalRecoveryTests
 {
     private static readonly DateTimeOffset Now = new(2026, 8, 31, 1, 0, 0, TimeSpan.Zero);
+
+    [TestMethod]
+    public async Task CreateAbnormalResult_AcceptedStartAfterHostEndClampsToAcceptedStart()
+    {
+        var state = new ProcessingState();
+        var reporter = new ProcessingStateEventReporter(state);
+        var request = new ProcessingRunRequest(
+            Guid.NewGuid(),
+            ProcessingRunTrigger.Manual);
+        DateTimeOffset acceptedStart = Now.AddMinutes(1);
+        state.MarkPending();
+        Assert.IsTrue(reporter.Arm(request));
+        await reporter.OpenRunAsync(request, acceptedStart);
+
+        ProcessingRunResult result = reporter.CreateAbnormalResult(
+            request,
+            ProcessingRunOutcome.Failed,
+            Now,
+            Now,
+            "safe failure");
+
+        Assert.AreEqual(acceptedStart, result.StartedAtUtc);
+        Assert.AreEqual(acceptedStart, result.EndedAtUtc);
+    }
 
     [TestMethod]
     [DataRow(ProcessingRunOutcome.Completed, 1)]
@@ -28,7 +51,7 @@ public sealed class ProcessingStateEventReporterTerminalRecoveryTests
     [DataRow(ProcessingRunOutcome.Failed, 4)]
     [DataRow(ProcessingRunOutcome.Failed, 5)]
     [DataRow(ProcessingRunOutcome.Failed, 6)]
-    public async Task TerminalMutationCallbackFailure_RecoversEveryOrderedMutationReleasesArmAndRethrowsOriginal(
+    public async Task TerminalMutationCallbackFailure_PreservesRecordedOutcomeReleasesArmAndRethrowsOriginal(
         ProcessingRunOutcome outcome,
         int failurePosition)
     {
@@ -58,8 +81,12 @@ public sealed class ProcessingStateEventReporterTerminalRecoveryTests
         }, callback.Calls);
         Assert.IsFalse(state.IsRunning);
         Assert.IsNull(state.CurrentActivity);
-        Assert.AreEqual($"Fatal: {failure.Message}", state.LastError);
+        Assert.AreEqual(outcome == ProcessingRunOutcome.Failed ? "Fatal: domain failure" : null, state.LastError);
         Assert.IsNotNull(state.LastRunCompleted);
+        var receipt = reporter.GetFinalizationReceipt(request);
+        Assert.IsNotNull(receipt);
+        Assert.AreSame(result, receipt.Result);
+        Assert.AreEqual(ProcessingRunFinalizationOrigin.WorkerTerminal, receipt.Origin);
         var messages = Messages(state);
         Assert.AreEqual(1, messages.Count(message => message.StartsWith("Run complete. Processed=", StringComparison.Ordinal)));
         if (outcome == ProcessingRunOutcome.Cancelled)
@@ -72,6 +99,7 @@ public sealed class ProcessingStateEventReporterTerminalRecoveryTests
         }
 
         InvokeTerminal(reporter, result);
+        Assert.AreSame(receipt, reporter.GetFinalizationReceipt(request));
         Assert.AreEqual(1, Messages(state).Count(message => message.StartsWith("Run complete. Processed=", StringComparison.Ordinal)));
         var next = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Scheduled);
         Assert.IsTrue(reporter.Arm(next), "Terminal recovery must release exact reporter ownership.");
@@ -79,18 +107,14 @@ public sealed class ProcessingStateEventReporterTerminalRecoveryTests
         await secondActivity.DisposeAsync();
     }
 
-    private static void InvokeTerminal(ProcessingStateEventReporter reporter, ProcessingRunResult result)
+    private static ProcessingRunFinalizationAttempt InvokeTerminal(
+        ProcessingStateEventReporter reporter,
+        ProcessingRunResult result)
     {
-        var method = typeof(ProcessingStateEventReporter).GetMethod("ProjectTerminal", BindingFlags.Instance | BindingFlags.NonPublic)
-            ?? throw new AssertFailedException("ProjectTerminal was not found.");
-        try
-        {
-            method.Invoke(reporter, [result]);
-        }
-        catch (TargetInvocationException wrapper) when (wrapper.InnerException is not null)
-        {
-            ExceptionDispatchInfo.Capture(wrapper.InnerException).Throw();
-        }
+        return reporter.TryFinalize(
+            result.Request,
+            result,
+            ProcessingRunFinalizationOrigin.WorkerTerminal);
     }
 
     private static ProcessingRunResult Result(ProcessingRunRequest request, ProcessingRunOutcome outcome)

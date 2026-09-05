@@ -57,6 +57,12 @@ Things that affect throughput:
   </div>
 </div>
 
+## A run ended unexpectedly
+
+Read the message in Logs and check the container's available memory and application installation. A failed or cancelled run keeps location changes that were already saved. Wait until the app shows that the run has finished before starting another run manually.
+
+If a cleanup or communication warning appears after a completed result, the recorded result stays unchanged. The warning does not undo saved changes. Do not paste raw worker output, database credentials, or connection strings into a support report.
+
 ## I want to rerun everything from scratch
 
 The Data page can clear existing `city`, `state`, and `country` values in immich.

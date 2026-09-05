@@ -29,6 +29,7 @@ internal sealed record ChildWorkerLauncherOptions
     internal static ChildWorkerLauncherOptions Default { get; } = new();
     internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
     internal TimeSpan ReadyTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    internal ChildWorkerEvidenceFinalityGate? EvidenceFinalityGate { get; init; }
 
     internal void Validate()
     {
@@ -76,6 +77,11 @@ internal abstract class ChildWorkerStartupObservation
     internal sealed class Pending : ChildWorkerStartupObservation
     {
         internal static Pending Instance { get; } = new();
+    }
+
+    internal sealed class PostStartSetupFailed : ChildWorkerStartupObservation
+    {
+        internal static PostStartSetupFailed Instance { get; } = new();
     }
 
     internal sealed class ReadyAccepted : ChildWorkerStartupObservation

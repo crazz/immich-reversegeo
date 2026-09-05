@@ -229,7 +229,12 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
 
         var expectedProcessed = faultStage is "start" or "eligibility" ? 1L : faultStage == "progress-updated" ? 1L : 0L;
         var expectedSkipped = faultStage == "progress-skipped" ? 1L : 0L;
-        var expectedErrors = faultStage == "progress-failed" ? 2L : 1L;
+        var expectedErrors = faultStage switch
+        {
+            "progress-failed" => 2L,
+            "terminal" => 0L,
+            _ => 1L
+        };
         if (faultStage.StartsWith("progress-", StringComparison.Ordinal))
         {
             Assert.AreEqual(faultStage == "progress-failed" ? 0 : 1, sideEffects);
@@ -241,9 +246,23 @@ public class ProcessingBackgroundServiceRoutingCoverageTests
         Assert.AreEqual(expectedProcessed, state.ProcessedThisRun);
         Assert.AreEqual(expectedSkipped, state.SkippedThisRun);
         Assert.AreEqual(expectedErrors, state.ErrorsThisRun);
-        Assert.AreEqual($"Fatal: {faultStage} projection failed", state.LastError);
-        Assert.AreEqual(1, state.GetRecentLog().Count(line => line.EndsWith($"[ERROR] Fatal: {faultStage} projection failed", StringComparison.Ordinal)));
+        Assert.AreEqual(
+            faultStage == "terminal"
+                ? null
+                : $"Fatal: {faultStage} projection failed",
+            state.LastError);
+        Assert.AreEqual(
+            faultStage == "terminal" ? 0 : 1,
+            state.GetRecentLog().Count(line => line.EndsWith(
+                $"[ERROR] Fatal: {faultStage} projection failed",
+                StringComparison.Ordinal)));
         Assert.IsTrue(state.GetRecentLog().Last().EndsWith($"Run complete. Processed={expectedProcessed} Skipped={expectedSkipped} Errors={expectedErrors}", StringComparison.Ordinal));
+        if (faultStage == "terminal")
+        {
+            Assert.AreEqual(
+                ProcessingRunOutcome.Completed,
+                reporter.GetFinalizationReceipt(request)!.Result.Outcome);
+        }
         Assert.IsTrue(reporter.Arm(new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Scheduled)));
     }
 

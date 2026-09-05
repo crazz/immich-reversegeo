@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using ImmichReverseGeo.Core.Models;
 
 namespace ImmichReverseGeo.Web.Services;
 
@@ -206,7 +207,67 @@ public class ProcessingState
         Notify();
     }
 
+    internal void RestoreTerminalSnapshot(
+        long updatedCount,
+        long skippedCount,
+        long failedCount,
+        ProcessingRunOutcome outcome,
+        string? failureMessage,
+        string? priorLastError,
+        DateTime completedAt,
+        IReadOnlyList<string> priorLog)
+    {
+        ArgumentNullException.ThrowIfNull(priorLog);
+
+        var errors = outcome == ProcessingRunOutcome.Failed
+            ? failedCount == long.MaxValue ? long.MaxValue : failedCount + 1
+            : failedCount;
+        var fatalMessage = outcome == ProcessingRunOutcome.Failed
+            ? $"Fatal: {failureMessage}"
+            : null;
+
+        Interlocked.Exchange(ref _progress, new ProgressSnapshot(updatedCount, skippedCount, errors));
+        _isRunning = false;
+        lock (_activityLock)
+        {
+            _currentActivity = null;
+            _activityCounts.Clear();
+        }
+
+        lock (_stateLock)
+        {
+            _lastError = fatalMessage ?? priorLastError;
+            _lastRunCompleted = completedAt;
+        }
+
+        var messages = priorLog.ToList();
+        var timestamp = DateTime.UtcNow;
+        if (outcome == ProcessingRunOutcome.Cancelled)
+        {
+            messages.Add($"[{timestamp:HH:mm:ss}] Run cancelled.");
+        }
+        else if (fatalMessage is not null)
+        {
+            messages.Add($"[{timestamp:HH:mm:ss}] [ERROR] {fatalMessage}");
+        }
+
+        messages.Add($"[{timestamp:HH:mm:ss}] Run complete. Processed={updatedCount} Skipped={skippedCount} Errors={errors}");
+        lock (_recentLog)
+        {
+            _recentLog.Clear();
+            foreach (var line in messages.TakeLast(100))
+            {
+                _recentLog.Enqueue(line);
+            }
+        }
+
+        Notify();
+    }
+
     public void CompleteRun()
+        => CompleteRun(DateTime.UtcNow);
+
+    internal void CompleteRun(DateTime completedAt)
     {
         _isRunning = false;
         lock (_activityLock)
@@ -216,7 +277,7 @@ public class ProcessingState
         }
         lock (_stateLock)
         {
-            _lastRunCompleted = DateTime.UtcNow;
+            _lastRunCompleted = completedAt;
         }
         Notify();
     }

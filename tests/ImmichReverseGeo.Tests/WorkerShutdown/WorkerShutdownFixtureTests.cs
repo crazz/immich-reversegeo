@@ -111,8 +111,22 @@ public sealed class WorkerShutdownFixtureTests
             Assert.IsFalse(run.Bridge.IsTerminal);
             Assert.IsInstanceOfType<WorkerEventStateBridgeObservation.NonterminalDisposed>(
                 run.Bridge.FirstObservation);
-            Assert.IsNull(context.State.LastRunCompleted);
+            var receipt = context.Reporter.GetFinalizationReceipt(context.Request);
+            Assert.IsNotNull(receipt);
+            Assert.AreSame(context.Request, receipt.Request);
+            Assert.AreEqual(ProcessingRunFinalizationOrigin.ControlPlane, receipt.Origin);
+            Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome);
+            Assert.AreEqual(receipt.Result.StartedAtUtc, receipt.Result.EndedAtUtc);
+            Assert.IsNotNull(context.State.LastRunCompleted);
             Assert.IsNull(context.State.LastError);
+            Assert.AreEqual(0, context.State.GetRecentLog().Count(line =>
+                line.Contains("[ERROR] Fatal:", StringComparison.Ordinal)));
+            Assert.AreEqual(1, context.State.GetRecentLog().Count(line =>
+                line.EndsWith(
+                    "The worker required forced termination. Its recorded result is unchanged; changes already saved remain saved.",
+                    StringComparison.Ordinal)));
+            Assert.AreEqual(1, context.State.GetRecentLog().Count(line =>
+                line.Contains("Run complete.", StringComparison.Ordinal)));
             AssertRawFinality(run.Lease, completion);
             AssertControllerInput(run.Lease, WorkerProtocolV1.ExecuteType, WorkerProtocolV1.CancelType);
             Assert.AreEqual(0, clock.ActiveTimerCount);
@@ -264,6 +278,7 @@ public sealed class WorkerShutdownFixtureTests
             Assert.AreEqual(0, run.Lease.ProcessDisposeCalls);
             Assert.IsFalse(run.Lease.ForcedCleanup);
             Assert.IsFalse(run.Bridge.IsTerminal);
+            Assert.IsNull(context.Reporter.GetFinalizationReceipt(context.Request));
             Assert.IsNull(context.State.LastRunCompleted);
             Assert.IsNull(context.State.LastError);
         }
@@ -286,8 +301,21 @@ public sealed class WorkerShutdownFixtureTests
         Assert.IsFalse(run.Lease.IsRegistered);
         Assert.IsFalse(Directory.Exists(run.Lease.Root));
         Assert.IsNull(context.Coordinator.ActiveRequest);
-        Assert.IsNull(context.State.LastRunCompleted);
-        Assert.IsNull(context.State.LastError);
+        var receipt = context.Reporter.GetFinalizationReceipt(context.Request);
+        Assert.IsNotNull(receipt);
+        Assert.AreSame(context.Request, receipt.Request);
+        Assert.AreEqual(ProcessingRunFinalizationOrigin.ControlPlane, receipt.Origin);
+        Assert.AreEqual(ProcessingRunOutcome.Failed, receipt.Result.Outcome);
+        Assert.AreEqual(receipt.Result.StartedAtUtc, receipt.Result.EndedAtUtc);
+        Assert.AreEqual(
+            "The worker could not be forcibly stopped. Check process permissions and container health before starting another run. [killrejected/draining]",
+            receipt.Result.FailureMessage);
+        Assert.IsNotNull(context.State.LastRunCompleted);
+        Assert.AreEqual($"Fatal: {receipt.Result.FailureMessage}", context.State.LastError);
+        Assert.AreEqual(1, context.State.GetRecentLog().Count(line =>
+            line.Contains("[ERROR] Fatal:", StringComparison.Ordinal)));
+        Assert.AreEqual(1, context.State.GetRecentLog().Count(line =>
+            line.Contains("Run complete.", StringComparison.Ordinal)));
         Assert.IsInstanceOfType<WorkerEventStateBridgeObservation.NonterminalDisposed>(
             run.Bridge.FirstObservation);
     }

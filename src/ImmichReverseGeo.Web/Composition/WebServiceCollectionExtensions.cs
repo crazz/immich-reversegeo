@@ -42,6 +42,11 @@ internal static class WebServiceCollectionExtensions
         services.AddSingleton<IWorkerCommandRuntimeFactsCapture>(sp => sp.GetRequiredService<WorkerCommandRuntimeFactsCapture>());
         services.AddSingleton(sp => new WorkerCommandInvocationBuilder(sp.GetRequiredService<IWorkerCommandRuntimeFactsCapture>()));
         services.AddSingleton<IWorkerCommandInvocationBuilder>(sp => sp.GetRequiredService<WorkerCommandInvocationBuilder>());
+        services.AddSingleton(sp => new ImmichReverseGeo.Web.WorkerFailureRecovery.WorkerRunControlPlane(
+            sp.GetRequiredService<IWorkerCommandInvocationBuilder>(),
+            sp.GetRequiredService<IChildWorkerLauncher>(),
+            sp.GetRequiredService<ProcessingStateEventReporter>(),
+            sp.GetRequiredService<TimeProvider>()));
         return services;
     }
 }
