@@ -39,7 +39,7 @@ An accepted Stop MAY latch while worker startup is incomplete, but the controlle
 - **THEN** the session records the actual exit/transport facts, performs no stale follow-up write, and does not kill an already exited process
 
 ### Requirement: Grace has one deterministic internal deadline
-The cancellation operation SHALL use an injected monotonic time source and a validated finite positive grace value. Production SHALL default to 10 seconds measured from the first accepted Stop. The grace value SHALL be internally overridable for composition and tests but SHALL NOT become a persisted application setting or Settings-page option in this change. Caller wait cancellation MUST NOT cancel or reset the owned deadline.
+The cancellation operation SHALL use an injected monotonic time source and one fixed internal 10-second grace measured from the first accepted Stop. The grace value SHALL NOT be configurable through composition, tests, persisted application settings, or the Settings page. Tests SHALL advance the injected clock instead of changing the grace value. Caller wait cancellation MUST NOT cancel or reset the owned deadline.
 
 #### Scenario: Cooperative exit beats grace
 - **WHEN** the exact worker exits before the 10-second deadline

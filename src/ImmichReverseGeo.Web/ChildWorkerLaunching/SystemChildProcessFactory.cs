@@ -104,6 +104,60 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
 
         public Task<int> WaitForExitAsync() => _exit.Task;
 
+        public ChildProcessExitState GetExitState()
+        {
+            if (_exit.Task.IsCompletedSuccessfully)
+            {
+                return ChildProcessExitState.Exited;
+            }
+
+            try
+            {
+                return _process.HasExited ? ChildProcessExitState.Exited : ChildProcessExitState.Alive;
+            }
+            catch
+            {
+                return ChildProcessExitState.Unavailable;
+            }
+        }
+
+        public ChildProcessKillOutcome KillProcessTree()
+        {
+            if (GetExitState() == ChildProcessExitState.Exited)
+            {
+                return ChildProcessKillOutcome.AlreadyExited;
+            }
+
+            try
+            {
+                _process.Kill(entireProcessTree: true);
+                return ChildProcessKillOutcome.Requested;
+            }
+            catch (Exception failure)
+            {
+                // A descendant failure must remain visible even if the root exited.
+                if (failure is not AggregateException && GetExitState() == ChildProcessExitState.Exited)
+                {
+                    return ChildProcessKillOutcome.AlreadyExited;
+                }
+
+                return NormalizeKillFailure(failure);
+            }
+        }
+
+        internal static ChildProcessKillOutcome NormalizeKillFailure(Exception failure)
+        {
+            return failure switch
+            {
+                UnauthorizedAccessException or System.Security.SecurityException => ChildProcessKillOutcome.PermissionDenied,
+                System.ComponentModel.Win32Exception native when (OperatingSystem.IsWindows()
+                    ? native.NativeErrorCode == 5
+                    : native.NativeErrorCode is 1 or 13) => ChildProcessKillOutcome.PermissionDenied,
+                NotSupportedException => ChildProcessKillOutcome.Unsupported,
+                _ => ChildProcessKillOutcome.Failed
+            };
+        }
+
         public ValueTask DisposeAsync()
         {
             _process.Exited -= OnExited;

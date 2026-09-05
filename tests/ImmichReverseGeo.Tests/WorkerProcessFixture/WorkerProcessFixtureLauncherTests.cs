@@ -240,7 +240,10 @@ public sealed class WorkerProcessFixtureLauncherTests
             StringAssert.Contains(failure.ToString(), "cleanup phase 'drain'");
             Assert.IsTrue(lease.HasExited, "Exit confirmation must survive a later drain failure.");
             Assert.IsTrue(lease.IsRegistered, "Unfinished cleanup must remain available to the reaper.");
-            Assert.AreEqual(0, lease.ProcessDisposeCalls, "The adapter must remain usable until drain finality is confirmed.");
+            var completion = await lease.Session!.Settlement.WaitAsync(WorkerProcessFixtureLease.Watchdog);
+            Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(completion.StandardOutputFinality);
+            Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(completion.StandardErrorFinality);
+            Assert.AreEqual(1, lease.ProcessDisposeCalls, "The session independently releases its adapter after confirmed exit and drain finality.");
 
             await WorkerProcessFixtureLease.ReapAsync([lease]);
             Assert.IsFalse(lease.IsRegistered);

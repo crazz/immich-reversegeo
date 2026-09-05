@@ -7,7 +7,7 @@ A child worker needs a single bounded Stop path that preserves cooperative cance
 - Extend the owned block-25 child-worker session with one idempotent cancellation operation bound to its exact run and process generation.
 - Accept Dashboard Stop only for the coordinator's current active run; concurrent or repeated callers join the same operation and never emit duplicate commands, deadlines, or kills.
 - Latch Stop during startup, but write and flush exactly one canonical Phase 3 cancel frame only after that same session has successfully written and flushed execute and remains eligible for control input.
-- Use an injected `TimeProvider` and a validated internal grace option with a production default of 10 seconds. This change adds no persisted setting or Settings-page ownership.
+- Use an injected `TimeProvider` and one fixed internal 10-second grace policy. This change adds no persisted setting or Settings-page ownership.
 - Preserve cooperative terminal, raw exit, stdout/stderr finality, stdin failure, kill, and platform-failure facts for block 30 without classifying or rewriting run state.
 - On grace expiry while the exact process remains alive, request `Kill(entireProcessTree: true)`, then await the existing process-exit and stdout/stderr-drain lifecycle before releasing resources.
 - Link the worker request lease's cooperative signal into the executor token while documenting that synchronous native work which does not observe cancellation may require forced termination.
@@ -19,7 +19,7 @@ A child worker needs a single bounded Stop path that preserves cooperative cance
 - `child-worker-cancellation`: Provides exact-session cooperative Stop, deterministic grace escalation, raw cancellation evidence, and single-owner cleanup for active child workers.
 
 ### Modified Capabilities
-- None.
+- `child-worker-launching`: Replace the temporary non-escalating disposal rule with disposal joining the exact session's cancellation and settlement lifecycle.
 
 ## Impact
 
@@ -28,4 +28,3 @@ Planning affects the Phase 2 coordinator's active-handle/Stop surface, the block
 ## Audit Reconciliation
 
 The one bounded escalation decision uses exactly one internal, exact-session 10-second deadline measured through `TimeProvider`; it is not configurable and creates no current or future public setting. After that deadline, raw process exit suppresses one tree-kill attempt; a live owned process receives at most one attempt. A terminal frame alone never settles process ownership.
-

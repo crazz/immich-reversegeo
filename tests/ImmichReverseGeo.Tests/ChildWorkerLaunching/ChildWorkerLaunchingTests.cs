@@ -834,6 +834,7 @@ public sealed partial class ChildWorkerLaunchingTests
 
         process.StandardOutput.Write(ProtocolBytes(ReadyFrame()));
         await sink.FirstAccepted;
+        Assert.IsInstanceOfType<ChildWorkerStartupObservation.ReadyAccepted>(await session.Startup);
         process.StandardOutput.Write(ProtocolBytes(RunStartedFrame(request.RunId) + "{\n"));
         process.StandardError.Write(Encoding.UTF8.GetBytes("stderr-after-prefix"));
         process.StandardOutput.Complete();
@@ -1138,6 +1139,12 @@ public sealed partial class ChildWorkerLaunchingTests
             _exitInvocationReturned.TrySetResult();
             return _exit.Task;
         }
+
+        public ChildProcessExitState GetExitState()
+            => _exit.Task.IsCompletedSuccessfully ? ChildProcessExitState.Exited : ChildProcessExitState.Alive;
+
+        public ChildProcessKillOutcome KillProcessTree()
+            => GetExitState() == ChildProcessExitState.Exited ? ChildProcessKillOutcome.AlreadyExited : ChildProcessKillOutcome.Failed;
 
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 
@@ -1454,6 +1461,9 @@ public sealed partial class ChildWorkerLaunchingTests
             return Task.FromResult(0);
         }
 
+        public ChildProcessExitState GetExitState() => ChildProcessExitState.Exited;
+        public ChildProcessKillOutcome KillProcessTree() => ChildProcessKillOutcome.AlreadyExited;
+
         public ValueTask DisposeAsync()
         {
             DisposeCalls++;
@@ -1520,6 +1530,12 @@ public sealed partial class ChildWorkerLaunchingTests
             _waitStarted.TrySetResult();
             return _exit.Task;
         }
+
+        public ChildProcessExitState GetExitState()
+            => _exit.Task.IsCompletedSuccessfully ? ChildProcessExitState.Exited : ChildProcessExitState.Alive;
+
+        public ChildProcessKillOutcome KillProcessTree()
+            => GetExitState() == ChildProcessExitState.Exited ? ChildProcessKillOutcome.AlreadyExited : ChildProcessKillOutcome.Failed;
 
         public ValueTask DisposeAsync()
         {
@@ -1652,6 +1668,9 @@ public sealed partial class ChildWorkerLaunchingTests
     {
         private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
+        private int _physicalExitConfirmed;
+        internal void ConfirmPhysicalExitWithoutCode() => Volatile.Write(ref _physicalExitConfirmed, 1);
+
         internal ByteProcess(int processId)
         {
             ProcessId = processId;
@@ -1676,6 +1695,19 @@ public sealed partial class ChildWorkerLaunchingTests
             WaitStarted.TrySetResult();
             return _exit.Task;
         }
+
+        public ChildProcessExitState GetExitState()
+        {
+            if (Volatile.Read(ref _physicalExitConfirmed) != 0 || _exit.Task.IsCompletedSuccessfully)
+            {
+                return ChildProcessExitState.Exited;
+            }
+
+            return _exit.Task.IsFaulted ? ChildProcessExitState.Unavailable : ChildProcessExitState.Alive;
+        }
+
+        public ChildProcessKillOutcome KillProcessTree()
+            => GetExitState() == ChildProcessExitState.Exited ? ChildProcessKillOutcome.AlreadyExited : ChildProcessKillOutcome.Failed;
 
         public ValueTask DisposeAsync()
         {

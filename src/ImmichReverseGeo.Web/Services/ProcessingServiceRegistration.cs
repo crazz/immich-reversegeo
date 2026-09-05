@@ -30,7 +30,8 @@ internal static class ProcessingServiceRegistration
                 ?? Microsoft.Extensions.Logging.Abstractions.NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid,
             sp.GetService<IProcessingRunCoordinatorObserver>(),
-            sp.GetService<IHostApplicationLifetime>()));
+            sp.GetService<IHostApplicationLifetime>(),
+            sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<IManualProcessingRunCoordinator>(sp => sp.GetRequiredService<ProcessingRunCoordinator>());
         services.AddSingleton<IScheduledRunTrigger>(sp => sp.GetRequiredService<ProcessingRunCoordinator>());
         services.AddHostedService(sp => sp.GetRequiredService<ProcessingRunCoordinator>());

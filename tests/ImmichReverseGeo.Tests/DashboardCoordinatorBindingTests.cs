@@ -75,22 +75,35 @@ public sealed class DashboardCoordinatorBindingTests
     }
 
     [TestMethod]
-    public async Task CancelBinding_RoutesScheduledCancellationThroughInjectedNarrowCoordinatorWithoutRunOnceSurface()
+    public async Task StopBinding_ReturnsPromptlyShowsStoppingAndUsesTheSharedCoordinatorOperation()
     {
-        var coordinator = new RecordingManualCoordinator { CancelResult = true };
+        var stop = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var coordinator = new RecordingManualCoordinator { StopResult = stop.Task };
         var component = CreateComponent(coordinator, out var readiness);
         await using var renderer = new DashboardRenderer(component);
         await renderer.AttachAsync(component);
 
-        await renderer.InvokeRenderedClickAsync(1);
-        Assert.IsTrue(coordinator.CancelResult);
+        var click = renderer.InvokeRenderedClickAsync(1);
+        await click.WaitAsync(TestTimeout);
 
-        Assert.AreEqual(1, coordinator.CancelCount);
+        Assert.AreEqual(1, coordinator.StopCount);
+        Assert.AreEqual(0, coordinator.CancelCount);
+        Assert.AreSame(stop.Task, GetStopOperation(component));
+        StringAssert.Contains(await renderer.ReadTextAsync(), "Stopping…");
+        Assert.IsFalse(stop.Task.IsCompleted, "The UI event must return after joining rather than awaiting settlement.");
+
+        stop.TrySetResult();
+        await stop.Task.WaitAsync(TestTimeout);
         Assert.IsFalse(typeof(ImmichReverseGeo.Web.Components.Pages.Dashboard)
             .GetMethods(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
             .Any(method => method.Name.Contains("RunOnce", StringComparison.Ordinal)));
         CollectionAssert.AreEqual(
-            new[] { nameof(IManualProcessingRunCoordinator.CancelActiveRun), nameof(IManualProcessingRunCoordinator.TriggerManualAsync) },
+            new[]
+            {
+                nameof(IManualProcessingRunCoordinator.CancelActiveRun),
+                nameof(IManualProcessingRunCoordinator.StopActiveRun),
+                nameof(IManualProcessingRunCoordinator.TriggerManualAsync)
+            },
             typeof(IManualProcessingRunCoordinator).GetMethods().Select(method => method.Name).Order().ToArray());
     }
 
@@ -122,6 +135,13 @@ public sealed class DashboardCoordinatorBindingTests
         return (bool)(typeof(ImmichReverseGeo.Web.Components.Pages.Dashboard)
             .GetField("_runPending", BindingFlags.Instance | BindingFlags.NonPublic)!
             .GetValue(component) ?? false);
+    }
+
+    private static Task? GetStopOperation(ImmichReverseGeo.Web.Components.Pages.Dashboard component)
+    {
+        return (Task?)typeof(ImmichReverseGeo.Web.Components.Pages.Dashboard)
+            .GetField("_stopOperation", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(component);
     }
 
     private static object? GetInjected(object component, string name)
@@ -183,6 +203,20 @@ public sealed class DashboardCoordinatorBindingTests
             });
         }
 
+        public Task<string> ReadTextAsync()
+        {
+            return Dispatcher.InvokeAsync(() =>
+            {
+                var frames = GetCurrentRenderTreeFrames(_componentId);
+                return string.Concat(frames.Array
+                    .Take(frames.Count)
+                    .Where(frame => frame.FrameType is RenderTreeFrameType.Text or RenderTreeFrameType.Markup)
+                    .Select(frame => frame.FrameType == RenderTreeFrameType.Text
+                        ? frame.TextContent
+                        : frame.MarkupContent));
+            });
+        }
+
         protected override void HandleException(Exception exception)
         {
             throw exception;
@@ -208,8 +242,10 @@ public sealed class DashboardCoordinatorBindingTests
         private readonly Queue<ManualCall> _queued = new();
         public List<ManualCall> Calls { get; } = [];
         public int TriggerCount { get; private set; }
+        public int StopCount { get; private set; }
         public int CancelCount { get; private set; }
         public bool CancelResult { get; set; }
+        public Task? StopResult { get; set; }
 
         public ManualCall Enqueue()
         {
@@ -233,6 +269,12 @@ public sealed class DashboardCoordinatorBindingTests
         {
             CancelCount++;
             return CancelResult;
+        }
+
+        public Task? StopActiveRun()
+        {
+            StopCount++;
+            return StopResult;
         }
     }
 

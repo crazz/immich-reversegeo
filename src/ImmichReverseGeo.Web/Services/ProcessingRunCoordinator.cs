@@ -3,6 +3,8 @@ using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using WorkerStateBridge = ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridge;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -18,6 +20,7 @@ public enum ProcessingRunAdmissionResult
 public interface IManualProcessingRunCoordinator
 {
     Task<ProcessingRunAdmissionResult> TriggerManualAsync();
+    Task? StopActiveRun();
     bool CancelActiveRun();
 }
 
@@ -61,6 +64,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private readonly Func<Guid> _createRunId;
     private readonly IProcessingRunCancellationFactory _cancellationFactory;
     private readonly IProcessingRunCoordinatorObserver? _observer;
+    private readonly TimeProvider _timeProvider;
     private readonly CancellationTokenRegistration _applicationStoppingRegistration;
     private ActiveRun? _active;
     private bool _admissionOpen = true;
@@ -70,7 +74,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ProcessingStateEventReporter reporter,
         IProcessingRunExecutor executor,
         ILogger<ProcessingRunCoordinator> logger,
-        IHostApplicationLifetime? applicationLifetime = null)
+        IHostApplicationLifetime? applicationLifetime = null,
+        TimeProvider? timeProvider = null)
         : this(
             state,
             reporter,
@@ -79,7 +84,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             Guid.NewGuid,
             new ProcessingRunCancellationFactory(),
             null,
-            applicationLifetime)
+            applicationLifetime,
+            timeProvider)
     {
     }
 
@@ -89,7 +95,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         IProcessingRunExecutor executor,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
-        IHostApplicationLifetime? applicationLifetime = null)
+        IHostApplicationLifetime? applicationLifetime = null,
+        TimeProvider? timeProvider = null)
         : this(
             state,
             reporter,
@@ -98,7 +105,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             createRunId,
             new ProcessingRunCancellationFactory(),
             null,
-            applicationLifetime)
+            applicationLifetime,
+            timeProvider)
     {
     }
 
@@ -109,7 +117,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IProcessingRunCoordinatorObserver? observer,
-        IHostApplicationLifetime? applicationLifetime = null)
+        IHostApplicationLifetime? applicationLifetime = null,
+        TimeProvider? timeProvider = null)
         : this(
             state,
             reporter,
@@ -118,7 +127,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             createRunId,
             new ProcessingRunCancellationFactory(),
             observer,
-            applicationLifetime)
+            applicationLifetime,
+            timeProvider)
     {
     }
 
@@ -130,7 +140,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         Func<Guid> createRunId,
         IProcessingRunCancellationFactory cancellationFactory,
         IProcessingRunCoordinatorObserver? observer,
-        IHostApplicationLifetime? applicationLifetime = null)
+        IHostApplicationLifetime? applicationLifetime = null,
+        TimeProvider? timeProvider = null)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(reporter);
@@ -146,6 +157,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         _createRunId = createRunId;
         _cancellationFactory = cancellationFactory;
         _observer = observer;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _applicationStoppingRegistration = applicationLifetime?.ApplicationStopping.Register(CloseAdmissionAndCancel)
             ?? default;
     }
@@ -195,21 +207,100 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         return ScheduledTriggerResult.AcceptedAfterTerminal;
     }
 
+    public Task? StopActiveRun()
+    {
+        return StopActiveRunCore();
+    }
+
     public bool CancelActiveRun()
     {
         ActiveRun? handle;
+        ActiveRun.StopClaim claim;
         lock (_admissionGate)
         {
             handle = _active;
+            if (handle is null)
+            {
+                return false;
+            }
+
+            claim = handle.ClaimStop(_timeProvider, trackCancellationDispatch: false);
         }
 
-        if (handle is null)
+        if (claim.IsFirst)
         {
-            return false;
+            handle.StartAttachedStop();
         }
 
         RequestCancellation(handle);
         return true;
+    }
+
+    internal bool TryAttachChildSession(
+        ProcessingRunRequest request,
+        ChildWorkerSession session,
+        WorkerStateBridge? bridge = null)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(session);
+
+        ActiveRun handle;
+        var startStop = false;
+        lock (_admissionGate)
+        {
+            if (_active is null
+                || !ReferenceEquals(_active.Request, request)
+                || session.RunId != request.RunId
+                || !ReferenceEquals(session.Request, request)
+                || !ReferenceEquals(session.Clock, _timeProvider)
+                || (bridge is not null && !ReferenceEquals(bridge.Request, request)))
+            {
+                return false;
+            }
+
+            handle = _active;
+            if (!handle.TryAttachChildSession(session, bridge, out startStop))
+            {
+                return false;
+            }
+        }
+
+        if (startStop)
+        {
+            handle.StartAttachedStop();
+        }
+
+        return true;
+    }
+
+    private Task? StopActiveRunCore()
+    {
+        ActiveRun? handle;
+        ActiveRun.StopClaim claim;
+        lock (_admissionGate)
+        {
+            handle = _active;
+            if (handle is null)
+            {
+                return null;
+            }
+
+            claim = handle.ClaimStop(_timeProvider, trackCancellationDispatch: true);
+        }
+
+        if (claim.IsFirst)
+        {
+            try
+            {
+                DispatchCancellation(handle, claim.CancellationDispatch!);
+            }
+            finally
+            {
+                handle.StartAttachedStop();
+            }
+        }
+
+        return claim.Settlement;
     }
 
     public Task StartAsync(CancellationToken cancellationToken)
@@ -399,6 +490,27 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private async Task CompleteCleanupAsync(ActiveRun handle, ExceptionDispatchInfo? primaryFailure)
     {
         ExceptionDispatchInfo? cleanupFailure = null;
+        handle.CloseControlPlaneForCleanup();
+        try
+        {
+            await handle.WaitForCancellationDispatchAsync().ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            cleanupFailure = ExceptionDispatchInfo.Capture(failure);
+            ObserveCleanupFailure(handle, failure);
+        }
+
+        try
+        {
+            await handle.SettleAttachedChildAsync().ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            cleanupFailure ??= ExceptionDispatchInfo.Capture(failure);
+            ObserveCleanupFailure(handle, failure);
+        }
+
         try
         {
             if (_observer is not null)
@@ -490,6 +602,38 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
     }
 
+    private void DispatchCancellation(ActiveRun handle, TaskCompletionSource completion)
+    {
+        try
+        {
+            _ = Task.Run(() => CompleteCancellationDispatch(handle, completion, propagateFailure: false));
+        }
+        catch (Exception failure)
+        {
+            completion.TrySetException(failure);
+        }
+    }
+
+    private void CompleteCancellationDispatch(
+        ActiveRun handle,
+        TaskCompletionSource completion,
+        bool propagateFailure)
+    {
+        try
+        {
+            RequestCancellation(handle);
+            completion.TrySetResult();
+        }
+        catch (Exception failure)
+        {
+            completion.TrySetException(failure);
+            if (propagateFailure)
+            {
+                ExceptionDispatchInfo.Capture(failure).Throw();
+            }
+        }
+    }
+
     private ActiveRun? CloseAdmissionAndCapture()
     {
         lock (_admissionGate)
@@ -523,6 +667,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         private int _cancellationFailureObserved;
         private Task? _ownedExecution;
         private readonly object _cancellationGate = new();
+        private readonly object _childGate = new();
         private readonly TaskCompletionSource _disposalCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private bool _cancellationRequested;
         private bool _cancellationInProgress;
@@ -530,7 +675,13 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         private bool _disposalRequested;
         private bool _disposalAttempted;
         private bool _disposalCompletedState;
+        private bool _stopClaimsClosed;
+        private bool _childAttachmentClosed;
         private ExceptionDispatchInfo? _cancellationFailure;
+        private ChildAttachment? _child;
+        private ChildWorkerStopRequest? _stopRequest;
+        private Lazy<Task<ChildWorkerCancellationResult>>? _childStop;
+        private Task? _cancellationDispatch;
 
         public ActiveRun(ProcessingRunRequest request, IProcessingRunCancellation cancellation)
         {
@@ -556,6 +707,130 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         public bool TryBeginCleanup()
         {
             return Interlocked.Exchange(ref _cleanupStarted, 1) == 0;
+        }
+
+        public StopClaim ClaimStop(
+            TimeProvider timeProvider,
+            bool trackCancellationDispatch)
+        {
+            lock (_childGate)
+            {
+                if (_stopRequest is not null)
+                {
+                    return new StopClaim(false, CleanupCompleted.Task, null);
+                }
+
+                if (_stopClaimsClosed)
+                {
+                    return new StopClaim(false, CleanupCompleted.Task, null);
+                }
+
+                _stopRequest = ChildWorkerStopRequest.Capture(timeProvider);
+                TaskCompletionSource? cancellationDispatch = null;
+                if (trackCancellationDispatch)
+                {
+                    cancellationDispatch = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                    _cancellationDispatch = cancellationDispatch.Task;
+                }
+                EnsureChildStopUnderGate();
+                return new StopClaim(true, CleanupCompleted.Task, cancellationDispatch);
+            }
+        }
+
+        public void CloseControlPlaneForCleanup()
+        {
+            lock (_childGate)
+            {
+                _stopClaimsClosed = true;
+                _childAttachmentClosed = true;
+            }
+        }
+
+        public bool TryAttachChildSession(
+            ChildWorkerSession session,
+            WorkerStateBridge? bridge,
+            out bool startStop)
+        {
+            lock (_childGate)
+            {
+                if (_childAttachmentClosed || _child is not null)
+                {
+                    startStop = false;
+                    return false;
+                }
+
+                _child = new ChildAttachment(session, bridge);
+                EnsureChildStopUnderGate();
+                startStop = _childStop is not null;
+                return true;
+            }
+        }
+
+        public void StartAttachedStop()
+        {
+            Lazy<Task<ChildWorkerCancellationResult>>? childStop;
+            lock (_childGate)
+            {
+                childStop = _childStop;
+            }
+
+            if (childStop is not null)
+            {
+                _ = childStop.Value;
+            }
+        }
+
+        public Task WaitForCancellationDispatchAsync()
+        {
+            lock (_childGate)
+            {
+                return _cancellationDispatch ?? Task.CompletedTask;
+            }
+        }
+
+        public async Task SettleAttachedChildAsync()
+        {
+            ChildAttachment? child;
+            Lazy<Task<ChildWorkerCancellationResult>>? childStop;
+            lock (_childGate)
+            {
+                child = _child;
+                childStop = _childStop;
+            }
+
+            if (child is null)
+            {
+                return;
+            }
+
+            ExceptionDispatchInfo? firstFailure = null;
+
+            async Task AttemptAsync(Func<Task> operation)
+            {
+                try
+                {
+                    await operation().ConfigureAwait(false);
+                }
+                catch (Exception failure)
+                {
+                    firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+                }
+            }
+
+            if (childStop is not null)
+            {
+                await AttemptAsync(async () => await childStop.Value.ConfigureAwait(false)).ConfigureAwait(false);
+            }
+
+            await AttemptAsync(async () => await child.Session.Settlement.ConfigureAwait(false)).ConfigureAwait(false);
+            await AttemptAsync(async () => await child.Session.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+
+            if (child.Bridge is not null)
+            {
+                await AttemptAsync(async () => await child.Bridge.DisposeAsync().ConfigureAwait(false)).ConfigureAwait(false);
+            }
+
+            firstFailure?.Throw();
         }
 
         public ExceptionDispatchInfo? RequestCancellation()
@@ -632,6 +907,30 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             return _disposalCompleted.Task;
         }
 
+        private void EnsureChildStopUnderGate()
+        {
+            if (_childStop is not null || _child is null || _stopRequest is null)
+            {
+                return;
+            }
+
+            var child = _child;
+            var stopRequest = _stopRequest;
+            _childStop = new Lazy<Task<ChildWorkerCancellationResult>>(
+                () =>
+                {
+                    try
+                    {
+                        return child.Session.RequestStop(stopRequest);
+                    }
+                    catch (Exception failure)
+                    {
+                        return Task.FromException<ChildWorkerCancellationResult>(failure);
+                    }
+                },
+                LazyThreadSafetyMode.ExecutionAndPublication);
+        }
+
         private void PerformDisposal()
         {
             ExceptionDispatchInfo? failure = null;
@@ -657,5 +956,14 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 _disposalCompleted.TrySetException(failure.SourceException);
             }
         }
+
+        public readonly record struct StopClaim(
+            bool IsFirst,
+            Task Settlement,
+            TaskCompletionSource? CancellationDispatch);
+
+        private sealed record ChildAttachment(
+            ChildWorkerSession Session,
+            WorkerStateBridge? Bridge);
     }
 }

@@ -37,11 +37,11 @@ Alternative: write cancel immediately after process start. Rejected because bloc
 
 ### 3. Use a 10-second internal default driven by TimeProvider
 
-A validated cancellation policy value defaults to 10 seconds in production and is supplied beside launcher/session lifecycle options. It must be finite and greater than zero. Tests override it directly and advance an injected `TimeProvider`; production behavior does not use `Task.Delay`, wall-clock subtraction, polling, or sleeps.
+The immutable internal cancellation policy fixes grace at 10 seconds. Tests advance the injected `TimeProvider`; there is no grace-value override, persisted setting, or public configuration. Production deadlines use the monotonic time source and a single timer, not wall-clock subtraction, polling, or sleeps.
 
 The deadline is measured from the first accepted Stop, not from cancel flush. This bounds pre-ready, command-write-failed, and unresponsive sessions under one policy. A successful process exit before the deadline wins and suppresses escalation. A terminal frame alone does not suppress escalation because the process can still remain alive and hold redirected streams.
 
-This is internal configurability, not a persisted `AppConfig` or Settings-page option. A later explicitly owned configuration/mode change may expose or relocate it without changing this cancellation contract.
+Changing the fixed internal grace requires a later explicit contract change. No current or future public setting is introduced by this change.
 
 Alternative: reuse the 30-second readiness timeout. Rejected because readiness and cancellation have different operational purposes. Alternative: leave the value open. Rejected because block 29 needs a concrete reusable policy and deterministic tests need one production default.
 
@@ -90,3 +90,12 @@ Stop, completion, and `DisposeAsync` converge on one lifecycle. After exit plus 
 
 The one bounded escalation decision uses exactly one internal, exact-session 10-second deadline measured through `TimeProvider`; it is not configurable and creates no current or future public setting. After that deadline, raw process exit suppresses one tree-kill attempt; a live owned process receives at most one attempt. A terminal frame alone never settles process ownership.
 
+
+## Applied prerequisite reconciliation
+
+- The existing block-22 lease token is already linked with host stopping and passed to the exact executor; preserve that implementation and verify it instead of adding another source.
+- One `ChildWorkerSession` owns execute/cancel serialization, its monotonic deadline, the exact process adapter, exit observation, and both stream drains. Stop and disposal join its existing completion lifecycle; no PID reacquisition or additional process identity is introduced.
+- The coordinator keeps its in-process executor routing. A narrow exact-request attachment seam allows the current admitted handle to own a child session and optional projection bridge without introducing the later backend switch. A latched first Stop captures the shared clock and timestamp before attachment; the session uses only the remaining portion of that same 10-second deadline.
+- The final audit fixes grace at 10 seconds. Earlier configurable-option and test-override wording was stale and is reconciled here without adding public settings.
+- `Kill(entireProcessTree: true)` is an asynchronous request. Root-process exit and complete stdout/stderr finality are still required; a descendant-termination aggregate failure remains a raw failure even if the root exited. The adapter does not claim that root exit proves every descendant exited.
+- API verification used Microsoft .NET 10 documentation after Context7 returned no relevant Process.Kill results: https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.kill?view=net-10.0 and https://learn.microsoft.com/en-us/dotnet/api/system.diagnostics.process.hasexited?view=net-10.0

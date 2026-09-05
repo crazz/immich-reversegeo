@@ -291,9 +291,15 @@ public sealed class ProcessingRunCoordinatorChange13Tests
     {
         var methods = typeof(IManualProcessingRunCoordinator).GetMethods();
         CollectionAssert.AreEquivalent(
-            new[] { nameof(IManualProcessingRunCoordinator.TriggerManualAsync), nameof(IManualProcessingRunCoordinator.CancelActiveRun) },
+            new[]
+            {
+                nameof(IManualProcessingRunCoordinator.TriggerManualAsync),
+                nameof(IManualProcessingRunCoordinator.StopActiveRun),
+                nameof(IManualProcessingRunCoordinator.CancelActiveRun)
+            },
             methods.Select(method => method.Name).ToArray());
         Assert.AreEqual(typeof(Task<ProcessingRunAdmissionResult>), methods.Single(method => method.Name == nameof(IManualProcessingRunCoordinator.TriggerManualAsync)).ReturnType);
+        Assert.AreEqual(typeof(Task), methods.Single(method => method.Name == nameof(IManualProcessingRunCoordinator.StopActiveRun)).ReturnType);
         Assert.AreEqual(typeof(bool), methods.Single(method => method.Name == nameof(IManualProcessingRunCoordinator.CancelActiveRun)).ReturnType);
         Assert.IsFalse(methods.Any(method => method.Name.Contains("RunOnce", StringComparison.Ordinal)));
         CollectionAssert.AreEqual(

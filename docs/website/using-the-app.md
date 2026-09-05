@@ -16,7 +16,9 @@ Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 - it works even if automatic scheduling is turned off
 - it uses your current Settings values for batch size, delay, parallelism, and airport matching
 - the Dashboard shows live progress, recent activity, and the last completed run
-- `Cancel` stops the current run
+- `Stop` requests cancellation of the current run; `Stopping…` remains visible while it finishes and releases resources
+
+Wait for the run to finish before starting another pass. Work that does not observe cancellation, such as a synchronous native operation, can take longer to stop. Stopping does not undo location updates already written.
 
 ## Lookup
 

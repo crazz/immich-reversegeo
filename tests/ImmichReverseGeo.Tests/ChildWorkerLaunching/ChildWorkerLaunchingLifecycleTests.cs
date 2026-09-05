@@ -71,6 +71,7 @@ public sealed partial class ChildWorkerLaunchingTests
         if (label == "exit-observer-failure")
         {
             process.FailExit();
+            process.ConfirmPhysicalExitWithoutCode();
         }
         else
         {
@@ -304,6 +305,7 @@ public sealed partial class ChildWorkerLaunchingTests
         else
         {
             process.FailExit();
+            process.ConfirmPhysicalExitWithoutCode();
             var startup = await session.Startup;
             Assert.IsInstanceOfType<ChildWorkerStartupObservation.PreReadyExitObservationFailed>(startup, $"{label}: exact-startup");
             Assert.IsNotInstanceOfType<ChildWorkerStartupObservation.PreReadyExit>(startup, $"{label}: no-contradictory-exit-observation");
@@ -368,7 +370,7 @@ public sealed partial class ChildWorkerLaunchingTests
         }
 
         await time.FirstDisposed;
-        Assert.AreEqual(1, time.CreateCalls, $"{label}: one-timer-created");
+        Assert.AreEqual(label == "disposal" ? 2 : 1, time.CreateCalls, $"{label}: one-ready-timer-plus-stop-timer-only-for-live-disposal");
         Assert.AreEqual(1, time.DisposeCalls, $"{label}: one-timer-disposed");
 
         process.StandardOutput.Complete();
@@ -383,7 +385,7 @@ public sealed partial class ChildWorkerLaunchingTests
             await disposal;
         }
 
-        Assert.AreEqual(1, time.DisposeCalls, $"{label}: no-timer-leak-or-double-disposal");
+        Assert.AreEqual(label == "disposal" ? 2 : 1, time.DisposeCalls, $"{label}: each-owned-timer-disposed-exactly-once");
     }
 
     [TestMethod]
@@ -422,6 +424,7 @@ public sealed partial class ChildWorkerLaunchingTests
         var (process, sink, session) = await LaunchByteSessionAsync(951);
 
         process.FailExit();
+        process.ConfirmPhysicalExitWithoutCode();
         process.StandardOutput.Write(Encoding.UTF8.GetBytes(ReadyFrame()));
         process.StandardError.Write(DrainSentinel.ToArray());
         process.StandardOutput.Complete();
@@ -487,7 +490,7 @@ public sealed partial class ChildWorkerLaunchingTests
         await process.StandardOutput.ReadStarted.Task;
         var disposal = session.DisposeAsync().AsTask();
 
-        Assert.AreEqual(1, process.StandardInput.DisposeCalls, "suppression-first: disposal-commit-barrier");
+        Assert.AreEqual(0, process.StandardInput.DisposeCalls, "suppression-first: stdin-remains-open-until-exit-and-drains");
         Assert.AreEqual(0, sink.AcceptCalls, "suppression-first: zero-callbacks-before-release");
         Assert.IsFalse(disposal.IsCompleted, "suppression-first: disposal-awaits-existing-stdout-lifecycle");
 
@@ -501,6 +504,7 @@ public sealed partial class ChildWorkerLaunchingTests
         Assert.AreEqual(0, process.StandardInput.WriteCalls, "suppression-first: no-execute-write");
         Assert.AreEqual(0, process.StandardInput.FlushCalls, "suppression-first: no-execute-flush");
         Assert.IsInstanceOfType<ChildWorkerStartupObservation.Disposed>(await session.Startup, "suppression-first: startup-disposed");
+        AssertDisposedExactlyOnce(process, "suppression-first");
     }
 
     [TestMethod]
@@ -518,12 +522,12 @@ public sealed partial class ChildWorkerLaunchingTests
         var secondDisposal = session.DisposeAsync().AsTask();
 
         Assert.AreSame(firstDisposal, secondDisposal, "in-flight-disposal: shared-task");
-        Assert.AreEqual(1, process.StandardInput.DisposeCalls, "in-flight-disposal: stdin-closed-once");
+        Assert.AreEqual(0, process.StandardInput.DisposeCalls, "in-flight-disposal: stdin-remains-owned-until-finality");
         Assert.IsFalse(firstDisposal.IsCompleted, "in-flight-disposal: waits-for-in-flight-callback-and-finality");
         Assert.AreEqual(1, sink.AcceptCalls, "in-flight-disposal: only-entered-callback-started");
         Assert.AreEqual(0, process.StandardInput.WriteCalls, "in-flight-disposal: no-execute-write");
         Assert.AreEqual(0, process.StandardInput.FlushCalls, "in-flight-disposal: no-execute-flush");
-        Assert.AreEqual(0, time.CreateCalls, "in-flight-disposal: no-timer-for-infinite-deadline");
+        Assert.AreEqual(1, time.CreateCalls, "in-flight-disposal: one-stop-deadline-is-independent-of-infinite-readiness");
 
         sink.ReleaseBlockedCall();
         process.StandardOutput.Complete();

@@ -37,6 +37,12 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     private bool _rootDeleted;
     private bool _resourcesReleased;
 
+    private int _treeKillCalls;
+    private readonly TaskCompletionSource<ChildProcessKillOutcome> _treeKillObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    internal int TreeKillCalls => Volatile.Read(ref _treeKillCalls);
+    internal Task<ChildProcessKillOutcome> TreeKillObserved => _treeKillObserved.Task;
+    internal ChildWorkerLauncherOptions LauncherOptions { get; init; } = ChildWorkerLauncherOptions.Default;
+
     internal WorkerProcessFixtureLease(FixtureCleanupPhase? injectedFailure = null)
     {
         _injectedFailure = injectedFailure;
@@ -85,7 +91,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         var descriptor = Descriptor(Arguments(scenario, capture, options));
         var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
         var result = await launcher.LaunchDescriptorAsync(descriptor, Request, Sink,
-            ChildWorkerLauncherOptions.Default, CancellationToken.None).AsTask().WaitAsync(Watchdog);
+            LauncherOptions, CancellationToken.None).AsTask().WaitAsync(Watchdog);
         Session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result).Session;
         Assert.AreEqual(ProcessId, Session.ProcessId);
         return Session;
@@ -237,7 +243,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
 
     private async Task FinalizeDrainsAsync(List<Exception> failures)
     {
-        if (!_exitObserved || _drainsFinalized || _adapterDisposeAttempted)
+        if (!_exitObserved || _drainsFinalized)
         {
             return;
         }
@@ -485,6 +491,15 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         public Stream StandardOutput => _inner.StandardOutput;
         public Stream StandardError => _inner.StandardError;
         public Task<int> WaitForExitAsync() => ExitTask;
+        public ChildProcessExitState GetExitState() => _inner.GetExitState();
+        public ChildProcessKillOutcome KillProcessTree()
+        {
+            Interlocked.Increment(ref _owner._treeKillCalls);
+            var outcome = _inner.KillProcessTree();
+            _owner._treeKillObserved.TrySetResult(outcome);
+            return outcome;
+        }
+
         public ValueTask DisposeAsync()
         {
             lock (_disposeGate)

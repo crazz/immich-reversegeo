@@ -70,8 +70,10 @@ else if (_dbError is not null)
     <button @onclick="RunNow" disabled="@(!_circuitReady || _loadingStats || State.IsRunning || _runPending || _dbError is not null)" class="btn btn-primary">
         @(!_circuitReady ? "Starting UI…" : _loadingStats ? "Checking DB…" : State.IsRunning ? "Running…" : _runPending ? "Starting…" : "Run Now")
     </button>
-    <button @onclick="() => CancelRun()" class="btn btn-secondary"
-            style="visibility:@(State.IsRunning ? "visible" : "hidden")">Cancel</button>
+    <button @onclick="StopRun" disabled="@IsStopping" class="btn btn-secondary"
+            style="visibility:@(State.IsRunning || IsStopping ? "visible" : "hidden")">
+        @(IsStopping ? "Stopping…" : "Stop")
+    </button>
     <button @onclick="RefreshStats" disabled="@(!_circuitReady || _loadingStats)" class="btn btn-secondary">
         @(_loadingStats ? "Refreshing…" : "Refresh Stats")
     </button>
@@ -106,9 +108,11 @@ else if (_dbError is not null)
 
     private string? _dbError;
     private bool _runPending;
+    private Task? _stopOperation;
     internal Func<Task>? RunReadinessAsync { get; set; }
     private bool _circuitReady;
     private bool _loadingStats;
+    private bool IsStopping => _stopOperation is { IsCompleted: false };
 
     protected override Task OnInitializedAsync()
     {
@@ -187,6 +191,45 @@ else if (_dbError is not null)
     internal Task<ProcessingRunAdmissionResult> TriggerManualAsync()
     {
         return RunCoordinator.TriggerManualAsync();
+    }
+
+    private Task StopRun()
+    {
+        var operation = RunCoordinator.StopActiveRun();
+        if (operation is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        if (!ReferenceEquals(_stopOperation, operation))
+        {
+            _stopOperation = operation;
+            StateHasChanged();
+            _ = ObserveStopAsync(operation);
+        }
+
+        return Task.CompletedTask;
+    }
+
+    private async Task ObserveStopAsync(Task operation)
+    {
+        try
+        {
+            await operation.ConfigureAwait(false);
+        }
+        catch
+        {
+            // Block 30 owns user-visible failure classification.
+        }
+
+        await InvokeAsync(() =>
+        {
+            if (ReferenceEquals(_stopOperation, operation))
+            {
+                _stopOperation = null;
+                StateHasChanged();
+            }
+        });
     }
 
     internal bool CancelRun()

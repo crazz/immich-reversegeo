@@ -79,6 +79,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private readonly Task<ChildWorkerStreamFinality> _standardErrorTask;
     private readonly Task<ExitObservation> _exitTask;
     private readonly Task<ChildWorkerCompletionObservation> _completion;
+    private readonly Task<ChildWorkerCompletionObservation> _settlement;
+    private readonly Task _readyDeadlineTask;
     private Task? _disposeTask;
     private ChildWorkerProtocolObservation? _firstProtocolObservation;
     private WorkerProtocolEvent? _terminal;
@@ -112,7 +114,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         _standardErrorTask = DrainStandardErrorAsync(observerActivation, observerArming);
         _exitTask = ObserveExitAsync(observerActivation, observerArming);
         _completion = ObserveCompletionAsync();
-        _ = ObserveReadyDeadlineAsync(observerActivation, observerArming.All);
+        _settlement = ObserveSettledCompletionAsync();
+        _readyDeadlineTask = ObserveReadyDeadlineAsync(observerActivation, observerArming.All);
     }
 
     internal static async ValueTask<ChildWorkerSession> CreateAsync(
@@ -141,6 +144,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     internal Guid RunId { get; }
     internal Task<ChildWorkerStartupObservation> Startup => _startup.Task;
     internal Task<ChildWorkerCompletionObservation> Completion => _completion;
+    internal Task<ChildWorkerCompletionObservation> Settlement => _settlement;
     internal Task<ChildWorkerStartupObservation> WaitForStartupAsync(CancellationToken cancellationToken = default) => Startup.WaitAsync(cancellationToken);
     internal Task<ChildWorkerCompletionObservation> WaitForCompletionAsync(CancellationToken cancellationToken = default) => Completion.WaitAsync(cancellationToken);
 
@@ -161,11 +165,13 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
 
         TryCommitPreReady(ChildWorkerStartupObservation.Disposed.Instance);
-        await DisposeStreamAsync(_standardInputStream).ConfigureAwait(false);
-        await _completion.ConfigureAwait(false);
-        await DisposeStreamAsync(_standardOutputStream).ConfigureAwait(false);
-        await DisposeStreamAsync(_standardErrorStream).ConfigureAwait(false);
-        await _process.DisposeAsync().ConfigureAwait(false);
+        if (TryConfirmKnownExit(ChildWorkerCancellationExitRace.BeforeControl))
+        {
+            await _settlement.ConfigureAwait(false);
+            return;
+        }
+
+        await RequestStop().ConfigureAwait(false);
     }
 
     private async Task ObserveReadyDeadlineAsync(Task observerActivation, Task observersArmed)
@@ -193,11 +199,17 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             var code = await observerArming.StartExitAndConsumeAfterAllObserversArmAsync(
                 () => new ValueTask<int>(_process.WaitForExitAsync())).ConfigureAwait(false);
             TryCommitPreReady(ChildWorkerStartupObservation.PreReadyExit.Instance);
+            ConfirmProcessExit();
             return new ExitObservation(true, code);
         }
         catch
         {
             TryCommitPreReady(ChildWorkerStartupObservation.PreReadyExitObservationFailed.Instance);
+            if (GetExitState() == ChildProcessExitState.Exited)
+            {
+                ConfirmProcessExit();
+            }
+
             return new ExitObservation(false, null);
         }
     }
@@ -317,7 +329,13 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         byte[] objectBytes;
         try
         {
-            var message = new WorkerProtocolControllerMessage(WorkerProtocolV1.RequestCategory, WorkerProtocolV1.ExecuteType, 1, _timeProvider.GetUtcNow(), _request.RunId, new ExecuteRequestPayload(_request));
+            var message = new WorkerProtocolControllerMessage(
+                WorkerProtocolV1.RequestCategory,
+                WorkerProtocolV1.ExecuteType,
+                1,
+                _timeProvider.GetUtcNow(),
+                _request.RunId,
+                new ExecuteRequestPayload(_request));
             objectBytes = WorkerProtocolCodec.SerializeControllerInput(message);
         }
         catch
@@ -328,26 +346,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
 
         var frame = new byte[objectBytes.Length + 1];
         objectBytes.CopyTo(frame, 0);
-        frame[^1] = (byte)'\n';
-        try
-        {
-            await _standardInputStream.WriteAsync(frame.AsMemory(), CancellationToken.None).ConfigureAwait(false);
-        }
-        catch
-        {
-            _startup.TrySetResult(ChildWorkerStartupObservation.RequestWriteFailed.Instance);
-            return;
-        }
+        frame[^1] = (byte)10;
 
-        try
-        {
-            await _standardInputStream.FlushAsync(CancellationToken.None).ConfigureAwait(false);
-            _startup.TrySetResult(ChildWorkerStartupObservation.ReadyAccepted.Instance);
-        }
-        catch
-        {
-            _startup.TrySetResult(ChildWorkerStartupObservation.RequestFlushFailed.Instance);
-        }
+        var observation = await WriteExecuteFrameAsync(frame).ConfigureAwait(false);
+        _startup.TrySetResult(observation);
     }
 
     private async Task<ChildWorkerStreamFinality> DrainStandardErrorAsync(
@@ -466,8 +468,20 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private static async Task<bool> WaitForTimeAsync(TimeProvider timeProvider, TimeSpan dueTime, Task startup)
     {
         var completion = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-        using var timer = timeProvider.CreateTimer(static state => ((TaskCompletionSource)state!).TrySetResult(), completion, dueTime, Timeout.InfiniteTimeSpan);
-        return await Task.WhenAny(completion.Task, startup).ConfigureAwait(false) == completion.Task;
+        ITimer timer = timeProvider.CreateTimer(
+            static state => ((TaskCompletionSource)state!).TrySetResult(),
+            completion,
+            dueTime,
+            Timeout.InfiniteTimeSpan);
+
+        try
+        {
+            return await Task.WhenAny(completion.Task, startup).ConfigureAwait(false) == completion.Task;
+        }
+        finally
+        {
+            await timer.DisposeAsync().ConfigureAwait(false);
+        }
     }
 
     private static async Task DisposeStreamAsync(Stream stream)
