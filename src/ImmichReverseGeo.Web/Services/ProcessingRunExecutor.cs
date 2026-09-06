@@ -4,12 +4,18 @@ using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
+using ImmichReverseGeo.Web.ProcessingRunLocking;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.Services;
 
 public sealed class ProcessingRunExecutor : IProcessingRunExecutor
 {
+    private const string RunLockBusyFailure = "Another Immich ReverseGeo worker is already processing this database.";
+    private const string RunLockInfrastructureFailure = "The database run lock could not be acquired.";
+    private const string RunLockOwnershipLostFailure = "The database run lock was lost during processing.";
+
     private readonly ILogger _logger;
     private readonly IProcessingRunConfiguration _configuration;
     private readonly IProcessingAssetRepository _assets;
@@ -18,6 +24,8 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
     private readonly IProcessingInfrastructureLookup _infrastructureLookup;
     private readonly IProcessingRunDelay _delay;
     private readonly TimeProvider _timeProvider;
+    private readonly IProcessingRunLock? _runLock;
+    private readonly WorkerProcessExitOutcomeAccumulator? _workerOutcomes;
 
     public ProcessingRunExecutor(
         ILogger<ProcessingRunExecutor> logger,
@@ -40,8 +48,15 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
         IProcessingAdministrativeResolver administrativeResolver,
         IProcessingInfrastructureLookup infrastructureLookup,
         IProcessingRunDelay delay,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IProcessingRunLock? runLock = null,
+        WorkerProcessExitOutcomeAccumulator? workerOutcomes = null)
     {
+        if (runLock is not null && workerOutcomes is null)
+        {
+            throw new ArgumentException("A worker run lock requires the worker outcome accumulator.", nameof(workerOutcomes));
+        }
+
         _logger = logger;
         _configuration = configuration;
         _assets = assets;
@@ -50,6 +65,8 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
         _infrastructureLookup = infrastructureLookup;
         _delay = delay;
         _timeProvider = timeProvider;
+        _runLock = runLock;
+        _workerOutcomes = workerOutcomes;
     }
 
     public async Task<ProcessingRunResult> ExecuteAsync(
@@ -64,19 +81,205 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
         var rawSession = await reporter.OpenRunAsync(request, startedAtUtc, CancellationToken.None).ConfigureAwait(false);
         var reporting = new ReporterAdmissionBoundary();
         var session = new GuardedProcessingRunEventSession(rawSession, reporting);
-        long updated = 0;
-        long skipped = 0;
-        long failed = 0;
+        ProcessingRunCounts counts = new();
         var outcome = ProcessingRunOutcome.Completed;
         string? failureMessage = null;
+        IProcessingRunLockLease? runLockLease = null;
+        CancellationTokenSource? protectedWorkCancellation = null;
+        CancellationToken activeToken = cancellationToken;
+        bool domainWorkStarted = false;
 
-        async ValueTask ReportAssetAsync(Func<ValueTask> operation, CancellationToken activeToken)
+        try
+        {
+            try
+            {
+                ProcessingRunLockAcquisition? acquisition = await AcquireRunLockAsync(cancellationToken).ConfigureAwait(false);
+                bool runDomainWork = true;
+                switch (acquisition)
+                {
+                    case ProcessingRunLockAcquisition.Acquired acquired:
+                        runLockLease = acquired.Lease;
+                        protectedWorkCancellation = CancellationTokenSource.CreateLinkedTokenSource(
+                            cancellationToken,
+                            runLockLease.OwnershipLost);
+                        activeToken = protectedWorkCancellation.Token;
+                        break;
+                    case ProcessingRunLockAcquisition.Busy:
+                        outcome = ProcessingRunOutcome.Failed;
+                        failureMessage = RunLockBusyFailure;
+                        AddWorkerOutcome(WorkerProcessExitFact.Busy());
+                        runDomainWork = false;
+                        break;
+                    case ProcessingRunLockAcquisition.Cancelled:
+                        outcome = ProcessingRunOutcome.Cancelled;
+                        AddWorkerOutcome(WorkerProcessExitFact.ShutdownCancelled());
+                        runDomainWork = false;
+                        break;
+                    case ProcessingRunLockAcquisition.InfrastructureFailure:
+                        outcome = ProcessingRunOutcome.Failed;
+                        failureMessage = RunLockInfrastructureFailure;
+                        AddWorkerOutcome(WorkerProcessExitFact.ExecutionInfrastructure());
+                        runDomainWork = false;
+                        break;
+                }
+
+                if (runDomainWork)
+                {
+                    domainWorkStarted = true;
+                    await ExecuteDomainAsync(session, runLockLease, counts, activeToken).ConfigureAwait(false);
+                }
+            }
+            catch (ProcessingEventReportingException ex)
+            {
+                if (reporting.HasFailure)
+                {
+                    reporting.ThrowFirstFailure();
+                }
+
+                ExceptionDispatchInfo.Capture(ex.ReporterException).Throw();
+                throw;
+            }
+            catch (OperationCanceledException) when (runLockLease?.IsOwnershipLost == true)
+            {
+                outcome = ProcessingRunOutcome.Failed;
+                failureMessage = RunLockOwnershipLostFailure;
+                AddWorkerOutcome(WorkerProcessExitFact.ExecutionInfrastructure());
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                outcome = ProcessingRunOutcome.Cancelled;
+                AddWorkerOutcome(WorkerProcessExitFact.ShutdownCancelled());
+            }
+            catch (Exception) when (reporting.HasFailure)
+            {
+                reporting.ThrowFirstFailure();
+                throw;
+            }
+            catch (OutOfMemoryException) when (!domainWorkStarted)
+            {
+                throw;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Fatal error during processing run");
+                outcome = ProcessingRunOutcome.Failed;
+                failureMessage = ex.Message;
+            }
+
+            if (runLockLease?.IsOwnershipLost == true)
+            {
+                outcome = ProcessingRunOutcome.Failed;
+                failureMessage = RunLockOwnershipLostFailure;
+                AddWorkerOutcome(WorkerProcessExitFact.ExecutionInfrastructure());
+            }
+
+            var result = new ProcessingRunResult(
+                request,
+                startedAtUtc,
+                UtcNow(),
+                counts.Processed,
+                counts.Updated,
+                counts.Skipped,
+                counts.Failed,
+                outcome,
+                failureMessage);
+            await session.FinishAsync(result).ConfigureAwait(false);
+            return result;
+        }
+        finally
+        {
+            await CompleteRunLockAsync(runLockLease, protectedWorkCancellation).ConfigureAwait(false);
+        }
+    }
+
+    private async ValueTask<ProcessingRunLockAcquisition?> AcquireRunLockAsync(CancellationToken cancellationToken)
+    {
+        if (_runLock is null)
+        {
+            return null;
+        }
+
+        try
+        {
+            return await _runLock.AcquireAsync(cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            return new ProcessingRunLockAcquisition.Cancelled();
+        }
+        catch (Exception exception) when (exception is not OutOfMemoryException)
+        {
+            return new ProcessingRunLockAcquisition.InfrastructureFailure();
+        }
+    }
+
+    private async Task CompleteRunLockAsync(
+        IProcessingRunLockLease? lease,
+        CancellationTokenSource? protectedWorkCancellation)
+    {
+        try
+        {
+            if (lease is null)
+            {
+                return;
+            }
+
+            try
+            {
+                ProcessingRunLockRelease release = await lease.ReleaseAsync().ConfigureAwait(false);
+                if (lease.IsOwnershipLost)
+                {
+                    AddWorkerOutcome(WorkerProcessExitFact.ExecutionInfrastructure());
+                }
+
+                if (release.InfrastructureFailure)
+                {
+                    AddWorkerOutcome(WorkerProcessExitFact.CleanupInfrastructure());
+                }
+            }
+            catch (Exception exception) when (exception is not OutOfMemoryException)
+            {
+                AddWorkerOutcome(WorkerProcessExitFact.CleanupInfrastructure());
+            }
+        }
+        finally
+        {
+            protectedWorkCancellation?.Dispose();
+        }
+    }
+
+    private void AddWorkerOutcome(WorkerProcessExitFact fact) => _workerOutcomes?.Add(fact);
+
+    private static void ThrowIfOwnershipLost(
+        IProcessingRunLockLease? lease,
+        CancellationToken activeToken)
+    {
+        if (lease is not null)
+        {
+            if (lease.IsOwnershipLost)
+            {
+                throw new OperationCanceledException(lease.OwnershipLost);
+            }
+
+            activeToken.ThrowIfCancellationRequested();
+        }
+    }
+
+    private async Task ExecuteDomainAsync(
+        IProcessingRunEventSession session,
+        IProcessingRunLockLease? runLockLease,
+        ProcessingRunCounts counts,
+        CancellationToken activeToken)
+    {
+        static async ValueTask ReportAssetAsync(
+            Func<ValueTask> operation,
+            CancellationToken reportToken)
         {
             try
             {
                 await operation().ConfigureAwait(false);
             }
-            catch (OperationCanceledException) when (activeToken.IsCancellationRequested)
+            catch (OperationCanceledException) when (reportToken.IsCancellationRequested)
             {
                 throw;
             }
@@ -86,114 +289,98 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
             }
         }
 
-        try
-        {
-            var total = await _assets.GetUnprocessedCountAsync(cancellationToken).ConfigureAwait(false);
-            await session.DetermineEligibilityAsync(total, cancellationToken).ConfigureAwait(false);
+        ThrowIfOwnershipLost(runLockLease, activeToken);
+        var total = await _assets.GetUnprocessedCountAsync(activeToken).ConfigureAwait(false);
+        ThrowIfOwnershipLost(runLockLease, activeToken);
+        await session.DetermineEligibilityAsync(total, activeToken).ConfigureAwait(false);
 
-            if (total > 0)
+        if (total > 0)
+        {
+            ThrowIfOwnershipLost(runLockLease, activeToken);
+            var skippedIds = await _skippedStore.GetAllAsync().ConfigureAwait(false);
+            ThrowIfOwnershipLost(runLockLease, activeToken);
+            if (skippedIds.Count > 0)
             {
-                var skippedIds = await _skippedStore.GetAllAsync().ConfigureAwait(false);
-                if (skippedIds.Count > 0)
+                await session.ReportLogAsync(
+                    ProcessingLogLevel.Information,
+                    $"Skipping {skippedIds.Count} previously unresolvable assets.",
+                    activeToken).ConfigureAwait(false);
+            }
+
+            ThrowIfOwnershipLost(runLockLease, activeToken);
+            var config = await _configuration.GetConfigAsync().ConfigureAwait(false);
+            ThrowIfOwnershipLost(runLockLease, activeToken);
+            var cursor = AssetCursor.Initial;
+            var batchNumber = 0;
+            while (true)
+            {
+                activeToken.ThrowIfCancellationRequested();
+                var batch = await _assets.GetUnprocessedBatchAsync(
+                    cursor,
+                    config.Processing.BatchSize,
+                    activeToken).ConfigureAwait(false);
+                ThrowIfOwnershipLost(runLockLease, activeToken);
+                if (batch.Count == 0)
                 {
-                    await session.ReportLogAsync(
-                        ProcessingLogLevel.Information,
-                        $"Skipping {skippedIds.Count} previously unresolvable assets.",
-                        cancellationToken).ConfigureAwait(false);
+                    break;
                 }
 
-                var config = await _configuration.GetConfigAsync().ConfigureAwait(false);
-                var cursor = AssetCursor.Initial;
-                var batchNumber = 0;
-                while (true)
+                batchNumber++;
+                await session.ReportLogAsync(
+                    ProcessingLogLevel.Information,
+                    $"Batch {batchNumber}: fetched {batch.Count} assets (total processed so far: {counts.Updated}).",
+                    activeToken).ConfigureAwait(false);
+                cursor = new AssetCursor(batch[^1].CreatedAt, batch[^1].Id);
+
+                await Parallel.ForEachAsync(
+                    batch,
+                    new ParallelOptions
+                    {
+                        CancellationToken = activeToken,
+                        MaxDegreeOfParallelism = Math.Clamp(config.Processing.MaxDegreeOfParallelism, 1, 32)
+                    },
+                    async (asset, token) =>
+                    {
+                        if (!skippedIds.Contains(asset.Id))
+                        {
+                            await ProcessAssetAsync(
+                                session,
+                                asset,
+                                config,
+                                ReportAssetAsync,
+                                counts.IncrementUpdated,
+                                counts.IncrementSkipped,
+                                counts.IncrementFailed,
+                                token).ConfigureAwait(false);
+                        }
+                    }).ConfigureAwait(false);
+
+                if (config.Processing.BatchDelayMs > 0)
                 {
-                    cancellationToken.ThrowIfCancellationRequested();
-                    var batch = await _assets.GetUnprocessedBatchAsync(
-                        cursor,
-                        config.Processing.BatchSize,
-                        cancellationToken).ConfigureAwait(false);
-                    if (batch.Count == 0)
-                    {
-                        break;
-                    }
-
-                    batchNumber++;
-                    await session.ReportLogAsync(
-                        ProcessingLogLevel.Information,
-                        $"Batch {batchNumber}: fetched {batch.Count} assets (total processed so far: {Volatile.Read(ref updated)}).",
-                        cancellationToken).ConfigureAwait(false);
-                    cursor = new AssetCursor(batch[^1].CreatedAt, batch[^1].Id);
-
-                    await Parallel.ForEachAsync(
-                        batch,
-                        new ParallelOptions
-                        {
-                            CancellationToken = cancellationToken,
-                            MaxDegreeOfParallelism = Math.Clamp(config.Processing.MaxDegreeOfParallelism, 1, 32)
-                        },
-                        async (asset, token) =>
-                        {
-                            if (!skippedIds.Contains(asset.Id))
-                            {
-                                await ProcessAssetAsync(
-                                    session,
-                                    asset,
-                                    config,
-                                    ReportAssetAsync,
-                                    () => Interlocked.Increment(ref updated),
-                                    () => Interlocked.Increment(ref skipped),
-                                    () => Interlocked.Increment(ref failed),
-                                    token).ConfigureAwait(false);
-                            }
-                        }).ConfigureAwait(false);
-
-                    if (config.Processing.BatchDelayMs > 0)
-                    {
-                        await _delay.DelayAsync(
-                            TimeSpan.FromMilliseconds(config.Processing.BatchDelayMs),
-                            cancellationToken).ConfigureAwait(false);
-                    }
+                    await _delay.DelayAsync(
+                        TimeSpan.FromMilliseconds(config.Processing.BatchDelayMs),
+                        activeToken).ConfigureAwait(false);
                 }
             }
         }
-        catch (ProcessingEventReportingException ex)
-        {
-            if (reporting.HasFailure)
-            {
-                reporting.ThrowFirstFailure();
-            }
 
-            ExceptionDispatchInfo.Capture(ex.ReporterException).Throw();
-            throw;
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            outcome = ProcessingRunOutcome.Cancelled;
-        }
-        catch (Exception) when (reporting.HasFailure)
-        {
-            reporting.ThrowFirstFailure();
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Fatal error during processing run");
-            outcome = ProcessingRunOutcome.Failed;
-            failureMessage = ex.Message;
-        }
+        ThrowIfOwnershipLost(runLockLease, activeToken);
+    }
 
-        var result = new ProcessingRunResult(
-            request,
-            startedAtUtc,
-            UtcNow(),
-            checked(updated + skipped + failed),
-            updated,
-            skipped,
-            failed,
-            outcome,
-            failureMessage);
-        await session.FinishAsync(result).ConfigureAwait(false);
-        return result;
+    private sealed class ProcessingRunCounts
+    {
+        private long _updated;
+        private long _skipped;
+        private long _failed;
+
+        internal long Updated => Volatile.Read(ref _updated);
+        internal long Skipped => Volatile.Read(ref _skipped);
+        internal long Failed => Volatile.Read(ref _failed);
+        internal long Processed => checked(Updated + Skipped + Failed);
+
+        internal void IncrementUpdated() => Interlocked.Increment(ref _updated);
+        internal void IncrementSkipped() => Interlocked.Increment(ref _skipped);
+        internal void IncrementFailed() => Interlocked.Increment(ref _failed);
     }
 
     private async Task ProcessAssetAsync(
@@ -215,6 +402,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
                 config.Processing,
                 session,
                 cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
             if (resolution is null)
             {
                 await reportAsync(
@@ -223,6 +411,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
                         $"Asset {asset.Id}: no country found at ({asset.Latitude:F4}, {asset.Longitude:F4}), skipping.",
                         cancellationToken),
                     cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 await _skippedStore.AddAsync(asset.Id).ConfigureAwait(false);
                 await reportAsync(session.ReportSkippedAsync, CancellationToken.None).ConfigureAwait(false);
                 skipped();
@@ -239,6 +428,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
                     asset.Longitude,
                     resolution.Iso3,
                     cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 if (infrastructure.BestMatch?.GeometryContainsPoint == true
                     || (geoResult.City is null && infrastructure.BestMatch is not null))
                 {
@@ -257,6 +447,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
                     geoResult.State,
                     asset.Latitude,
                     asset.Longitude);
+                cancellationToken.ThrowIfCancellationRequested();
                 await reportAsync(session.ReportSkippedAsync, CancellationToken.None).ConfigureAwait(false);
                 skipped();
                 return;
@@ -283,6 +474,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
                         geoResult.Country);
                 }
 
+                cancellationToken.ThrowIfCancellationRequested();
                 await _assets.WriteLocationAsync(asset.Id, geoResult, cancellationToken).ConfigureAwait(false);
                 await reportAsync(session.ReportUpdatedAsync, CancellationToken.None).ConfigureAwait(false);
                 updated();
@@ -295,6 +487,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
                         $"Asset {asset.Id}: country={resolution.CountryName} but no admin match, skipping.",
                         cancellationToken),
                     cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
                 await _skippedStore.AddAsync(asset.Id).ConfigureAwait(false);
                 await reportAsync(session.ReportSkippedAsync, CancellationToken.None).ConfigureAwait(false);
                 skipped();

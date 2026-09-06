@@ -37,7 +37,7 @@ Alternative: PostgreSQL's two-int key overload. Rejected because one documented 
 
 ### Acquire inside the existing executor/reporter session
 
-The host still invokes the executor exactly once. The reporter emits `run-started`; immediately afterward the executor calls the lock collaborator before any eligibility query, snapshots, skipped-asset access, cache/geodata initialization, lookup, mutation, or progress-producing domain work. Opening the dedicated Npgsql connection is part of this first gate. This explicitly replaces the old shorthand “before ProcessingRunExecutor execution” with “before domain/heavy execution.”
+The host still invokes the executor exactly once. The reporter emits `run-started`; immediately afterward the executor calls the lock collaborator before any eligibility query, snapshots, skipped-asset access, cache/geodata initialization, lookup, mutation, or progress-producing domain work. Opening the dedicated Npgsql connection is part of this first gate. Existing pre-request startup still creates the local skipped-assets SQLite schema before readiness; it reads no skipped asset IDs and performs no Immich processing. Dependency construction also remains before executor entry, while bundled geodata loading is lazy. The accepted-session ordering requirement covers every domain access after `run-started`, so this change does not introduce another startup owner or move that existing initialization. This explicitly replaces the old shorthand “before ProcessingRunExecutor execution” with “before domain/heavy execution.”
 
 The collaborator returns a discriminated result: acquired lease, busy, cooperatively cancelled, or infrastructure failure. Busy follows the normal executor/reporter completion path with one valid `failed` terminal containing predefined safe detail. It contributes block 23's typed Busy fact, emits no eligibility event and leaves terminal `ProcessedCount`, `UpdatedCount`, `SkippedCount`, and `FailedCount` all zero, and never routes through domain-failure accounting. No new protocol event or terminal type is introduced.
 
@@ -53,7 +53,7 @@ On orderly cleanup it:
 3. requires `pg_advisory_unlock` to return true;
 4. disposes the connection only after confirmed unlock.
 
-If unlock is false, throws, is cancelled by the cleanup bound, or release is otherwise ambiguous, cleanup records infrastructure failure. It calls `NpgsqlConnection.ClearPool(connection)` before disposal so the involved connector and other pre-clear pooled connectors are closed rather than risking reuse of a session that might still own the key. This broad pool invalidation is intentionally limited to an ambiguous-release fault. A connection already known broken is disposed and is never treated as reusable.
+If unlock is false, throws, is cancelled by the cleanup bound, or release is otherwise ambiguous, cleanup records infrastructure failure. It calls `Clear()` on the exact `NpgsqlDataSource` that created the owning connection before disposal, so the involved connector and other pre-clear pooled connectors are closed rather than risking reuse of a session that might still own the key. The static `NpgsqlConnection.ClearPool(connection)` API is not used here because Npgsql's connection-string pool registry does not own directly constructed data-source pools. This broad pool invalidation is intentionally limited to an ambiguous-release fault. A connection already known broken is disposed and is never treated as reusable.
 
 Alternative: rely on `DisposeAsync` alone. Rejected because pooled disposal normally returns the physical session and session-level locks are not a transaction-reset concern to leave implicit. Alternative: disable pooling for all worker database traffic. Rejected because only one lock connection needs special lifetime handling.
 
@@ -88,7 +88,7 @@ These tests use independent connections/data sources but remain in-process. Star
 
 - [A network partition can release or obscure the server session before the worker detects loss] → Probe every five seconds, link loss into executor cancellation, stop after observation, and document that schema-free advisory locking is not fencing.
 - [Ambiguous unlock could return a still-locked connector to the pool] → Require a true unlock result and clear the associated pool before disposal on ambiguity.
-- [`ClearPool` closes unrelated pooled connectors] → Use it only on exceptional ambiguous release; normal release confirms unlock and preserves pooling.
+- [`NpgsqlDataSource.Clear()` closes unrelated connectors in the owning pool] → Use it only on exceptional ambiguous release; normal release confirms unlock and preserves pooling.
 - [A different version/key allows mixed deployments to overlap] → Treat the exact derivation as a compatibility contract and require overlap-safe migration before any version change.
 - [An unrelated same-database application can intentionally or accidentally use the key] → Publish the label/value and reserve it for the Immich ReverseGeo run-exclusion domain.
 - [Busy is represented by a failed terminal] → Preserve block 23's typed Busy fact and zero domain failed count so exit 3, not asset-failure accounting, carries the cause.
@@ -104,5 +104,4 @@ These tests use independent connections/data sources but remain in-process. Star
 
 ## Audit Reconciliation
 
-Advisory-lock Busy is canonical: after `run-started`, it emits no eligibility event and commits the reserved failed Busy terminal with all four terminal counts exactly zero (`ProcessedCount=0`, `UpdatedCount=0`, `SkippedCount=0`, `FailedCount=0`). It performs no executor or producer work and retains exit code 3 as evidence, not a domain failed-asset count.
-
+Advisory-lock Busy is canonical: after `run-started`, it emits no eligibility event and commits the reserved failed Busy terminal with all four terminal counts exactly zero (`ProcessedCount=0`, `UpdatedCount=0`, `SkippedCount=0`, `FailedCount=0`). It performs no domain/heavy or producer work inside the already-invoked executor and retains exit code 3 as evidence, not a domain failed-asset count.

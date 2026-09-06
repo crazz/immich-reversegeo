@@ -1,12 +1,14 @@
 using System;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
+using ImmichReverseGeo.Web.ProcessingRunLocking;
 using ImmichReverseGeo.Web.WorkerHost;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using Npgsql;
 
 namespace ImmichReverseGeo.Web.Composition;
 
@@ -37,6 +39,10 @@ internal static class InternalWorkerServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(outcomes);
 
         services.AddSingleton(outcomes);
+        services.AddSingleton(sp => new PostgresqlProcessingRunLock(
+            sp.GetRequiredService<NpgsqlDataSource>(),
+            sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<IProcessingRunLock>(sp => sp.GetRequiredService<PostgresqlProcessingRunLock>());
         services.AddSingleton<SkippedAssetsWorkerStartupInitializer>();
         services.AddSingleton<IWorkerStartupInitializer>(sp => sp.GetRequiredService<SkippedAssetsWorkerStartupInitializer>());
         services.AddSingleton<WorkerStdinTransportConfigured>();

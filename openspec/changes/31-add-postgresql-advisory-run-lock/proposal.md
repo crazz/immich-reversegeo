@@ -26,5 +26,5 @@ The accepted worker executor/session, its block-23 typed outcome accumulator, wo
 
 ## Audit Reconciliation
 
-Advisory-lock Busy is canonical: after `run-started`, it emits no eligibility event and commits the reserved failed Busy terminal with all four terminal counts exactly zero (`ProcessedCount=0`, `UpdatedCount=0`, `SkippedCount=0`, `FailedCount=0`). It performs no executor or producer work and retains exit code 3 as evidence, not a domain failed-asset count.
+Advisory-lock Busy is canonical: after `run-started`, it emits no eligibility event and commits the reserved failed Busy terminal with all four terminal counts exactly zero (`ProcessedCount=0`, `UpdatedCount=0`, `SkippedCount=0`, `FailedCount=0`). It performs no domain/heavy or producer work inside the already-invoked executor and retains exit code 3 as evidence, not a domain failed-asset count.
 

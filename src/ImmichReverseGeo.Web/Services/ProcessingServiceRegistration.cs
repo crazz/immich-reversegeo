@@ -1,5 +1,7 @@
 using System;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
+using ImmichReverseGeo.Web.ProcessingRunLocking;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
@@ -71,7 +73,9 @@ internal static class ProcessingServiceRegistration
             sp.GetRequiredService<IProcessingAdministrativeResolver>(),
             sp.GetRequiredService<IProcessingInfrastructureLookup>(),
             sp.GetRequiredService<IProcessingRunDelay>(),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetService<IProcessingRunLock>(),
+            sp.GetService<WorkerProcessExitOutcomeAccumulator>()));
         services.AddSingleton<IProcessingRunExecutor>(sp => sp.GetRequiredService<ProcessingRunExecutor>());
         return services;
     }

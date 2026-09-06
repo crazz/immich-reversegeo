@@ -55,6 +55,29 @@ The test projects use `MSTest.Sdk` on Microsoft.Testing.Platform for the .NET 10
 
 For Visual Studio and other tooling that honors repo-level run settings, [`.runsettings`](./.runsettings) excludes `Integration` and `Performance` tests from normal default runs.
 
+### PostgreSQL advisory-lock tests
+
+Change 31 has focused unit tests and an opt-in PostgreSQL integration suite. Normal test runs exclude `Integration`; run the focused unit tests with:
+
+```bash
+dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --settings .runsettings --filter "TestCategory=Change31&TestCategory!=Integration"
+```
+
+Run the PostgreSQL tests only against a disposable test database. Set `IMMICH_REVERSEGEO_TEST_POSTGRES_CONNECTION_STRING` to that database, then run:
+
+```bash
+export IMMICH_REVERSEGEO_TEST_POSTGRES_CONNECTION_STRING='Host=localhost;Port=5432;Database=change31_test;Username=change31;Password=change31'
+dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --settings integration.runsettings --filter "TestCategory=Change31&TestCategory=Integration"
+```
+
+When the variable is unset, those tests report as inconclusive. They do not use the app's `DB_*` settings and do not create Immich tables or other schema objects.
+
+### PostgreSQL advisory-lock interoperability
+
+The version 1 processing-run lock is a same-database coordination contract, not a setting. Cooperating clients use the signed bigint key `-7970420658158250032` (hex `0x916360A3F80AD7D0`), derived from SHA-256 `916360a3f80ad7d0ae2a32661692f1381e43b2f336f19a58491ce5582ffb9dbf` over the UTF-8 label `immich-reversegeo/postgresql-advisory-run-lock/v1`.
+
+It creates no schema object. It coordinates only clients that use this exact key against the same PostgreSQL database; it does not fence work, coordinate other databases, or control unrelated applications. The owner probes its connection every five seconds, explicitly unlocks on normal cleanup, and clears the associated data-source pool before disposing the ambiguous session. Changing the key or derivation is a compatibility change and needs an overlap-safe rollout.
+
 ### Environment
 
 For local Visual Studio or `dotnet run` usage, the app reads real process environment variables for database access:
