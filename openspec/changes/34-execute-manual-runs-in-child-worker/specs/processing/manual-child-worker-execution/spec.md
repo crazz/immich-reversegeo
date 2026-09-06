@@ -5,7 +5,7 @@ Lets a user start one processing pass in a temporary child worker while the Dash
 ## ADDED Requirements
 
 ### Requirement: Manual admission remains backend-agnostic
-The system SHALL route the Dashboard manual Run action through the shared processing coordinator rather than through a backend-specific UI path. An accepted request SHALL publish one new non-empty run ID and its live cancellation owner before pending is visible, then mark pending, arm reporting for the same request, resolve the internally selected child-worker backend, and establish exactly one dispatch in that order. The accepted call SHALL return after dispatch ownership is established, not after run completion.
+The system SHALL route the Dashboard manual Run action through the shared processing coordinator rather than through a backend-specific UI path. An accepted request SHALL create its one non-empty run ID, live cancellation owner, and active handle that captures the internal backend selection before publishing that handle. It SHALL then mark pending, arm reporting for the same request, resolve the backend captured on the handle, and establish exactly one dispatch in that order. The accepted call SHALL return after dispatch ownership is established, not after run completion.
 
 #### Scenario: Manual child request is accepted
 - **WHEN** the user invokes Run while the internal child-worker selection is active and no run owns local admission
@@ -20,7 +20,7 @@ The system SHALL route the Dashboard manual Run action through the shared proces
 - **THEN** the duplicate remains silent and creates no run ID, pending transition, reporter arm, backend resolution, child process, run event, or in-process work
 
 ### Requirement: Child lifecycle and events preserve Dashboard state
-The selected child backend SHALL carry the exact admitted request and run ID through command resolution, process start, readiness, execute request, typed event validation, state projection, and normalized result. Readiness SHALL NOT mutate processing state; run-started SHALL establish correlation without resetting counters; eligibility SHALL start or reset the visible run; and accepted progress, activity, diagnostic, and terminal events SHALL be projected in validated order through the existing processing state. The Dashboard SHALL remain unaware of process, protocol, backend-selection, and classification details.
+The selected child backend SHALL carry the exact admitted request and run ID through command resolution, process start, readiness, execute request, typed event validation, state projection, and normalized result. Readiness SHALL NOT mutate processing state; run-started SHALL only confirm the already accepted execute/request correlation without resetting counters; eligibility SHALL start or reset the visible run; and accepted progress, activity, diagnostic, and terminal events SHALL be projected in validated order through the existing processing state. The Dashboard SHALL remain unaware of process, protocol, backend-selection, and classification details.
 
 #### Scenario: Child reports an active run
 - **WHEN** the child becomes ready, accepts the execute request, and emits valid run-started, eligibility, progress, activity, and log events for the admitted run
@@ -101,4 +101,3 @@ For this numbered transition the Web production default SHALL remain unchanged, 
 ## Audit Reconciliation
 
 Block 26 is a prerequisite for deterministic real-worker fixture coverage. The manual request uses one exact `Guid` identity whose canonical wire representation is preserved unchanged through child launch, events, bridge, cancellation, and finality. It consumes the internal exact 10-second `TimeProvider` cancellation policy without adding a public setting. UI `Processed` is projected from `UpdatedCount`, never aggregate `ProcessedCount`.
-
