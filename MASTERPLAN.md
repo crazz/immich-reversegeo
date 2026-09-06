@@ -721,7 +721,7 @@ Preserve separate configuration boundaries: block 12's copied Enabled/Cron sched
 
 **Dependencies and sequencing** — Requires blocks 11–13, 25–33, and the block-34 transition state, but this block neither edits block 34 nor adds trigger-specific backend selection. Block 36 exclusively owns the dedicated regression asserting exactly one detector call, zero backend/launcher/geodata construction or access, zero protocol events, and the defined local idle result. Block 57 later replaces or aliases this temporary scheduled gate with its general boolean `IProcessingWorkDetector`; block 58 replaces only the pre-launch exact-count implementation with a bounded existence query. Neither may remove or weaken block 11's authoritative worker count.
 
-**OpenSpec** — [`35-execute-scheduled-runs-in-child-worker`](openspec/changes/35-execute-scheduled-runs-in-child-worker/).
+**OpenSpec** — [`35-execute-scheduled-runs-in-child-worker`](openspec/changes/archive/2026-09-06-35-execute-scheduled-runs-in-child-worker/).
 
 ### 36. `test: verify empty schedules do not launch workers`
 
