@@ -168,7 +168,8 @@ public sealed class ShutdownSessionTests
             var coordinator = new ProcessingRunCoordinator(
                 state,
                 new ProcessingStateEventReporter(state),
-                new ShutdownExecutor(invocation),
+                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+                ProcessingRunBackendTestScopeFactory.Create(new ShutdownExecutor(invocation)),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 Guid.NewGuid,
                 observer: null,

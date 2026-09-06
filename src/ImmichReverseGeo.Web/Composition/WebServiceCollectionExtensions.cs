@@ -14,8 +14,17 @@ internal static class WebServiceCollectionExtensions
         this IServiceCollection services,
         ApplicationCompositionContext context)
     {
+        return services.AddWebComposition(context, ProcessingBackendKind.InProcess);
+    }
+
+    internal static IServiceCollection AddWebComposition(
+        this IServiceCollection services,
+        ApplicationCompositionContext context,
+        ProcessingBackendKind backend)
+    {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(context);
+        TemporaryProcessingBackendSelection.Validate(backend);
 
         services.AddSharedComposition(context);
 
@@ -31,7 +40,7 @@ internal static class WebServiceCollectionExtensions
             .SetApplicationName("ImmichReverseGeo")
             .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionDirectory));
 
-        services.AddProcessingControlPlaneServices();
+        services.AddProcessingControlPlaneServices(backend);
         services.AddSingleton<SystemChildProcessFactory>();
         services.AddSingleton<IChildProcessFactory>(sp => sp.GetRequiredService<SystemChildProcessFactory>());
         services.AddSingleton(sp => new ChildWorkerLauncher(sp.GetRequiredService<IChildProcessFactory>()));

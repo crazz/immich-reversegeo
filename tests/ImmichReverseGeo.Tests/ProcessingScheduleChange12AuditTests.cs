@@ -955,7 +955,8 @@ public sealed class ProcessingScheduleChange12AuditTests
             return new ProcessingRunCoordinator(
                 state,
                 reporter,
-                executor,
+                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+                ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 Guid.NewGuid);
         }

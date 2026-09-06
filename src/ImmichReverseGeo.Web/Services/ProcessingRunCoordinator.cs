@@ -6,6 +6,7 @@ using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using WorkerStateBridge = ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridge;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -61,7 +62,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private readonly object _admissionGate = new();
     private readonly ProcessingState _state;
     private readonly ProcessingStateEventReporter _reporter;
-    private readonly IProcessingRunExecutor _executor;
+    private readonly TemporaryProcessingBackendSelection _backendSelection;
+    private readonly IServiceScopeFactory _backendScopeFactory;
     private readonly ILogger<ProcessingRunCoordinator> _logger;
     private readonly Func<Guid> _createRunId;
     private readonly IProcessingRunCancellationFactory _cancellationFactory;
@@ -74,17 +76,19 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private Task? _shutdownTask;
     private bool _admissionOpen = true;
 
-    public ProcessingRunCoordinator(
+    internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IProcessingRunExecutor executor,
+        TemporaryProcessingBackendSelection backendSelection,
+        IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
         : this(
             state,
             reporter,
-            executor,
+            backendSelection,
+            backendScopeFactory,
             logger,
             Guid.NewGuid,
             new ProcessingRunCancellationFactory(),
@@ -97,7 +101,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IProcessingRunExecutor executor,
+        TemporaryProcessingBackendSelection backendSelection,
+        IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IHostApplicationLifetime? applicationLifetime = null,
@@ -105,7 +110,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         : this(
             state,
             reporter,
-            executor,
+            backendSelection,
+            backendScopeFactory,
             logger,
             createRunId,
             new ProcessingRunCancellationFactory(),
@@ -118,7 +124,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IProcessingRunExecutor executor,
+        TemporaryProcessingBackendSelection backendSelection,
+        IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IProcessingRunCoordinatorObserver? observer,
@@ -127,7 +134,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         : this(
             state,
             reporter,
-            executor,
+            backendSelection,
+            backendScopeFactory,
             logger,
             createRunId,
             new ProcessingRunCancellationFactory(),
@@ -140,7 +148,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IProcessingRunExecutor executor,
+        TemporaryProcessingBackendSelection backendSelection,
+        IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IProcessingRunCancellationFactory cancellationFactory,
@@ -150,14 +159,16 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(reporter);
-        ArgumentNullException.ThrowIfNull(executor);
+        ArgumentNullException.ThrowIfNull(backendSelection);
+        ArgumentNullException.ThrowIfNull(backendScopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(createRunId);
         ArgumentNullException.ThrowIfNull(cancellationFactory);
 
         _state = state;
         _reporter = reporter;
-        _executor = executor;
+        _backendSelection = backendSelection;
+        _backendScopeFactory = backendScopeFactory;
         _logger = logger;
         _createRunId = createRunId;
         _cancellationFactory = cancellationFactory;
@@ -516,9 +527,27 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
             var request = new ProcessingRunRequest(_createRunId(), trigger);
             var cancellation = _cancellationFactory.Create(request, linkedCancellationToken);
-            var handle = new ActiveRun(request, cancellation);
+            var handle = new ActiveRun(request, cancellation, _backendSelection.Backend);
+            if (trigger == ProcessingRunTrigger.Scheduled
+                && handle.Backend == ProcessingBackendKind.ChildWorker)
+            {
+                handle.RegisterScheduledCancellation(
+                    () => RequestScheduledChildTermination(handle));
+            }
             _active = handle;
             return (ProcessingRunAdmissionResult.Accepted, handle);
+        }
+    }
+
+    private void RequestScheduledChildTermination(ActiveRun handle)
+    {
+        var claim = handle.ClaimStop(
+            _timeProvider,
+            ChildWorkerTerminationIntent.Stop,
+            trackCancellationDispatch: false);
+        if (claim.IsFirst)
+        {
+            StartAttachedTermination(handle);
         }
     }
 
@@ -538,7 +567,10 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             Task<ProcessingRunResult> execution;
             try
             {
-                execution = _executor.ExecuteAsync(handle.Request, _reporter, handle.Cancellation.Token)
+                var scope = _backendScopeFactory.CreateAsyncScope();
+                handle.SetBackendScope(scope);
+                var backend = scope.ServiceProvider.GetRequiredKeyedService<IProcessingRunBackend>(TemporaryProcessingBackendSelection.Validate(handle.Backend));
+                execution = backend.ExecuteAsync(handle.Request, _reporter, handle.Cancellation.Token)
                     ?? throw new InvalidOperationException("The processing run executor returned no execution task.");
             }
             catch (Exception failure)
@@ -760,6 +792,16 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             ObserveCleanupFailure(handle, failure);
         }
 
+        try
+        {
+            await handle.DisposeScheduledCancellationRegistrationAsync().ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            cleanupFailure ??= ExceptionDispatchInfo.Capture(failure);
+            ObserveCleanupFailure(handle, failure);
+        }
+
         if (handle.IsShutdownRequested && primaryFailure is not null)
         {
             CleanupProjectionAfterFailure(handle, primaryFailure.SourceException);
@@ -794,6 +836,16 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         try
         {
             await handle.DisposeCancellationAsync().ConfigureAwait(false);
+        }
+        catch (Exception failure)
+        {
+            cleanupFailure ??= ExceptionDispatchInfo.Capture(failure);
+            ObserveCleanupFailure(handle, failure);
+        }
+
+        try
+        {
+            await handle.DisposeBackendScopeAsync().ConfigureAwait(false);
         }
         catch (Exception failure)
         {
@@ -1039,6 +1091,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         private int _cancellationFailureObserved;
         private int _shutdownRequested;
         private Task? _ownedExecution;
+        private AsyncServiceScope? _backendScope;
+        private CancellationTokenRegistration? _scheduledCancellationRegistration;
         private readonly object _cancellationGate = new();
         private readonly object _childGate = new();
         private readonly TaskCompletionSource _disposalCompleted = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -1059,14 +1113,19 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         private ChildWorkerTerminationIntent? _childTerminationIntent;
         private Task? _cancellationDispatch;
 
-        public ActiveRun(ProcessingRunRequest request, IProcessingRunCancellation cancellation)
+        public ActiveRun(
+            ProcessingRunRequest request,
+            IProcessingRunCancellation cancellation,
+            ProcessingBackendKind backend)
         {
             Request = request;
             Cancellation = cancellation;
+            Backend = backend;
         }
 
         public ProcessingRunRequest Request { get; }
         public IProcessingRunCancellation Cancellation { get; }
+        public ProcessingBackendKind Backend { get; }
         public TaskCompletionSource PreparationCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CleanupCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ExceptionDispatchInfo? ExecutionFailure { get; set; }
@@ -1094,6 +1153,46 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             {
                 throw new InvalidOperationException("Execution ownership has already been established.");
             }
+        }
+
+        public void SetBackendScope(AsyncServiceScope scope)
+        {
+            if (_backendScope is not null)
+            {
+                throw new InvalidOperationException("Backend scope ownership has already been established.");
+            }
+
+            _backendScope = scope;
+        }
+
+        public async ValueTask DisposeBackendScopeAsync()
+        {
+            if (_backendScope is AsyncServiceScope scope)
+            {
+                _backendScope = null;
+                await scope.DisposeAsync().ConfigureAwait(false);
+            }
+        }
+
+        public void RegisterScheduledCancellation(Action callback)
+        {
+            if (_scheduledCancellationRegistration is not null)
+            {
+                throw new InvalidOperationException("Scheduled cancellation has already been registered.");
+            }
+
+            _scheduledCancellationRegistration = Cancellation.Token.Register(callback);
+        }
+
+        public ValueTask DisposeScheduledCancellationRegistrationAsync()
+        {
+            if (_scheduledCancellationRegistration is not CancellationTokenRegistration registration)
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            _scheduledCancellationRegistration = null;
+            return registration.DisposeAsync();
         }
 
         public bool TryBeginCleanup()

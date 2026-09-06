@@ -430,7 +430,8 @@ public sealed class WorkerRunCoordinatorFinalityTests
         var coordinator = new ProcessingRunCoordinator(
             state,
             reporter,
-            new GatedExecutor(invocation),
+            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+            ProcessingRunBackendTestScopeFactory.Create(new GatedExecutor(invocation)),
             NullLogger<ProcessingRunCoordinator>.Instance,
             () => WorkerProtocolV1TestData.RunId,
             observer,
@@ -785,7 +786,8 @@ public sealed class WorkerRunCoordinatorFinalityTests
         => new(
             state,
             reporter,
-            new GatedExecutor(invocations),
+            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+            ProcessingRunBackendTestScopeFactory.Create(new GatedExecutor(invocations)),
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid,
             observer,

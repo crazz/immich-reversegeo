@@ -46,7 +46,8 @@ internal sealed class ProcessingRunCoordinatorTestHost
         _coordinator = new ProcessingRunCoordinator(
             state,
             reporter,
-            executor,
+            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+            ProcessingRunBackendTestScopeFactory.Create(executor),
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid);
     }

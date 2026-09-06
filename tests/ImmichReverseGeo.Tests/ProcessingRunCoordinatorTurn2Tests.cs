@@ -510,7 +510,15 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
             operations.Enqueue($"id:{id}");
             return id;
         }
-        var coordinator = new ProcessingRunCoordinator(state, reporter, executor, logger, NextId, cancellationFactory, null);
+        var coordinator = new ProcessingRunCoordinator(
+            state,
+            reporter,
+            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+            ProcessingRunBackendTestScopeFactory.Create(executor),
+            logger,
+            NextId,
+            cancellationFactory,
+            null);
 
         Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await coordinator.TriggerManualAsync());
         await coordinator.WaitForActiveRunAsync().WaitAsync(TestTimeout);
@@ -1388,7 +1396,8 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
             Coordinator = new ProcessingRunCoordinator(
                 State,
                 Reporter,
-                Executor,
+                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+                ProcessingRunBackendTestScopeFactory.Create(Executor),
                 Logger,
                 NextId,
                 Cancellations,

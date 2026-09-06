@@ -367,7 +367,8 @@ public sealed class ProcessingRunCoordinatorChange13Tests
             Coordinator = new ProcessingRunCoordinator(
                 State,
                 Reporter,
-                Executor,
+                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+                ProcessingRunBackendTestScopeFactory.Create(Executor),
                 Logger,
                 NextId);
         }

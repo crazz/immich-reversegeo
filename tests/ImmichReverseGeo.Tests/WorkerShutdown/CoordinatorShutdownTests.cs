@@ -282,7 +282,8 @@ public sealed class CoordinatorShutdownTests
             Coordinator = new ProcessingRunCoordinator(
                 State,
                 new ProcessingStateEventReporter(State),
-                executor,
+                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+                ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 CreateRunId,
                 observer,

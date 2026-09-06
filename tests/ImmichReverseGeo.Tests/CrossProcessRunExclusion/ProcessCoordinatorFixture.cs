@@ -25,7 +25,8 @@ internal sealed class ProcessCoordinatorFixture
         Coordinator = new ProcessingRunCoordinator(
             State,
             Reporter,
-            _executor,
+            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+            ProcessingRunBackendTestScopeFactory.Create(_executor),
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid,
             new LifecycleObserver(this),

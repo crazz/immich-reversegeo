@@ -323,7 +323,6 @@ public sealed class ChildWorkerSessionContainmentTests
     public async Task FirstTerminationRequest_RetainsExactFirstRequestAndIntent()
     {
         SessionTestSupport.SessionFixture fixture = await CreateAsync();
-        fixture.Process.Exit(11);
 
         Task<ChildWorkerTerminationRequest> firstRequestObservation =
             fixture.Session.FirstTerminationRequest;
@@ -342,6 +341,7 @@ public sealed class ChildWorkerSessionContainmentTests
             reason);
         Task<ChildWorkerCancellationResult> laterOperation =
             fixture.Session.RequestTermination(later);
+        fixture.Process.Exit(11);
         ChildWorkerCancellationResult result =
             await firstOperation.WaitAsync(TestTimeout);
 

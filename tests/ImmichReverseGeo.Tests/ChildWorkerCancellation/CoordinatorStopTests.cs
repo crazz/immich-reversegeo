@@ -323,7 +323,8 @@ public sealed class CoordinatorStopTests
         return new ProcessingRunCoordinator(
             state,
             new ProcessingStateEventReporter(state),
-            executor,
+            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+            ProcessingRunBackendTestScopeFactory.Create(executor),
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid,
             observer,

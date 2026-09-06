@@ -142,7 +142,8 @@ public class WorkerRunControlPlaneTests
             Coordinator = new ProcessingRunCoordinator(
                 State,
                 Reporter,
-                Executor,
+                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
+                ProcessingRunBackendTestScopeFactory.Create(Executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 NextId,
                 Cancellations,
