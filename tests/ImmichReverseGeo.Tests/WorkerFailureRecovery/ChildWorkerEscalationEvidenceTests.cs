@@ -13,6 +13,7 @@ public sealed class ChildWorkerEscalationEvidenceTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(5);
 
     [TestMethod]
+    [DoNotParallelize]
     public async Task SynchronousKillExit_DoesNotPublishEvidenceBeforeKillFacts()
     {
         var clock = new CancellationTestClock(SessionTestSupport.Start);
