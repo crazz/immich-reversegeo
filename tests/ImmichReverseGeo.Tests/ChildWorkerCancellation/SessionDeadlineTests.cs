@@ -54,6 +54,9 @@ public sealed class SessionDeadlineTests
 
         fixture.Clock.Advance(ChildWorkerCancellationPolicy.Grace);
         await fixture.Process.KillObserved.Task.WaitAsync(TestTimeout);
+        await fixture.Session
+            .WaitForCancellationDeadlineObserverAsync()
+            .WaitAsync(TestTimeout);
 
         ChildWorkerCancellationFacts pending = fixture.Session.CancellationFacts!;
         Assert.IsTrue(pending.GraceExpired);

@@ -151,6 +151,17 @@ internal sealed partial class ChildWorkerSession
         }
     }
 
+    internal Task WaitForCancellationDeadlineObserverAsync(
+        CancellationToken cancellationToken = default)
+    {
+        lock (_cancellationGate)
+        {
+            return (_deadlineObserverSettled?.Task
+                ?? throw new InvalidOperationException("Stop has not been requested."))
+                .WaitAsync(cancellationToken);
+        }
+    }
+
     private async Task<ChildWorkerCancellationResult> StopCoreAsync(
         TimeSpan remainingGrace,
         TaskCompletionSource deadlineObserverSettled,
