@@ -63,9 +63,38 @@ public class WorkerRunFinalizerFixtureTests
         Assert.AreEqual(1, observed.ProcessDisposeCalls, $"{scenario.Label}-session-disposed-once");
         Assert.IsFalse(observed.FixtureRegistered, $"{scenario.Label}-fixture-cleaned");
 
-        if (scenario.RequireFaultMonitor)
+        Assert.IsTrue(observed.FaultMonitorCalls <= 1,
+            $"{scenario.Label}-fault-monitor-at-most-once");
+        var rawProtocolFailure = observed.Completion.FirstProtocolObservation
+            as ChildWorkerProtocolObservation.ProtocolFailure;
+        if (observed.FaultMonitorCalls == 1)
         {
-            Assert.IsTrue(observed.FaultMonitorCalls > 0, $"{scenario.Label}-fault-monitor-invoked");
+            Assert.IsNotNull(rawProtocolFailure,
+                $"{scenario.Label}-containment-has-raw-protocol-fault");
+            var reason = Assert.IsInstanceOfType<ChildWorkerFaultContainmentReason.ProtocolFailure>(
+                observed.ContainmentReason,
+                $"{scenario.Label}-typed-containment-reason");
+            Assert.AreSame(rawProtocolFailure.Failure, reason.Failure,
+                $"{scenario.Label}-containment-retains-first-raw-fault");
+        }
+        else
+        {
+            Assert.IsNull(observed.ContainmentReason,
+                $"{scenario.Label}-no-unobserved-containment-reason");
+        }
+
+        if (scenario.ExpectProtocolFault)
+        {
+            Assert.IsNotNull(
+                rawProtocolFailure,
+                $"{scenario.Label}-raw-first-protocol-fault");
+            Assert.IsNull(observed.Completion.Terminal,
+                $"{scenario.Label}-fault-does-not-invent-terminal");
+            if (observed.FaultMonitorCalls == 0)
+            {
+                Assert.IsTrue(observed.Completion.ExitObserved,
+                    $"{scenario.Label}-containment-skipped-only-after-physical-exit");
+            }
         }
 
         Assert.AreEqual(scenario.ExpectedAnomaly, observed.Decision.Anomalies & scenario.ExpectedAnomaly, $"{scenario.Label}-expected-anomaly");
@@ -109,12 +138,14 @@ public class WorkerRunFinalizerFixtureTests
                 var session = await lease.LaunchAsync(scenario.Name, bridge, scenario.Capture, scenario.Options);
                 var finalizer = new WorkerRunFinalizer(lease.Request, reporter, TimeProvider.System, evidenceGate);
                 var faultMonitorCalls = 0;
+                ChildWorkerFaultContainmentReason? containmentReason = null;
                 var result = await finalizer.Start(
                     session,
                     bridge,
                     fault =>
                     {
                         faultMonitorCalls++;
+                        containmentReason = fault.Reason;
                         _ = session.RequestTermination(new ChildWorkerTerminationRequest(
                             fault.ObservedAt,
                             ChildWorkerTerminationIntent.FaultContainment,
@@ -150,6 +181,7 @@ public class WorkerRunFinalizerFixtureTests
                     decision,
                     completion,
                     faultMonitorCalls,
+                    containmentReason,
                     lease.ProcessDisposeCalls,
                     lease.IsRegistered);
             }
@@ -195,7 +227,7 @@ public class WorkerRunFinalizerFixtureTests
         ProcessingRunOutcome Outcome,
         WorkerRunFailureCategory[] AllowedCategories,
         int ExitCode,
-        bool RequireFaultMonitor = false,
+        bool ExpectProtocolFault = false,
         int? StandardErrorBytes = null,
         WorkerRunAnomaly ExpectedAnomaly = WorkerRunAnomaly.None)
     {
@@ -211,6 +243,7 @@ public class WorkerRunFinalizerFixtureTests
         WorkerRunDecision Decision,
         ChildWorkerCompletionObservation Completion,
         int FaultMonitorCalls,
+        ChildWorkerFaultContainmentReason? ContainmentReason,
         int ProcessDisposeCalls,
         bool FixtureRegistered);
 }

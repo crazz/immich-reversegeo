@@ -203,6 +203,9 @@ public sealed class ChildWorkerSessionContainmentTests
 
         fixture.Clock.Advance(ChildWorkerCancellationPolicy.Grace);
         await fixture.Process.KillObserved.Task.WaitAsync(TestTimeout);
+        await fixture.Session
+            .WaitForCancellationDeadlineObserverAsync()
+            .WaitAsync(TestTimeout);
 
         Assert.IsFalse(fixture.Session.EvidenceFinality.IsCompleted);
         Assert.IsFalse(fixture.Session.Settlement.IsCompleted);
