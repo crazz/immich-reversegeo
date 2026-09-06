@@ -64,7 +64,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
         Assert.IsFalse(fixture.State.IsRunning, $"{scenario}-state-idle");
         Assert.IsNull(fixture.State.CurrentActivity, $"{scenario}-activity-cleaned");
         Assert.AreEqual(1, fixture.Launcher.CallCount, $"{scenario}-one-launch");
-        Assert.AreEqual(0, fixture.UnselectedResolutionCount, $"{scenario}-selected-child-only");
+        Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount, $"{scenario}-web-heavy-services-not-resolved");
         if (capturesExecute)
         {
             firstLease.AssertExactCapture();
@@ -83,7 +83,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
         await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
 
         Assert.AreEqual(2, fixture.Launcher.CallCount, $"{scenario}-one-launch-per-admitted-run");
-        Assert.AreEqual(0, fixture.UnselectedResolutionCount, $"{scenario}-retrigger-selected-child-only");
+        Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount, $"{scenario}-retrigger-web-heavy-services-not-resolved");
         Assert.IsNull(fixture.Coordinator.ActiveRequest, $"{scenario}-retrigger-matching-release");
     }
 
@@ -105,7 +105,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
         Assert.AreEqual(ProcessingRunAdmissionResult.AlreadyRunning,
             await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound));
         Assert.AreEqual(1, fixture.Launcher.CallCount, "A rejected duplicate must not launch another child.");
-        Assert.AreEqual(0, fixture.UnselectedResolutionCount, "A rejected duplicate must not resolve an unselected service.");
+        Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount, "A rejected duplicate must not resolve a heavy Web service.");
 
         Task stop = fixture.Coordinator.StopActiveRun()
             ?? throw new AssertFailedException("The cooperative child must expose an active Stop operation.");
@@ -118,7 +118,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
         Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome);
         Assert.AreEqual(1, fixture.Launcher.CallCount);
         Assert.AreEqual(0, firstLease.TreeKillCalls, "A cooperative terminal must not require forced termination.");
-        Assert.AreEqual(0, fixture.UnselectedResolutionCount);
+        Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount);
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
 
         Assert.AreEqual(ProcessingRunAdmissionResult.Accepted,
@@ -126,7 +126,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
         await fixture.Launcher.WaitForLaunchCountAsync(2).WaitAsync(Bound);
         Assert.AreNotEqual(first.RunId, fixture.Launcher.Requests.Last().RunId);
         await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
-        Assert.AreEqual(0, fixture.UnselectedResolutionCount);
+        Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount);
     }
 
     [TestMethod]
@@ -158,7 +158,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
             ?? throw new AssertFailedException("The forced child termination must commit a finalization receipt.");
         Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome);
         Assert.AreEqual(1, lease.TreeKillCalls, "The shared grace deadline must issue one tree kill.");
-        Assert.AreEqual(0, fixture.UnselectedResolutionCount);
+        Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount);
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
         Assert.IsFalse(fixture.State.IsRunning);
     }
@@ -177,20 +177,20 @@ public sealed class ProcessFixtureManualCoordinatorTests
             string root,
             ServiceProvider provider,
             ProcessFixtureLauncher launcher,
-            UnselectedResolutionGuard unselectedResolutionGuard)
+            ForbiddenHeavyResolutionGuard forbiddenHeavyResolutionGuard)
         {
             _root = root;
             _provider = provider;
             Launcher = launcher;
-            UnselectedResolutionGuard = unselectedResolutionGuard;
+            ForbiddenHeavyResolutionGuard = forbiddenHeavyResolutionGuard;
             Coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
             Reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
             State = provider.GetRequiredService<ProcessingState>();
         }
 
         internal ProcessFixtureLauncher Launcher { get; }
-        internal UnselectedResolutionGuard UnselectedResolutionGuard { get; }
-        internal int UnselectedResolutionCount => UnselectedResolutionGuard.Count;
+        internal ForbiddenHeavyResolutionGuard ForbiddenHeavyResolutionGuard { get; }
+        internal int ForbiddenHeavyResolutionCount => ForbiddenHeavyResolutionGuard.Count;
         internal ProcessingRunCoordinator Coordinator { get; }
         internal ProcessingStateEventReporter Reporter { get; }
         internal ProcessingState State { get; }
@@ -210,38 +210,29 @@ public sealed class ProcessFixtureManualCoordinatorTests
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change34-process", Guid.NewGuid().ToString("N"));
             var services = new ServiceCollection();
             var launcher = new ProcessFixtureLauncher(plans);
-            var unselectedResolutionGuard = new UnselectedResolutionGuard();
+            var forbiddenHeavyResolutionGuard = new ForbiddenHeavyResolutionGuard();
             try
             {
                 services.AddWebComposition(ApplicationCompositionContext.Create(
                     CompositionEnvironment.Development,
                     root,
                     Path.Combine(root, "data"),
-                    Path.Combine(root, "config")),
-                    ProcessingBackendKind.ChildWorker);
+                    Path.Combine(root, "config")));
                 services.RemoveAll<IWorkerCommandInvocationBuilder>();
                 services.AddSingleton<IWorkerCommandInvocationBuilder, FixtureInvocationBuilder>();
                 services.RemoveAll<IChildWorkerLauncher>();
                 services.AddSingleton<IChildWorkerLauncher>(launcher);
-                services.RemoveAll<IProcessingRunExecutor>();
-                services.AddSingleton<IProcessingRunExecutor>(_ =>
-                    unselectedResolutionGuard.Reject<IProcessingRunExecutor>(nameof(IProcessingRunExecutor)));
-                services.RemoveAllKeyed<IProcessingRunBackend>(ProcessingBackendKind.InProcess);
-                services.AddKeyedScoped<IProcessingRunBackend>(
-                    ProcessingBackendKind.InProcess,
-                    (_, _) => unselectedResolutionGuard.Reject<IProcessingRunBackend>(
-                        nameof(ProcessingBackendKind.InProcess)));
                 services.RemoveAll<AdministrativeAreaResolverService>();
                 services.AddSingleton<AdministrativeAreaResolverService>(_ =>
-                    unselectedResolutionGuard.Reject<AdministrativeAreaResolverService>(
+                    forbiddenHeavyResolutionGuard.Reject<AdministrativeAreaResolverService>(
                         nameof(AdministrativeAreaResolverService)));
                 services.RemoveAll<ImmichReverseGeo.Overture.Services.OvertureDivisionsService>();
                 services.AddSingleton<ImmichReverseGeo.Overture.Services.OvertureDivisionsService>(_ =>
-                    unselectedResolutionGuard.Reject<ImmichReverseGeo.Overture.Services.OvertureDivisionsService>(
+                    forbiddenHeavyResolutionGuard.Reject<ImmichReverseGeo.Overture.Services.OvertureDivisionsService>(
                         nameof(ImmichReverseGeo.Overture.Services.OvertureDivisionsService)));
                 services.RemoveAll<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>();
                 services.AddSingleton<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>(_ =>
-                    unselectedResolutionGuard.Reject<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>(
+                    forbiddenHeavyResolutionGuard.Reject<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>(
                         nameof(ImmichReverseGeo.Gadm.Services.GadmDivisionsService)));
                 services.RemoveAll<TimeProvider>();
                 services.AddSingleton(timeProvider);
@@ -249,7 +240,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
                     root,
                     services.BuildServiceProvider(validateScopes: true),
                     launcher,
-                    unselectedResolutionGuard);
+                    forbiddenHeavyResolutionGuard);
             }
             catch
             {
@@ -447,7 +438,7 @@ public sealed class ProcessFixtureManualCoordinatorTests
         }
     }
 
-    private sealed class UnselectedResolutionGuard
+    private sealed class ForbiddenHeavyResolutionGuard
     {
         private int _count;
         internal int Count => Volatile.Read(ref _count);

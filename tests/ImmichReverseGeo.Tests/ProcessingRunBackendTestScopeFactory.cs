@@ -2,11 +2,12 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.Processing;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace ImmichReverseGeo.Web.Services;
 
-// Test-only keyed scope composition for legacy coordinator fixtures.
+// Test-only child boundary composition for coordinator fixtures.
 internal sealed class ProcessingRunBackendTestScopeFactory : IServiceScopeFactory
 {
     private readonly IProcessingRunExecutor _executor;
@@ -24,10 +25,10 @@ internal sealed class ProcessingRunBackendTestScopeFactory : IServiceScopeFactor
 
     public IServiceScope CreateScope()
     {
-        return new TestScope(new InProcessProcessingRunBackend(_executor));
+        return new TestScope(new ExecutorBackedChildBackend(_executor));
     }
 
-    private sealed class TestScope(IProcessingRunBackend backend) : IServiceScope, IAsyncDisposable
+    private sealed class TestScope(IChildProcessingRunBackend backend) : IServiceScope, IAsyncDisposable
     {
         public IServiceProvider ServiceProvider { get; } = new TestScopeServiceProvider(backend);
 
@@ -41,25 +42,22 @@ internal sealed class ProcessingRunBackendTestScopeFactory : IServiceScopeFactor
         }
     }
 
-    private sealed class TestScopeServiceProvider(IProcessingRunBackend backend) : IKeyedServiceProvider
+    private sealed class TestScopeServiceProvider(IChildProcessingRunBackend backend) : IServiceProvider
     {
         public object? GetService(Type serviceType)
         {
-            return null;
+            return serviceType == typeof(IChildProcessingRunBackend) ? backend : null;
         }
+    }
 
-        public object? GetKeyedService(Type serviceType, object? serviceKey)
+    private sealed class ExecutorBackedChildBackend(IProcessingRunExecutor executor) : IChildProcessingRunBackend
+    {
+        public Task<ProcessingRunResult> ExecuteAsync(
+            ProcessingRunRequest request,
+            IProcessingEventReporter reporter,
+            CancellationToken cancellationToken)
         {
-            return serviceType == typeof(IProcessingRunBackend)
-                && Equals(serviceKey, ProcessingBackendKind.InProcess)
-                ? backend
-                : null;
-        }
-
-        public object GetRequiredKeyedService(Type serviceType, object? serviceKey)
-        {
-            return GetKeyedService(serviceType, serviceKey)
-                ?? throw new InvalidOperationException("The requested keyed test service is not registered.");
+            return executor.ExecuteAsync(request, reporter, cancellationToken);
         }
     }
 }

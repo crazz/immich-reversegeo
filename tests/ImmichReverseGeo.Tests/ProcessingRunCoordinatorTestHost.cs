@@ -47,7 +47,6 @@ internal sealed class ProcessingRunCoordinatorTestHost
             state,
             reporter,
             AlwaysHasWorkScheduledRunGate.Instance,
-            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
             ProcessingRunBackendTestScopeFactory.Create(executor),
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid);

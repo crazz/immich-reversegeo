@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Text;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
-namespace ImmichReverseGeo.Tests.WorkerBackendSelection;
+namespace ImmichReverseGeo.Tests.ChildWorkerExecution;
 
 [TestClass]
 [TestCategory("Change33")]
@@ -51,7 +51,6 @@ public sealed class ChildBackendLifecycleTests
             Assert.AreSame(request, fixture.Coordinator.ActiveRequest, "child-terminal-retains-exact-handle");
             Assert.IsFalse(fixture.Coordinator.WaitForActiveRunAsync().IsCompleted, "child-terminal-waits-for-finality");
             Assert.AreEqual(1, fixture.Launcher.CallCount, "child-terminal-one-launch");
-            Assert.AreEqual(0, fixture.InProcessCalls, "child-terminal-never-falls-back");
 
             fixture.Launcher.Process.Exit(0);
             await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
@@ -93,7 +92,6 @@ public sealed class ChildBackendLifecycleTests
             ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)!;
             Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome, "child-stop-cancelled-result");
             Assert.AreEqual(1, fixture.Launcher.CallCount, "child-stop-one-session");
-            Assert.AreEqual(0, fixture.InProcessCalls, "child-stop-no-inprocess-fallback");
             Assert.IsFalse(fixture.State.IsRunning, "child-stop-returns-idle");
         }
         finally
@@ -104,7 +102,7 @@ public sealed class ChildBackendLifecycleTests
     }
 
     [TestMethod]
-    public async Task WebComposition_ChildResolutionAndStartFailuresRemainOnTheSelectedBackend()
+    public async Task WebComposition_ChildResolutionAndStartFailuresRemainOnTheChildBackend()
     {
         foreach (var scenario in new[] { "resolution", "start" })
         {
@@ -119,7 +117,6 @@ public sealed class ChildBackendLifecycleTests
             await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
 
             Assert.AreEqual(scenario == "resolution" ? 0 : 1, fixture.Launcher.CallCount, scenario + "-one-or-zero-launch");
-            Assert.AreEqual(0, fixture.InProcessCalls, scenario + "-no-inprocess-fallback");
             Assert.IsFalse(fixture.State.IsRunning, scenario + "-returns-idle");
             StringAssert.StartsWith(fixture.State.LastError!, "Fatal:", scenario + "-one-classified-terminal");
         }
@@ -153,7 +150,6 @@ public sealed class ChildBackendLifecycleTests
         ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)!;
         Assert.AreEqual(ProcessingRunOutcome.Failed, receipt.Result.Outcome, "child-crash-classified-failed");
         Assert.AreEqual(1, fixture.Launcher.CallCount, "child-crash-no-replacement-launch");
-        Assert.AreEqual(0, fixture.InProcessCalls, "child-crash-no-inprocess-fallback");
         Assert.IsFalse(fixture.State.IsRunning, "child-crash-idle");
         Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "child-crash-one-terminal");
     }
@@ -181,7 +177,6 @@ public sealed class ChildBackendLifecycleTests
         ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)!;
         Assert.AreEqual(ProcessingRunOutcome.Failed, receipt.Result.Outcome, "child-protocol-classified-failed");
         Assert.AreEqual(1, fixture.Launcher.CallCount, "child-protocol-no-replacement-launch");
-        Assert.AreEqual(0, fixture.InProcessCalls, "child-protocol-no-inprocess-fallback");
         Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "child-protocol-one-terminal");
     }
 
@@ -239,7 +234,6 @@ public sealed class ChildBackendLifecycleTests
         ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)!;
         Assert.AreEqual(ProcessingRunOutcome.Failed, receipt.Result.Outcome, "child-projection-classified-failed");
         Assert.AreEqual(1, fixture.Launcher.CallCount, "child-projection-no-replacement-launch");
-        Assert.AreEqual(0, fixture.InProcessCalls, "child-projection-no-inprocess-fallback");
         Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "child-projection-one-terminal");
     }
 
@@ -288,7 +282,6 @@ public sealed class ChildBackendLifecycleTests
         Assert.AreEqual(ProcessingRunOutcome.Failed, receipt.Result.Outcome, "child-kill-rejection-classified-failed");
         Assert.AreEqual(1, process.KillCalls, "child-kill-rejection-one-containment-attempt");
         Assert.AreEqual(1, fixture.Launcher.CallCount, "child-kill-rejection-no-replacement-launch");
-        Assert.AreEqual(0, fixture.InProcessCalls, "child-kill-rejection-no-inprocess-fallback");
         Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "child-kill-rejection-one-terminal");
     }
 
@@ -332,21 +325,17 @@ public sealed class ChildBackendLifecycleTests
         private WebChildBackendFixture(
             string root,
             ServiceProvider provider,
-            ControlledSessionLauncher launcher,
-            CountingInProcessExecutor inProcess)
+            ControlledSessionLauncher launcher)
         {
             _root = root;
             _provider = provider;
             Launcher = launcher;
-            InProcess = inProcess;
             Coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
             Reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
             State = provider.GetRequiredService<ProcessingState>();
         }
 
         internal ControlledSessionLauncher Launcher { get; }
-        internal CountingInProcessExecutor InProcess { get; }
-        internal int InProcessCalls => InProcess.CallCount;
         internal ProcessingRunCoordinator Coordinator { get; }
         internal ProcessingStateEventReporter Reporter { get; }
         internal ProcessingState State { get; }
@@ -360,7 +349,6 @@ public sealed class ChildBackendLifecycleTests
         {
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change33", Guid.NewGuid().ToString("N"));
             var launcher = new ControlledSessionLauncher(startFailure, killOutcome, exitOnKill);
-            var inProcess = new CountingInProcessExecutor();
             try
             {
                 var services = new ServiceCollection();
@@ -368,8 +356,7 @@ public sealed class ChildBackendLifecycleTests
                     CompositionEnvironment.Development,
                     root,
                     Path.Combine(root, "data"),
-                    Path.Combine(root, "config")),
-                    ProcessingBackendKind.ChildWorker);
+                    Path.Combine(root, "config")));
                 if (timeProvider is not null)
                 {
                     services.RemoveAll<TimeProvider>();
@@ -379,13 +366,10 @@ public sealed class ChildBackendLifecycleTests
                 services.AddSingleton(builder);
                 services.RemoveAll<IChildWorkerLauncher>();
                 services.AddSingleton<IChildWorkerLauncher>(launcher);
-                services.RemoveAll<IProcessingRunExecutor>();
-                services.AddSingleton<IProcessingRunExecutor>(inProcess);
                 return new WebChildBackendFixture(
                     root,
                     services.BuildServiceProvider(validateScopes: true),
-                    launcher,
-                    inProcess);
+                    launcher);
             }
             catch
             {
@@ -459,20 +443,6 @@ public sealed class ChildBackendLifecycleTests
                 new ChildWorkerObserverArmingAcknowledgements());
             Entered.TrySetResult();
             return new ChildWorkerLaunchResult.Started(Session);
-        }
-    }
-
-    private sealed class CountingInProcessExecutor : IProcessingRunExecutor
-    {
-        internal int CallCount { get; private set; }
-
-        public Task<ProcessingRunResult> ExecuteAsync(
-            ProcessingRunRequest request,
-            IProcessingEventReporter reporter,
-            CancellationToken cancellationToken)
-        {
-            CallCount++;
-            return Task.FromException<ProcessingRunResult>(new InvalidOperationException("Child selection must not invoke the in-process executor."));
         }
     }
 

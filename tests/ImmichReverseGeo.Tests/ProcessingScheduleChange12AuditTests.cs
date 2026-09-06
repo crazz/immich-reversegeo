@@ -905,7 +905,7 @@ public sealed class ProcessingScheduleChange12AuditTests
         services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
         services.AddSingleton((SkippedAssetsRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
         services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
-        services.AddProcessingServices(ProcessingBackendKind.InProcess);
+        services.AddProcessingServicesForTests();
         return services.BuildServiceProvider();
     }
 
@@ -957,7 +957,6 @@ public sealed class ProcessingScheduleChange12AuditTests
                 state,
                 reporter,
                 AlwaysHasWorkScheduledRunGate.Instance,
-                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 Guid.NewGuid);

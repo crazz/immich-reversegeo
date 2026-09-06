@@ -43,7 +43,6 @@ public sealed class ManualChildWorkerControlPlaneTests
             Assert.AreSame(request, fixture.Coordinator.ActiveRequest, "pending-stop-exact-active-request");
             Assert.IsTrue(fixture.Reporter.IsArmed(request), "pending-stop-matching-reporter-arm");
             Assert.AreEqual(1, fixture.Launcher.CallCount, "pending-stop-one-child-launch");
-            Assert.AreEqual(0, fixture.InProcessCalls, "pending-stop-no-inprocess-fallback");
 
             EmitLifecycle(fixture.Launcher.Process!, request, WorkerProtocolV1.CancelledType, 0);
             fixture.Launcher.Process!.Exit(130);
@@ -133,7 +132,6 @@ public sealed class ManualChildWorkerControlPlaneTests
             Assert.IsFalse(fixture.State.IsRunning, "zero-work-terminal-idle");
             Assert.AreEqual(0L, fixture.State.ProcessedThisRun, "ui-processed-is-updated-count");
             Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "zero-work-one-summary");
-            Assert.AreEqual(0, fixture.InProcessCalls, "zero-work-no-inprocess-fallback");
         }
         finally
         {
@@ -181,7 +179,6 @@ public sealed class ManualChildWorkerControlPlaneTests
             Assert.AreSame(request, fixture.Coordinator.ActiveRequest, "admission-duplicate-no-replacement-request");
             Assert.AreEqual(0, Volatile.Read(ref duplicateChanges), "admission-duplicate-no-state-mutation");
             Assert.AreEqual(logCount, fixture.State.RecentLog.Count, "admission-duplicate-silent");
-            Assert.AreEqual(0, fixture.InProcessCalls, "admission-duplicate-no-inprocess-resolution");
 
             EmitLifecycle(process, request, WorkerProtocolV1.CancelledType, 0);
             process.Exit(130);
@@ -349,7 +346,6 @@ public sealed class ManualChildWorkerControlPlaneTests
             Assert.IsTrue(fixture.State.RecentLog.Any(line => line.Contains("[WARN] One source required fallback.", StringComparison.Ordinal)), "projection-warning-log");
             Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "projection-one-summary");
             Assert.AreEqual(1, fixture.Launcher.CallCount, "projection-one-selected-child-dispatch");
-            Assert.AreEqual(0, fixture.InProcessCalls, "projection-no-inprocess-fallback");
         }
         finally
         {
@@ -393,20 +389,17 @@ public sealed class ManualChildWorkerControlPlaneTests
         private readonly string _root;
         private readonly ServiceProvider _provider;
 
-        private ManualChildFixture(string root, ServiceProvider provider, ManualChildLauncher launcher, ManualInProcessExecutor inProcess)
+        private ManualChildFixture(string root, ServiceProvider provider, ManualChildLauncher launcher)
         {
             _root = root;
             _provider = provider;
             Launcher = launcher;
-            InProcess = inProcess;
             Coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
             Reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
             State = provider.GetRequiredService<ProcessingState>();
         }
 
         internal ManualChildLauncher Launcher { get; }
-        internal ManualInProcessExecutor InProcess { get; }
-        internal int InProcessCalls => InProcess.CallCount;
         internal ProcessingRunCoordinator Coordinator { get; }
         internal ProcessingStateEventReporter Reporter { get; }
         internal ProcessingState State { get; }
@@ -416,22 +409,18 @@ public sealed class ManualChildWorkerControlPlaneTests
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change34", Guid.NewGuid().ToString("N"));
             var services = new ServiceCollection();
             var launcher = new ManualChildLauncher();
-            var inProcess = new ManualInProcessExecutor();
             try
             {
                 services.AddWebComposition(ApplicationCompositionContext.Create(
                     CompositionEnvironment.Development,
                     root,
                     Path.Combine(root, "data"),
-                    Path.Combine(root, "config")),
-                    ProcessingBackendKind.ChildWorker);
+                    Path.Combine(root, "config")));
                 services.RemoveAll<IWorkerCommandInvocationBuilder>();
                 services.AddSingleton<IWorkerCommandInvocationBuilder, ManualInvocationBuilder>();
                 services.RemoveAll<IChildWorkerLauncher>();
                 services.AddSingleton<IChildWorkerLauncher>(launcher);
-                services.RemoveAll<IProcessingRunExecutor>();
-                services.AddSingleton<IProcessingRunExecutor>(inProcess);
-                return new ManualChildFixture(root, services.BuildServiceProvider(validateScopes: true), launcher, inProcess);
+                return new ManualChildFixture(root, services.BuildServiceProvider(validateScopes: true), launcher);
             }
             catch
             {
@@ -508,20 +497,6 @@ public sealed class ManualChildWorkerControlPlaneTests
             {
                 activityEndedAccepted.TrySetResult();
             }
-        }
-    }
-
-    private sealed class ManualInProcessExecutor : IProcessingRunExecutor
-    {
-        internal int CallCount { get; private set; }
-
-        public Task<ProcessingRunResult> ExecuteAsync(
-            ProcessingRunRequest request,
-            ImmichReverseGeo.Core.Processing.IProcessingEventReporter reporter,
-            CancellationToken cancellationToken)
-        {
-            CallCount++;
-            return Task.FromException<ProcessingRunResult>(new InvalidOperationException("Child selection invoked the in-process executor."));
         }
     }
 

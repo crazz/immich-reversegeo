@@ -27,12 +27,12 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         Guid admittedRunId = Guid.Parse("0f3fd626-a086-4a22-a2f4-b1ec8b9d1d45");
         var services = new ServiceCollection();
         services.AddSingleton<TimeProvider>(TimeProvider.System);
-        services.AddProcessingControlPlaneServices(ProcessingBackendKind.ChildWorker);
+        services.AddProcessingControlPlaneServices();
         services.RemoveAll<IScheduledRunWorkGate>();
         services.AddSingleton<IScheduledRunWorkGate>(detector);
-        services.RemoveAllKeyed<IProcessingRunBackend>(ProcessingBackendKind.ChildWorker);
-        services.AddKeyedScoped<IProcessingRunBackend>(ProcessingBackendKind.ChildWorker,
-            (_, _) => forbiddenDependencies.Fail<IProcessingRunBackend>("selected child backend"));
+        services.RemoveAll<IChildProcessingRunBackend>();
+        services.AddScoped<IChildProcessingRunBackend>(
+            _ => forbiddenDependencies.Fail<IChildProcessingRunBackend>("child backend"));
         services.RemoveAll<IChildWorkerLauncher>();
         services.AddSingleton<IChildWorkerLauncher>(_ => forbiddenDependencies.Fail<IChildWorkerLauncher>("child launcher"));
         services.AddSingleton<IChildProcessFactory>(_ => forbiddenDependencies.Fail<IChildProcessFactory>("child process factory"));
@@ -60,7 +60,6 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
                 sp.GetRequiredService<ProcessingState>(),
                 sp.GetRequiredService<ProcessingStateEventReporter>(),
                 sp.GetRequiredService<IScheduledRunWorkGate>(),
-                sp.GetRequiredService<TemporaryProcessingBackendSelection>(),
                 backendScopeFactory,
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 () => admittedRunId,
@@ -141,12 +140,12 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
                 "zero summary log");
 
             Assert.AreEqual(0, connectedBackendScopeFactory.ScopeCreationAttempts,
-                "the selected backend scope is never created after a normal no-work decision");
+                "the child backend scope is never created after a normal no-work decision");
             Assert.AreEqual(0, connectedBackendScopeFactory.BackendResolutionAttempts,
-                "the selected child backend is never resolved");
+                "the child backend is never resolved");
             Assert.AreEqual(0, connectedBackendScopeFactory.ScopeDisposeAttempts,
                 "no backend scope exists to dispose");
-            Assert.AreEqual(0, forbiddenDependencies.ResolutionCount("selected child backend"), "no selected backend resolution");
+            Assert.AreEqual(0, forbiddenDependencies.ResolutionCount("child backend"), "no child backend resolution");
             Assert.AreEqual(0, forbiddenDependencies.ResolutionCount("child launcher"), "no child launcher construction");
             Assert.AreEqual(0, forbiddenDependencies.ResolutionCount("child process factory"), "no child process start boundary construction");
             Assert.AreEqual(0, forbiddenDependencies.ResolutionCount("worker command builder"), "no worker command construction");
@@ -204,7 +203,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         Assert.AreEqual(0, connectedBackendScopeFactory.ScopeCreationAttempts,
             "the post-cleanup lazy boundary still proves no backend, command, launcher, protocol, bridge, executor, or heavy graph materialized");
         Assert.AreEqual(0, connectedBackendScopeFactory.BackendResolutionAttempts,
-            "the post-cleanup lazy boundary still proves no selected backend resolution");
+            "the post-cleanup lazy boundary still proves no child backend resolution");
         Assert.AreEqual(0, forbiddenDependencies.TotalResolutionCount,
             "the post-cleanup registered worker and heavy-service sentinels remain untouched");
     }
@@ -383,23 +382,16 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             }
         }
 
-        private sealed class ConnectedServiceProvider(ConnectedWorkerBackendScopeFactory owner, IServiceProvider innerProvider) : IKeyedServiceProvider
+        private sealed class ConnectedServiceProvider(ConnectedWorkerBackendScopeFactory owner, IServiceProvider innerProvider) : IServiceProvider
         {
             public object? GetService(Type serviceType)
             {
+                if (serviceType == typeof(IChildProcessingRunBackend))
+                {
+                    owner.BackendResolutionAttempts++;
+                }
+
                 return innerProvider.GetService(serviceType);
-            }
-
-            public object? GetKeyedService(Type serviceType, object? serviceKey)
-            {
-                owner.BackendResolutionAttempts++;
-                return ((IKeyedServiceProvider)innerProvider).GetKeyedService(serviceType, serviceKey);
-            }
-
-            public object GetRequiredKeyedService(Type serviceType, object? serviceKey)
-            {
-                return GetKeyedService(serviceType, serviceKey)
-                    ?? throw new InvalidOperationException("The connected backend provider returned no service.");
             }
         }
     }

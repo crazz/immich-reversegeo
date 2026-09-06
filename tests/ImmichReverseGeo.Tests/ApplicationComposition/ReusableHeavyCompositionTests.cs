@@ -18,25 +18,13 @@ public sealed class ReusableHeavyCompositionTests
 
         var requiredServices = new[]
         {
-            typeof(AdministrativeAreaResolverService),
             typeof(OvertureDivisionCacheService),
             typeof(OverturePlacesService),
             typeof(OvertureDivisionsService),
             typeof(GadmDivisionCacheService),
             typeof(GadmDivisionsService),
             typeof(ImmichDbRepository),
-            typeof(SkippedAssetsRepository),
-            typeof(IProcessingRunConfiguration),
-            typeof(IProcessingAssetRepository),
-            typeof(IProcessingSkippedStore),
-            typeof(IProcessingAdministrativeResolver),
-            typeof(ProcessingInfrastructureLookup),
-            typeof(IProcessingInfrastructureLookup),
-            typeof(TimeProvider),
-            typeof(ProcessingRunDelay),
-            typeof(IProcessingRunDelay),
-            typeof(ProcessingRunExecutor),
-            typeof(IProcessingRunExecutor)
+            typeof(SkippedAssetsRepository)
         };
 
         foreach (var serviceType in requiredServices)
@@ -48,7 +36,7 @@ public sealed class ReusableHeavyCompositionTests
     }
 
     [TestMethod]
-    public void ReusableHeavyRegistration_ExcludesControlPlaneDescriptors()
+    public void ReusableHeavyRegistration_ExcludesControlPlaneAndExecutionDescriptors()
     {
         var services = CreateServices("/composition/heavy-forbidden");
 
@@ -62,7 +50,19 @@ public sealed class ReusableHeavyCompositionTests
             typeof(IManualProcessingRunCoordinator),
             typeof(IScheduledRunTrigger),
             typeof(ProcessingBackgroundService),
-            typeof(IHostedService)
+            typeof(IHostedService),
+            typeof(AdministrativeAreaResolverService),
+            typeof(IProcessingRunConfiguration),
+            typeof(IProcessingAssetRepository),
+            typeof(IProcessingSkippedStore),
+            typeof(IProcessingAdministrativeResolver),
+            typeof(ProcessingInfrastructureLookup),
+            typeof(IProcessingInfrastructureLookup),
+            typeof(TimeProvider),
+            typeof(ProcessingRunDelay),
+            typeof(IProcessingRunDelay),
+            typeof(ProcessingRunExecutor),
+            typeof(IProcessingRunExecutor)
         };
 
         foreach (var serviceType in forbiddenServices)
@@ -72,7 +72,7 @@ public sealed class ReusableHeavyCompositionTests
     }
 
     [TestMethod]
-    public void ReusableHeavyRegistration_ResolvesExecutorGraphAndPreservesAliasIdentity()
+    public void ReusableHeavyRegistration_ResolvesRetainedWebHeavyOwners()
     {
         var fixtureRoot = CreateBundledIdentityFixture();
         try
@@ -84,21 +84,15 @@ public sealed class ReusableHeavyCompositionTests
                 ValidateScopes = true
             });
 
-            var config = provider.GetRequiredService<ConfigService>();
             var repository = provider.GetRequiredService<ImmichDbRepository>();
             var skipped = provider.GetRequiredService<SkippedAssetsRepository>();
-            var administrativeResolver = provider.GetRequiredService<AdministrativeAreaResolverService>();
-            var infrastructure = provider.GetRequiredService<ProcessingInfrastructureLookup>();
-            var delay = provider.GetRequiredService<ProcessingRunDelay>();
-            var executor = provider.GetRequiredService<ProcessingRunExecutor>();
+            var overtureCache = provider.GetRequiredService<OvertureDivisionCacheService>();
+            var gadmCache = provider.GetRequiredService<GadmDivisionCacheService>();
 
-            Assert.AreSame(config, provider.GetRequiredService<IProcessingRunConfiguration>(), "config-run-configuration-alias");
-            Assert.AreSame(repository, provider.GetRequiredService<IProcessingAssetRepository>(), "repository-asset-alias");
-            Assert.AreSame(skipped, provider.GetRequiredService<IProcessingSkippedStore>(), "skipped-store-alias");
-            Assert.AreSame(administrativeResolver, provider.GetRequiredService<IProcessingAdministrativeResolver>(), "administrative-resolver-alias");
-            Assert.AreSame(infrastructure, provider.GetRequiredService<IProcessingInfrastructureLookup>(), "infrastructure-lookup-alias");
-            Assert.AreSame(delay, provider.GetRequiredService<IProcessingRunDelay>(), "run-delay-alias");
-            Assert.AreSame(executor, provider.GetRequiredService<IProcessingRunExecutor>(), "run-executor-alias");
+            Assert.AreSame(repository, provider.GetRequiredService<ImmichDbRepository>(), "repository-singleton");
+            Assert.AreSame(skipped, provider.GetRequiredService<SkippedAssetsRepository>(), "skipped-store-singleton");
+            Assert.AreSame(overtureCache, provider.GetRequiredService<OvertureDivisionCacheService>(), "overture-cache-singleton");
+            Assert.AreSame(gadmCache, provider.GetRequiredService<GadmDivisionCacheService>(), "gadm-cache-singleton");
         }
         finally
         {

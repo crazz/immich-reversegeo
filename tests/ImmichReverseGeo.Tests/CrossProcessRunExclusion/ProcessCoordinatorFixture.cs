@@ -26,7 +26,6 @@ internal sealed class ProcessCoordinatorFixture
             State,
             Reporter,
             global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
-            new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
             ProcessingRunBackendTestScopeFactory.Create(_executor),
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid,

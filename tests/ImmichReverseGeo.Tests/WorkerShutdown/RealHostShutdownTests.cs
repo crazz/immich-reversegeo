@@ -89,7 +89,6 @@ public class RealHostShutdownTests
                 sp.GetRequiredService<ProcessingState>(),
                 sp.GetRequiredService<ProcessingStateEventReporter>(),
                 global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
-                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(execution),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 Guid.NewGuid,

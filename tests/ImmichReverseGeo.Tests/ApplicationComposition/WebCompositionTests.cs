@@ -117,17 +117,7 @@ public sealed class WebCompositionTests
                 typeof(IManualProcessingRunCoordinator),
                 typeof(IScheduledRunTrigger),
                 typeof(ProcessingBackgroundService),
-                typeof(IProcessingRunConfiguration),
-                typeof(IProcessingAssetRepository),
-                typeof(IProcessingSkippedStore),
-                typeof(IProcessingAdministrativeResolver),
-                typeof(ProcessingInfrastructureLookup),
-                typeof(IProcessingInfrastructureLookup),
-                typeof(TimeProvider),
-                typeof(ProcessingRunDelay),
-                typeof(IProcessingRunDelay),
-                typeof(ProcessingRunExecutor),
-                typeof(IProcessingRunExecutor)
+                typeof(TimeProvider)
             };
 
             foreach (var serviceType in expectedServices)
@@ -160,7 +150,6 @@ public sealed class WebCompositionTests
             var config = provider.GetRequiredService<ConfigService>();
             var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
             var background = provider.GetRequiredService<ProcessingBackgroundService>();
-            var executor = provider.GetRequiredService<ProcessingRunExecutor>();
             var repository = provider.GetRequiredService<ImmichDbRepository>();
             var overtureCache = provider.GetRequiredService<OvertureDivisionCacheService>();
             var hostedDescriptors = services
@@ -174,7 +163,6 @@ public sealed class WebCompositionTests
 
             Assert.AreSame(reporter, provider.GetRequiredService<IProcessingEventReporter>(), "reporter-alias");
             Assert.AreSame(config, provider.GetRequiredService<IProcessingScheduleConfiguration>(), "schedule-configuration-alias");
-            Assert.AreSame(config, provider.GetRequiredService<IProcessingRunConfiguration>(), "run-configuration-alias");
             Assert.AreSame(coordinator, provider.GetRequiredService<IManualProcessingRunCoordinator>(), "manual-coordinator-alias");
             Assert.AreSame(coordinator, provider.GetRequiredService<IScheduledRunTrigger>(), "scheduled-trigger-alias");
             Assert.AreEqual(hostedDescriptors.Length, hostedServices.Length, "complete-hosted-sequence-length");
@@ -183,9 +171,10 @@ public sealed class WebCompositionTests
             Assert.AreSame(coordinator, applicationHostedEntries[0].Service, "coordinator-hosted-alias");
             Assert.AreSame(background, applicationHostedEntries[1].Service, "background-hosted-alias");
             Assert.AreNotSame(applicationHostedEntries[0].Service, applicationHostedEntries[1].Service, "distinct-hosted-owners");
-            Assert.AreSame(executor, provider.GetRequiredService<IProcessingRunExecutor>(), "executor-alias");
-            Assert.AreSame(repository, provider.GetRequiredService<IProcessingAssetRepository>(), "repository-alias");
+            Assert.AreSame(repository, provider.GetRequiredService<ImmichDbRepository>(), "repository-singleton");
             Assert.AreSame(overtureCache, provider.GetRequiredService<OvertureDivisionCacheService>(), "cache-singleton-identity");
+            Assert.IsNull(provider.GetService<IProcessingRunExecutor>(), "executor-unreachable");
+            Assert.IsNull(provider.GetService<IProcessingAssetRepository>(), "execution-repository-alias-unreachable");
         }
         finally
         {

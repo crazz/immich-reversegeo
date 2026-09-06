@@ -57,7 +57,6 @@ public sealed class FailureControlPlaneTests
         ProcessingRunFinalizationReceipt firstReceipt = fixture.Reporter.GetFinalizationReceipt(firstRequest)!;
         Assert.AreEqual(ProcessingRunOutcome.Failed, firstReceipt.Result.Outcome, "ready-timeout-failed-once");
         Assert.AreEqual(1, fixture.Launcher.CallCount, "ready-timeout-one-child");
-        Assert.AreEqual(0, fixture.InProcessCalls, "ready-timeout-no-inprocess-fallback");
         Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "ready-timeout-one-summary");
         Assert.IsFalse(fixture.State.IsRunning, "ready-timeout-activities-cleared");
         Assert.IsFalse(fixture.State.LastError!.Contains("Synthetic", StringComparison.Ordinal), "ready-timeout-safe-error");
@@ -123,7 +122,6 @@ public sealed class FailureControlPlaneTests
         Assert.AreEqual(1, fixture.Launcher.First.Input.WriteCalls, "execute-transport-one-write");
         Assert.AreEqual(writeFails ? 0 : 1, fixture.Launcher.First.Input.FlushCalls, "execute-transport-one-flush-attempt");
         Assert.AreEqual(1, fixture.Launcher.CallCount, "execute-transport-no-retry");
-        Assert.AreEqual(0, fixture.InProcessCalls, "execute-transport-no-fallback");
         Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "execute-transport-one-summary");
         Assert.IsFalse(fixture.State.IsRunning, "execute-transport-activities-cleared");
         Assert.IsFalse(fixture.State.LastError!.Contains("Synthetic", StringComparison.Ordinal), "execute-transport-safe-error");
@@ -189,7 +187,6 @@ public sealed class FailureControlPlaneTests
         Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome, "stop-latch-cancelled");
         Assert.AreEqual(1, fixture.State.RecentLog.Count(line => line.Contains("Run complete.", StringComparison.Ordinal)), "stop-latch-one-summary");
         Assert.IsFalse(fixture.State.IsRunning, "stop-latch-activities-cleared");
-        Assert.AreEqual(0, fixture.InProcessCalls, "stop-latch-no-inprocess-fallback");
 
         Assert.AreEqual(
             ProcessingRunAdmissionResult.Accepted,
@@ -257,8 +254,6 @@ public sealed class FailureControlPlaneTests
             await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
             Assert.AreEqual(2, scopeDisposal.CreatedCount, "scope-cleanup-new-scope-per-run");
             Assert.AreEqual(2, scopeDisposal.DisposeSettledCount, "scope-cleanup-retrigger-scope-settled");
-            Assert.AreEqual(0, fixture.InProcessResolutions, "scope-cleanup-no-inprocess-geodata-resolution");
-            Assert.AreEqual(0, fixture.InProcessCalls, "scope-cleanup-no-inprocess-execution");
         }
         finally
         {
@@ -327,21 +322,17 @@ public sealed class FailureControlPlaneTests
         private readonly string _root;
         private readonly ServiceProvider _provider;
 
-        private FailureFixture(string root, ServiceProvider provider, FailureLauncher launcher, CountingInProcessExecutor inProcess)
+        private FailureFixture(string root, ServiceProvider provider, FailureLauncher launcher)
         {
             _root = root;
             _provider = provider;
             Launcher = launcher;
-            InProcess = inProcess;
             Coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
             Reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
             State = provider.GetRequiredService<ProcessingState>();
         }
 
         internal FailureLauncher Launcher { get; }
-        internal CountingInProcessExecutor InProcess { get; }
-        internal int InProcessCalls => InProcess.CallCount;
-        internal int InProcessResolutions => InProcess.ResolutionCount;
         internal ProcessingRunCoordinator Coordinator { get; }
         internal ProcessingStateEventReporter Reporter { get; }
         internal ProcessingState State { get; }
@@ -354,15 +345,13 @@ public sealed class FailureControlPlaneTests
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change34-failures", Guid.NewGuid().ToString("N"));
             var services = new ServiceCollection();
             var launcher = new FailureLauncher(inputFactory ?? (() => new SessionInputStream()));
-            var inProcess = new CountingInProcessExecutor();
             try
             {
                 services.AddWebComposition(ApplicationCompositionContext.Create(
                     CompositionEnvironment.Development,
                     root,
                     Path.Combine(root, "data"),
-                    Path.Combine(root, "config")),
-                    ProcessingBackendKind.ChildWorker);
+                    Path.Combine(root, "config")));
                 if (timeProvider is not null)
                 {
                     services.RemoveAll<TimeProvider>();
@@ -373,16 +362,13 @@ public sealed class FailureControlPlaneTests
                 services.AddSingleton<IWorkerCommandInvocationBuilder, ImmediateInvocationBuilder>();
                 services.RemoveAll<IChildWorkerLauncher>();
                 services.AddSingleton<IChildWorkerLauncher>(launcher);
-                services.RemoveAll<IProcessingRunExecutor>();
-                services.AddSingleton<IProcessingRunExecutor>(_ => inProcess.Resolve());
                 if (scopeDisposal is not null)
                 {
-                    services.RemoveAll<IProcessingRunBackend>();
+                    services.RemoveAll<IChildProcessingRunBackend>();
                     services.AddSingleton(scopeDisposal);
                     services.AddScoped<ScopeDisposalSentinel>();
-                    services.AddKeyedScoped<IProcessingRunBackend>(
-                        ProcessingBackendKind.ChildWorker,
-                        (sp, _) =>
+                    services.AddScoped<IChildProcessingRunBackend>(
+                        sp =>
                         {
                             _ = sp.GetRequiredService<ScopeDisposalSentinel>();
                             return new ChildWorkerProcessingRunBackend(
@@ -391,7 +377,7 @@ public sealed class FailureControlPlaneTests
                         });
                 }
 
-                return new FailureFixture(root, services.BuildServiceProvider(validateScopes: true), launcher, inProcess);
+                return new FailureFixture(root, services.BuildServiceProvider(validateScopes: true), launcher);
             }
             catch
             {
@@ -472,30 +458,6 @@ public sealed class FailureControlPlaneTests
         SessionTestProcess Process,
         ChildWorkerSession Session,
         IWorkerProtocolEventSink EventSink);
-
-    private sealed class CountingInProcessExecutor : IProcessingRunExecutor
-    {
-        private int _callCount;
-        private int _resolutionCount;
-
-        internal int CallCount => Volatile.Read(ref _callCount);
-        internal int ResolutionCount => Volatile.Read(ref _resolutionCount);
-
-        internal IProcessingRunExecutor Resolve()
-        {
-            Interlocked.Increment(ref _resolutionCount);
-            throw new AssertFailedException("Child-worker composition must not resolve the in-process executor or its geodata graph.");
-        }
-
-        public Task<ProcessingRunResult> ExecuteAsync(
-            ProcessingRunRequest request,
-            IProcessingEventReporter reporter,
-            CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _callCount);
-            throw new InvalidOperationException("In-process execution must not be selected.");
-        }
-    }
 
     private sealed class ScopeDisposalControl(bool throwAfterFirstGate)
     {

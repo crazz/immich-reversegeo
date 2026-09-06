@@ -65,8 +65,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private readonly ProcessingState _state;
     private readonly ProcessingStateEventReporter _reporter;
     private readonly IScheduledRunWorkGate _scheduledRunWorkGate;
-    private readonly TemporaryProcessingBackendSelection _backendSelection;
-    private readonly IServiceScopeFactory _backendScopeFactory;
+    private readonly IServiceScopeFactory _childBackendScopeFactory;
     private readonly ILogger<ProcessingRunCoordinator> _logger;
     private readonly Func<Guid> _createRunId;
     private readonly IProcessingRunCancellationFactory _cancellationFactory;
@@ -83,8 +82,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ProcessingState state,
         ProcessingStateEventReporter reporter,
         IScheduledRunWorkGate scheduledRunWorkGate,
-        TemporaryProcessingBackendSelection backendSelection,
-        IServiceScopeFactory backendScopeFactory,
+        IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
@@ -92,8 +90,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             state,
             reporter,
             scheduledRunWorkGate,
-            backendSelection,
-            backendScopeFactory,
+            childBackendScopeFactory,
             logger,
             Guid.NewGuid,
             new ProcessingRunCancellationFactory(),
@@ -107,8 +104,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ProcessingState state,
         ProcessingStateEventReporter reporter,
         IScheduledRunWorkGate scheduledRunWorkGate,
-        TemporaryProcessingBackendSelection backendSelection,
-        IServiceScopeFactory backendScopeFactory,
+        IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IHostApplicationLifetime? applicationLifetime = null,
@@ -117,8 +113,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             state,
             reporter,
             scheduledRunWorkGate,
-            backendSelection,
-            backendScopeFactory,
+            childBackendScopeFactory,
             logger,
             createRunId,
             new ProcessingRunCancellationFactory(),
@@ -132,8 +127,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ProcessingState state,
         ProcessingStateEventReporter reporter,
         IScheduledRunWorkGate scheduledRunWorkGate,
-        TemporaryProcessingBackendSelection backendSelection,
-        IServiceScopeFactory backendScopeFactory,
+        IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IProcessingRunCoordinatorObserver? observer,
@@ -143,8 +137,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             state,
             reporter,
             scheduledRunWorkGate,
-            backendSelection,
-            backendScopeFactory,
+            childBackendScopeFactory,
             logger,
             createRunId,
             new ProcessingRunCancellationFactory(),
@@ -158,8 +151,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ProcessingState state,
         ProcessingStateEventReporter reporter,
         IScheduledRunWorkGate scheduledRunWorkGate,
-        TemporaryProcessingBackendSelection backendSelection,
-        IServiceScopeFactory backendScopeFactory,
+        IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IProcessingRunCancellationFactory cancellationFactory,
@@ -170,8 +162,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(reporter);
         ArgumentNullException.ThrowIfNull(scheduledRunWorkGate);
-        ArgumentNullException.ThrowIfNull(backendSelection);
-        ArgumentNullException.ThrowIfNull(backendScopeFactory);
+        ArgumentNullException.ThrowIfNull(childBackendScopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(createRunId);
         ArgumentNullException.ThrowIfNull(cancellationFactory);
@@ -179,8 +170,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         _state = state;
         _reporter = reporter;
         _scheduledRunWorkGate = scheduledRunWorkGate;
-        _backendSelection = backendSelection;
-        _backendScopeFactory = backendScopeFactory;
+        _childBackendScopeFactory = childBackendScopeFactory;
         _logger = logger;
         _createRunId = createRunId;
         _cancellationFactory = cancellationFactory;
@@ -540,9 +530,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
             var request = new ProcessingRunRequest(_createRunId(), trigger);
             var cancellation = _cancellationFactory.Create(request, linkedCancellationToken);
-            var handle = new ActiveRun(request, cancellation, _backendSelection.Backend);
-            if (trigger == ProcessingRunTrigger.Scheduled
-                && handle.Backend == ProcessingBackendKind.ChildWorker)
+            var handle = new ActiveRun(request, cancellation);
+            if (trigger == ProcessingRunTrigger.Scheduled)
             {
                 handle.RegisterScheduledCancellation(
                     () => RequestScheduledChildTermination(handle));
@@ -600,11 +589,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             Task<ProcessingRunResult> execution;
             try
             {
-                var scope = _backendScopeFactory.CreateAsyncScope();
-                handle.SetBackendScope(scope);
-                var backend = scope.ServiceProvider.GetRequiredKeyedService<IProcessingRunBackend>(TemporaryProcessingBackendSelection.Validate(handle.Backend));
+                var scope = _childBackendScopeFactory.CreateAsyncScope();
+                handle.SetChildBackendScope(scope);
+                var backend = scope.ServiceProvider.GetRequiredService<IChildProcessingRunBackend>();
                 execution = backend.ExecuteAsync(handle.Request, _reporter, handle.Cancellation.Token)
-                    ?? throw new InvalidOperationException("The processing run executor returned no execution task.");
+                    ?? throw new InvalidOperationException("The child processing backend returned no execution task.");
             }
             catch (Exception failure)
             {
@@ -951,7 +940,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         try
         {
-            await handle.DisposeBackendScopeAsync().ConfigureAwait(false);
+            await handle.DisposeChildBackendScopeAsync().ConfigureAwait(false);
         }
         catch (Exception failure)
         {
@@ -1197,7 +1186,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         private int _cancellationFailureObserved;
         private int _shutdownRequested;
         private Task? _ownedExecution;
-        private AsyncServiceScope? _backendScope;
+        private AsyncServiceScope? _childBackendScope;
         private CancellationTokenRegistration? _scheduledCancellationRegistration;
         private readonly object _cancellationGate = new();
         private readonly object _childGate = new();
@@ -1221,17 +1210,14 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         public ActiveRun(
             ProcessingRunRequest request,
-            IProcessingRunCancellation cancellation,
-            ProcessingBackendKind backend)
+            IProcessingRunCancellation cancellation)
         {
             Request = request;
             Cancellation = cancellation;
-            Backend = backend;
         }
 
         public ProcessingRunRequest Request { get; }
         public IProcessingRunCancellation Cancellation { get; }
-        public ProcessingBackendKind Backend { get; }
         public TaskCompletionSource PreparationCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CleanupCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ExceptionDispatchInfo? ExecutionFailure { get; set; }
@@ -1261,21 +1247,21 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             }
         }
 
-        public void SetBackendScope(AsyncServiceScope scope)
+        public void SetChildBackendScope(AsyncServiceScope scope)
         {
-            if (_backendScope is not null)
+            if (_childBackendScope is not null)
             {
                 throw new InvalidOperationException("Backend scope ownership has already been established.");
             }
 
-            _backendScope = scope;
+            _childBackendScope = scope;
         }
 
-        public async ValueTask DisposeBackendScopeAsync()
+        public async ValueTask DisposeChildBackendScopeAsync()
         {
-            if (_backendScope is AsyncServiceScope scope)
+            if (_childBackendScope is AsyncServiceScope scope)
             {
-                _backendScope = null;
+                _childBackendScope = null;
                 await scope.DisposeAsync().ConfigureAwait(false);
             }
         }

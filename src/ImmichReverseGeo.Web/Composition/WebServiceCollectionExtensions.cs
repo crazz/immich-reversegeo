@@ -14,17 +14,8 @@ internal static class WebServiceCollectionExtensions
         this IServiceCollection services,
         ApplicationCompositionContext context)
     {
-        return services.AddWebComposition(context, ProcessingBackendKind.ChildWorker);
-    }
-
-    internal static IServiceCollection AddWebComposition(
-        this IServiceCollection services,
-        ApplicationCompositionContext context,
-        ProcessingBackendKind backend)
-    {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(context);
-        TemporaryProcessingBackendSelection.Validate(backend);
 
         services.AddSharedComposition(context);
 
@@ -44,7 +35,7 @@ internal static class WebServiceCollectionExtensions
             new CountBackedScheduledRunWorkGate(cancellationToken =>
                 sp.GetRequiredService<ImmichDbRepository>()
                     .GetUnprocessedCountAsync(cancellationToken)));
-        services.AddProcessingControlPlaneServices(backend);
+        services.AddProcessingControlPlaneServices();
         services.AddSingleton<SystemChildProcessFactory>();
         services.AddSingleton<IChildProcessFactory>(sp => sp.GetRequiredService<SystemChildProcessFactory>());
         services.AddSingleton(sp => new ChildWorkerLauncher(sp.GetRequiredService<IChildProcessFactory>()));
@@ -60,10 +51,8 @@ internal static class WebServiceCollectionExtensions
             sp.GetRequiredService<IChildWorkerLauncher>(),
             sp.GetRequiredService<ProcessingStateEventReporter>(),
             sp.GetRequiredService<TimeProvider>()));
-        services.AddSingleton(sp => new SelectedProcessingBackendStartupValidator(
-            sp,
-            sp.GetRequiredService<TemporaryProcessingBackendSelection>()));
-        services.AddHostedService(sp => sp.GetRequiredService<SelectedProcessingBackendStartupValidator>());
+        services.AddSingleton(sp => new ChildWorkerStartupValidator(sp));
+        services.AddHostedService(sp => sp.GetRequiredService<ChildWorkerStartupValidator>());
         return services;
     }
 }

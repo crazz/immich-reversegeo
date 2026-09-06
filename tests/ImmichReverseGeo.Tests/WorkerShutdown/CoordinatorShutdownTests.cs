@@ -283,7 +283,6 @@ public sealed class CoordinatorShutdownTests
                 State,
                 new ProcessingStateEventReporter(State),
                 global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
-                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 CreateRunId,

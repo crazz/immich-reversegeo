@@ -455,7 +455,6 @@ public sealed class WorkerShutdownFixtureTests
                 state,
                 reporter,
                 global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
-                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 Guid.NewGuid,

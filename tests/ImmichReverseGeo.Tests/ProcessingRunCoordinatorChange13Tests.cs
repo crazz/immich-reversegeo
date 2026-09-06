@@ -348,7 +348,7 @@ public sealed class ProcessingRunCoordinatorChange13Tests
         services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
         services.AddSingleton((SkippedAssetsRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
         services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
-        services.AddProcessingServices(ProcessingBackendKind.InProcess);
+        services.AddProcessingServicesForTests();
         return services;
     }
 
@@ -369,7 +369,6 @@ public sealed class ProcessingRunCoordinatorChange13Tests
                 State,
                 Reporter,
                 AlwaysHasWorkScheduledRunGate.Instance,
-                new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(Executor),
                 Logger,
                 NextId);

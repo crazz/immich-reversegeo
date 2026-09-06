@@ -23,7 +23,7 @@ public class ProcessingServiceRegistrationTests
         services.AddSingleton(places);
         services.AddSingleton((SkippedAssetsRepository)RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
         services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
-        services.AddProcessingServices(ProcessingBackendKind.InProcess);
+        services.AddProcessingServicesForTests();
         using var provider = services.BuildServiceProvider();
 
         var state = provider.GetRequiredService<ProcessingState>();

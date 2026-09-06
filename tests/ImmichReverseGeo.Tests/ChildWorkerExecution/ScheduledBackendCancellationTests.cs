@@ -11,7 +11,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
-namespace ImmichReverseGeo.Tests.WorkerBackendSelection;
+namespace ImmichReverseGeo.Tests.ChildWorkerExecution;
 
 [TestClass]
 [TestCategory("Change33")]
@@ -35,7 +35,6 @@ public sealed class ScheduledBackendCancellationTests
             () => scheduled.WaitAsync(Bound));
         Assert.AreEqual(stopping.Token, failure.CancellationToken, "pre-cancel-preserves-caller-token");
         Assert.AreEqual(0, fixture.Launcher.CallCount, "pre-cancel-no-child");
-        Assert.AreEqual(0, fixture.InProcess.CallCount, "pre-cancel-no-fallback");
         Assert.IsFalse(fixture.State.IsRunning, "pre-cancel-returns-idle");
         Assert.IsNull(fixture.State.LastError, "pre-cancel-no-error");
         Assert.IsNull(fixture.Coordinator.ActiveRequest, "pre-cancel-releases-after-cleanup");
@@ -81,7 +80,6 @@ public sealed class ScheduledBackendCancellationTests
                 () => scheduled.WaitAsync(Bound));
             Assert.AreEqual(stopping.Token, failure.CancellationToken, "resolution-cancel-preserves-caller-token");
             Assert.AreEqual(1, fixture.Launcher.CallCount, "resolution-cancel-one-child");
-            Assert.AreEqual(0, fixture.InProcess.CallCount, "resolution-cancel-no-fallback");
             Assert.AreEqual(1, launch.Process.DisposeCalls, "resolution-cancel-process-reaped-once");
             Assert.IsFalse(fixture.State.IsRunning, "resolution-cancel-returns-idle");
         }
@@ -130,7 +128,6 @@ public sealed class ScheduledBackendCancellationTests
                 () => scheduled.WaitAsync(Bound));
             Assert.AreEqual(stopping.Token, failure.CancellationToken, "accepted-cancel-preserves-caller-token");
             Assert.AreEqual(1, fixture.Launcher.CallCount, "accepted-cancel-one-child");
-            Assert.AreEqual(0, fixture.InProcess.CallCount, "accepted-cancel-no-fallback");
             Assert.AreEqual(ChildWorkerTerminationIntent.Stop, launch.Session.CancellationFacts!.FirstIntent, "accepted-cancel-one-owner");
             Assert.IsFalse(launch.Session.CancellationFacts.GraceExpired, "accepted-cancel-exits-within-grace");
             Assert.AreEqual(0, launch.Process.KillCalls, "accepted-cancel-no-containment-before-grace");
@@ -190,7 +187,6 @@ public sealed class ScheduledBackendCancellationTests
             Assert.IsNull(second.Session.CancellationFacts, "old-callback-cannot-stop-replacement");
             Assert.AreEqual(1, second.Input.Frames.Count, "replacement-receives-only-execute-command");
             Assert.AreEqual(2, fixture.Launcher.CallCount, "replacement-one-child-per-run");
-            Assert.AreEqual(0, fixture.InProcess.CallCount, "replacement-no-fallback");
         }
         finally
         {
@@ -251,20 +247,17 @@ public sealed class ScheduledBackendCancellationTests
         private ScheduledChildFixture(
             string root,
             ServiceProvider provider,
-            ScheduledChildLauncher launcher,
-            CountingInProcessExecutor inProcess)
+            ScheduledChildLauncher launcher)
         {
             _root = root;
             _provider = provider;
             Launcher = launcher;
-            InProcess = inProcess;
             Coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
             Reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
             State = provider.GetRequiredService<ProcessingState>();
         }
 
         internal ScheduledChildLauncher Launcher { get; }
-        internal CountingInProcessExecutor InProcess { get; }
         internal ProcessingRunCoordinator Coordinator { get; }
         internal ProcessingStateEventReporter Reporter { get; }
         internal ProcessingState State { get; }
@@ -278,7 +271,6 @@ public sealed class ScheduledBackendCancellationTests
                 "immich-reversegeo-change33-scheduled",
                 Guid.NewGuid().ToString("N"));
             var launcher = new ScheduledChildLauncher();
-            var inProcess = new CountingInProcessExecutor();
             try
             {
                 var services = new ServiceCollection();
@@ -287,8 +279,7 @@ public sealed class ScheduledBackendCancellationTests
                         CompositionEnvironment.Development,
                         root,
                         Path.Combine(root, "data"),
-                        Path.Combine(root, "config")),
-                    ProcessingBackendKind.ChildWorker);
+                        Path.Combine(root, "config")));
                 services.RemoveAll<IScheduledRunWorkGate>();
                 services.AddSingleton<IScheduledRunWorkGate>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
                 services.RemoveAll<TimeProvider>();
@@ -297,13 +288,10 @@ public sealed class ScheduledBackendCancellationTests
                 services.AddSingleton(builder);
                 services.RemoveAll<IChildWorkerLauncher>();
                 services.AddSingleton<IChildWorkerLauncher>(launcher);
-                services.RemoveAll<IProcessingRunExecutor>();
-                services.AddSingleton<IProcessingRunExecutor>(inProcess);
                 return new ScheduledChildFixture(
                     root,
                     services.BuildServiceProvider(validateScopes: true),
-                    launcher,
-                    inProcess);
+                    launcher);
             }
             catch
             {
@@ -413,23 +401,6 @@ public sealed class ScheduledBackendCancellationTests
         SessionInputStream Input,
         SessionTestProcess Process,
         ChildWorkerSession Session);
-
-    private sealed class CountingInProcessExecutor : IProcessingRunExecutor
-    {
-        private int _callCount;
-
-        internal int CallCount => Volatile.Read(ref _callCount);
-
-        public Task<ProcessingRunResult> ExecuteAsync(
-            ProcessingRunRequest request,
-            IProcessingEventReporter reporter,
-            CancellationToken cancellationToken)
-        {
-            Interlocked.Increment(ref _callCount);
-            return Task.FromException<ProcessingRunResult>(
-                new InvalidOperationException("Scheduled child selection must not fall back to in-process execution."));
-        }
-    }
 
     private sealed class ImmediateInvocationBuilder : IWorkerCommandInvocationBuilder
     {

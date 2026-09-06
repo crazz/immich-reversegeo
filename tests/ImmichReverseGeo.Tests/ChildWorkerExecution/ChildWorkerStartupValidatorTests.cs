@@ -7,11 +7,11 @@ using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
-namespace ImmichReverseGeo.Tests.WorkerBackendSelection;
+namespace ImmichReverseGeo.Tests.ChildWorkerExecution;
 
 [TestClass]
-[TestCategory("Change37")]
-public sealed class SelectedProcessingBackendStartupValidatorTests
+[TestCategory("Change38")]
+public sealed class ChildWorkerStartupValidatorTests
 {
     [TestMethod]
     public async Task ChildWorker_ValidatesLaunchFactsAndRuntimeManifestsWithoutResolvingBackend()
@@ -20,10 +20,8 @@ public sealed class SelectedProcessingBackendStartupValidatorTests
         try
         {
             var source = new CountingObservationSource(fixtureRoot);
-            using var provider = CreateProvider(ProcessingBackendKind.ChildWorker, source);
-            var validator = new SelectedProcessingBackendStartupValidator(
-                provider,
-                provider.GetRequiredService<TemporaryProcessingBackendSelection>());
+            using var provider = CreateProvider(source);
+            var validator = new ChildWorkerStartupValidator(provider);
 
             await validator.StartingAsync(CancellationToken.None);
 
@@ -45,10 +43,8 @@ public sealed class SelectedProcessingBackendStartupValidatorTests
         try
         {
             var source = new CountingObservationSource(fixtureRoot);
-            using var provider = CreateProvider(ProcessingBackendKind.ChildWorker, source);
-            var validator = new SelectedProcessingBackendStartupValidator(
-                provider,
-                provider.GetRequiredService<TemporaryProcessingBackendSelection>());
+            using var provider = CreateProvider(source);
+            var validator = new ChildWorkerStartupValidator(provider);
 
             var failure = await Assert.ThrowsExactlyAsync<InvalidOperationException>(
                 () => validator.StartingAsync(CancellationToken.None));
@@ -66,17 +62,6 @@ public sealed class SelectedProcessingBackendStartupValidatorTests
     }
 
     [TestMethod]
-    public async Task InProcess_DoesNotResolveChildLauncherOrInspectChildFiles()
-    {
-        using var provider = CreateProvider(ProcessingBackendKind.InProcess, source: null);
-        var validator = new SelectedProcessingBackendStartupValidator(
-            provider,
-            provider.GetRequiredService<TemporaryProcessingBackendSelection>());
-
-        await validator.StartingAsync(CancellationToken.None);
-    }
-
-    [TestMethod]
     public async Task ChildWorker_UsesResolvedAssemblyDirectoryWhenWorkingDirectoryDiffers()
     {
         var applicationDirectory = CreateFixture(includeRuntimeFiles: true);
@@ -85,10 +70,8 @@ public sealed class SelectedProcessingBackendStartupValidatorTests
         try
         {
             var source = new CountingObservationSource(applicationDirectory, workingDirectory);
-            using var provider = CreateProvider(ProcessingBackendKind.ChildWorker, source);
-            var validator = new SelectedProcessingBackendStartupValidator(
-                provider,
-                provider.GetRequiredService<TemporaryProcessingBackendSelection>());
+            using var provider = CreateProvider(source);
+            var validator = new ChildWorkerStartupValidator(provider);
 
             await validator.StartingAsync(CancellationToken.None);
         }
@@ -111,10 +94,8 @@ public sealed class SelectedProcessingBackendStartupValidatorTests
                 applicationDirectory,
                 workingDirectory,
                 Path.Combine(applicationDirectory, "ImmichReverseGeo.Web"));
-            using var provider = CreateProvider(ProcessingBackendKind.ChildWorker, source);
-            var validator = new SelectedProcessingBackendStartupValidator(
-                provider,
-                provider.GetRequiredService<TemporaryProcessingBackendSelection>());
+            using var provider = CreateProvider(source);
+            var validator = new ChildWorkerStartupValidator(provider);
 
             await validator.StartingAsync(CancellationToken.None);
         }
@@ -136,11 +117,9 @@ public sealed class SelectedProcessingBackendStartupValidatorTests
             using var host = new HostBuilder()
                 .ConfigureServices(services =>
                 {
-                    AddValidatorServices(services, ProcessingBackendKind.ChildWorker, source);
-                    services.AddSingleton(sp => new SelectedProcessingBackendStartupValidator(
-                        sp,
-                        sp.GetRequiredService<TemporaryProcessingBackendSelection>()));
-                    services.AddHostedService(sp => sp.GetRequiredService<SelectedProcessingBackendStartupValidator>());
+                    AddValidatorServices(services, source);
+                    services.AddSingleton(sp => new ChildWorkerStartupValidator(sp));
+                    services.AddHostedService(sp => sp.GetRequiredService<ChildWorkerStartupValidator>());
                     services.AddSingleton<IHostedService>(laterService);
                 })
                 .Build();
@@ -159,42 +138,30 @@ public sealed class SelectedProcessingBackendStartupValidatorTests
         }
     }
 
-    private static ServiceProvider CreateProvider(
-        ProcessingBackendKind backend,
-        CountingObservationSource? source)
+    private static ServiceProvider CreateProvider(CountingObservationSource source)
     {
         var services = new ServiceCollection();
-        AddValidatorServices(services, backend, source);
+        AddValidatorServices(services, source);
         return services.BuildServiceProvider(validateScopes: true);
     }
 
     private static void AddValidatorServices(
         IServiceCollection services,
-        ProcessingBackendKind backend,
-        CountingObservationSource? source)
+        CountingObservationSource source)
     {
-        services.AddSingleton(new TemporaryProcessingBackendSelection(backend));
-        services.AddKeyedScoped<IProcessingRunBackend>(
-            ProcessingBackendKind.InProcess,
-            (_, _) => throw new InvalidOperationException("in-process backend must stay lazy"));
-        services.AddKeyedScoped<IProcessingRunBackend>(
-            ProcessingBackendKind.ChildWorker,
-            (_, _) => throw new InvalidOperationException("child backend must stay lazy"));
-
-        if (source is not null)
-        {
-            services.AddSingleton<IWorkerCommandInvocationBuilder>(
-                new WorkerCommandInvocationBuilder(new WorkerCommandRuntimeFactsCapture(source)));
-            services.AddSingleton(
-                typeof(IChildProcessFactory),
-                RuntimeHelpers.GetUninitializedObject(typeof(SystemChildProcessFactory)));
-            services.AddSingleton(
-                typeof(IChildWorkerLauncher),
-                RuntimeHelpers.GetUninitializedObject(typeof(ChildWorkerLauncher)));
-            services.AddSingleton(
-                typeof(WorkerRunControlPlane),
-                RuntimeHelpers.GetUninitializedObject(typeof(WorkerRunControlPlane)));
-        }
+        services.AddScoped<IChildProcessingRunBackend>(
+            _ => throw new InvalidOperationException("child backend must stay lazy"));
+        services.AddSingleton<IWorkerCommandInvocationBuilder>(
+            new WorkerCommandInvocationBuilder(new WorkerCommandRuntimeFactsCapture(source)));
+        services.AddSingleton(
+            typeof(IChildProcessFactory),
+            RuntimeHelpers.GetUninitializedObject(typeof(SystemChildProcessFactory)));
+        services.AddSingleton(
+            typeof(IChildWorkerLauncher),
+            RuntimeHelpers.GetUninitializedObject(typeof(ChildWorkerLauncher)));
+        services.AddSingleton(
+            typeof(WorkerRunControlPlane),
+            RuntimeHelpers.GetUninitializedObject(typeof(WorkerRunControlPlane)));
     }
 
     private static string CreateFixture(bool includeRuntimeFiles)

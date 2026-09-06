@@ -11,7 +11,7 @@ using WorkerStateBridge = ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEven
 
 namespace ImmichReverseGeo.Web.WorkerFailureRecovery;
 
-/// <summary>Explicit child execution composition. Backend selection remains with the calling executor.</summary>
+/// <summary>Owns launch, supervision, and finality for one admitted child-worker run.</summary>
 internal sealed class WorkerRunControlPlane
 {
     private readonly IWorkerCommandInvocationBuilder _builder;

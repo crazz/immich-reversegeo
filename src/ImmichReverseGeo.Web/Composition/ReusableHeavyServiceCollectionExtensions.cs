@@ -16,16 +16,13 @@ internal static class ReusableHeavyServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddReusableHeavyOwners();
-        services.AddProcessingExecutionServices();
-        return services;
+        return services.AddReusableHeavyOwners();
     }
 
     internal static IServiceCollection AddReusableHeavyOwners(this IServiceCollection services)
     {
         ArgumentNullException.ThrowIfNull(services);
 
-        services.AddSingleton<AdministrativeAreaResolverService>();
         services.AddSingleton(sp => new OvertureDivisionCacheService(
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OvertureDivisionCacheService>>(),
             sp.GetRequiredService<StorageOptions>(),

@@ -625,7 +625,7 @@ public sealed class ProcessingRunLockExecutorTests
     public async Task WorkerHostRegistration_AddsOneSharedRunLockWhileExecutionRegistrationDoesNot()
     {
         ServiceCollection webServices = new();
-        webServices.AddProcessingExecutionServices();
+        webServices.AddWorkerExecutionComposition();
         Assert.IsFalse(webServices.Any(item => item.ServiceType == typeof(IProcessingRunLock)));
 
         await using NpgsqlDataSource dataSource = NpgsqlDataSource.Create(

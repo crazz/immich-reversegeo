@@ -9,7 +9,7 @@ using ImmichReverseGeo.Core.Processing;
 
 namespace ImmichReverseGeo.Web.Services;
 
-/// <summary>Projects the one admitted in-process event run into the singleton Web state.</summary>
+/// <summary>Projects one admitted processing run into the singleton Web state.</summary>
 public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 {
     private const int MaxPostTerminalDiagnosticLength = 256;

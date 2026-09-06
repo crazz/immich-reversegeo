@@ -51,6 +51,7 @@ public sealed class CoordinatorScheduledGateTests
         }
 
         Assert.AreEqual(0, fixture.Launcher.CallCount, "empty admission does not dispatch a child");
+        AssertNoChildBoundary(fixture, "local-busy-empty-admission");
     }
 
     [TestMethod]
@@ -88,6 +89,7 @@ public sealed class CoordinatorScheduledGateTests
             },
             LogMessages(fixture.State),
             "local no-work presentation order");
+        AssertNoChildBoundary(fixture, "local-no-work");
     }
 
     [TestMethod]
@@ -103,7 +105,7 @@ public sealed class CoordinatorScheduledGateTests
         await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
 
         Assert.AreEqual(0, gate.CallCount, "manual runs do not invoke the scheduled-only detector");
-        Assert.AreEqual(1, fixture.Launcher.CallCount, "manual run still uses the selected child backend");
+        Assert.AreEqual(1, fixture.Launcher.CallCount, "manual run uses the child backend");
     }
 
     [TestMethod]
@@ -144,6 +146,7 @@ public sealed class CoordinatorScheduledGateTests
         CollectionAssert.Contains(LogMessages(fixture.State), "Run cancelled.", "matching detector cancellation presentation");
         Assert.AreEqual(0, fixture.Launcher.CallCount, "blocked cancellation never dispatches a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "blocked cancellation resolves no forbidden graph");
+        AssertNoChildBoundary(fixture, "blocked-caller-cancellation");
     }
 
     [TestMethod]
@@ -169,6 +172,7 @@ public sealed class CoordinatorScheduledGateTests
         Assert.IsNull(fixture.Reporter.GetFinalizationReceipt(request), "foreign cancellation creates no worker finalization receipt");
         Assert.AreEqual(0, fixture.Launcher.CallCount, "foreign cancellation does not launch a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "foreign cancellation resolves no forbidden graph");
+        AssertNoChildBoundary(fixture, "foreign-cancellation");
     }
 
     [TestMethod]
@@ -212,6 +216,7 @@ public sealed class CoordinatorScheduledGateTests
         Assert.IsNull(fixture.Reporter.GetFinalizationReceipt(request!), "active cancellation creates no worker finalization receipt");
         Assert.AreEqual(0, fixture.Launcher.CallCount, "active cancellation does not launch a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "active cancellation resolves no forbidden graph");
+        AssertNoChildBoundary(fixture, "active-cancellation");
     }
 
     [TestMethod]
@@ -235,6 +240,14 @@ public sealed class CoordinatorScheduledGateTests
         Assert.IsNull(fixture.Reporter.GetFinalizationReceipt(request), "unexpected failure creates no worker finalization receipt");
         Assert.AreEqual(0, fixture.Launcher.CallCount, "unexpected failure does not launch a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "unexpected failure resolves no forbidden graph");
+        AssertNoChildBoundary(fixture, "unexpected-detector-failure");
+    }
+
+    private static void AssertNoChildBoundary(ScheduledCoordinatorFixture fixture, string scenario)
+    {
+        Assert.AreEqual(0, fixture.ChildScopeCreationAttempts, scenario + "-no-child-scope");
+        Assert.AreEqual(0, fixture.ChildBackendResolutionAttempts, scenario + "-no-child-backend-resolution");
+        Assert.AreEqual(0, fixture.ChildScopeDisposeAttempts, scenario + "-no-child-scope-disposal");
     }
 
     internal sealed record ProcessFixturePlan(string Scenario, bool Capture, string[] Options)
@@ -251,13 +264,16 @@ public sealed class CoordinatorScheduledGateTests
             string root,
             ServiceProvider provider,
             ProcessFixtureLauncher launcher,
-            ResolutionGuard guard)
+            ResolutionGuard guard,
+            ProcessingRunCoordinator coordinator,
+            ConnectedChildBackendScopeFactory childBoundary)
         {
             _root = root;
             _provider = provider;
             Launcher = launcher;
             Guard = guard;
-            Coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
+            Coordinator = coordinator;
+            ChildBoundary = childBoundary;
             Reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
             State = provider.GetRequiredService<ProcessingState>();
             Trigger = provider.GetRequiredService<IScheduledRunTrigger>();
@@ -265,7 +281,11 @@ public sealed class CoordinatorScheduledGateTests
 
         internal ProcessFixtureLauncher Launcher { get; }
         internal ResolutionGuard Guard { get; }
+        internal ConnectedChildBackendScopeFactory ChildBoundary { get; }
         internal int ForbiddenResolutionCount => Guard.Count;
+        internal int ChildScopeCreationAttempts => ChildBoundary.ScopeCreationAttempts;
+        internal int ChildBackendResolutionAttempts => ChildBoundary.BackendResolutionAttempts;
+        internal int ChildScopeDisposeAttempts => ChildBoundary.ScopeDisposeAttempts;
         internal ProcessingRunCoordinator Coordinator { get; }
         internal ProcessingStateEventReporter Reporter { get; }
         internal ProcessingState State { get; }
@@ -277,25 +297,20 @@ public sealed class CoordinatorScheduledGateTests
             var services = new ServiceCollection();
             var launcher = new ProcessFixtureLauncher(plans);
             var guard = new ResolutionGuard();
+            ConnectedChildBackendScopeFactory? childBoundary = null;
             try
             {
                 services.AddWebComposition(ApplicationCompositionContext.Create(
                     CompositionEnvironment.Development,
                     root,
                     Path.Combine(root, "data"),
-                    Path.Combine(root, "config")),
-                    ProcessingBackendKind.ChildWorker);
+                    Path.Combine(root, "config")));
                 services.RemoveAll<IScheduledRunWorkGate>();
                 services.AddSingleton<IScheduledRunWorkGate>(gate);
                 services.RemoveAll<IWorkerCommandInvocationBuilder>();
                 services.AddSingleton<IWorkerCommandInvocationBuilder, FixtureInvocationBuilder>();
                 services.RemoveAll<IChildWorkerLauncher>();
                 services.AddSingleton<IChildWorkerLauncher>(launcher);
-                services.RemoveAll<IProcessingRunExecutor>();
-                services.AddSingleton<IProcessingRunExecutor>(_ => guard.Reject<IProcessingRunExecutor>(nameof(IProcessingRunExecutor)));
-                services.RemoveAllKeyed<IProcessingRunBackend>(ProcessingBackendKind.InProcess);
-                services.AddKeyedScoped<IProcessingRunBackend>(ProcessingBackendKind.InProcess,
-                    (_, _) => guard.Reject<IProcessingRunBackend>(nameof(ProcessingBackendKind.InProcess)));
                 services.RemoveAll<AdministrativeAreaResolverService>();
                 services.AddSingleton<AdministrativeAreaResolverService>(_ => guard.Reject<AdministrativeAreaResolverService>(nameof(AdministrativeAreaResolverService)));
                 services.RemoveAll<ImmichReverseGeo.Overture.Services.OvertureDivisionsService>();
@@ -304,7 +319,27 @@ public sealed class CoordinatorScheduledGateTests
                 services.RemoveAll<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>();
                 services.AddSingleton<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>(_ =>
                     guard.Reject<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>("Gadm"));
-                return new ScheduledCoordinatorFixture(root, services.BuildServiceProvider(validateScopes: true), launcher, guard);
+                services.RemoveAll<ProcessingRunCoordinator>();
+                services.AddSingleton(sp =>
+                {
+                    childBoundary = new ConnectedChildBackendScopeFactory(
+                        sp.GetRequiredService<IServiceScopeFactory>());
+                    return new ProcessingRunCoordinator(
+                        sp.GetRequiredService<ProcessingState>(),
+                        sp.GetRequiredService<ProcessingStateEventReporter>(),
+                        sp.GetRequiredService<IScheduledRunWorkGate>(),
+                        childBoundary,
+                        Microsoft.Extensions.Logging.Abstractions.NullLogger<ProcessingRunCoordinator>.Instance);
+                });
+                var provider = services.BuildServiceProvider(validateScopes: true);
+                var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
+                return new ScheduledCoordinatorFixture(
+                    root,
+                    provider,
+                    launcher,
+                    guard,
+                    coordinator,
+                    childBoundary ?? throw new AssertFailedException("coordinator child scope boundary was not captured"));
             }
             catch
             {
@@ -368,6 +403,61 @@ public sealed class CoordinatorScheduledGateTests
             if (failures.Count > 0)
             {
                 throw new AggregateException("Scheduled coordinator fixture cleanup failed.", failures);
+            }
+        }
+    }
+
+    internal sealed class ConnectedChildBackendScopeFactory(IServiceScopeFactory inner) : IServiceScopeFactory
+    {
+        internal int ScopeCreationAttempts { get; private set; }
+        internal int BackendResolutionAttempts { get; private set; }
+        internal int ScopeDisposeAttempts { get; private set; }
+
+        public IServiceScope CreateScope()
+        {
+            ScopeCreationAttempts++;
+            return new ConnectedScope(this, inner.CreateScope());
+        }
+
+        private sealed class ConnectedScope(
+            ConnectedChildBackendScopeFactory owner,
+            IServiceScope innerScope) : IServiceScope, IAsyncDisposable
+        {
+            public IServiceProvider ServiceProvider { get; } =
+                new ConnectedServiceProvider(owner, innerScope.ServiceProvider);
+
+            public void Dispose()
+            {
+                owner.ScopeDisposeAttempts++;
+                innerScope.Dispose();
+            }
+
+            public async ValueTask DisposeAsync()
+            {
+                owner.ScopeDisposeAttempts++;
+                if (innerScope is IAsyncDisposable asyncDisposable)
+                {
+                    await asyncDisposable.DisposeAsync().ConfigureAwait(false);
+                }
+                else
+                {
+                    innerScope.Dispose();
+                }
+            }
+        }
+
+        private sealed class ConnectedServiceProvider(
+            ConnectedChildBackendScopeFactory owner,
+            IServiceProvider innerProvider) : IServiceProvider
+        {
+            public object? GetService(Type serviceType)
+            {
+                if (serviceType == typeof(IChildProcessingRunBackend))
+                {
+                    owner.BackendResolutionAttempts++;
+                }
+
+                return innerProvider.GetService(serviceType);
             }
         }
     }

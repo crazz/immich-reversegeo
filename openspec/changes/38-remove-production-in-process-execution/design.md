@@ -34,6 +34,8 @@ Delete the temporary enum, selection singleton, internal selection parameter/ove
 
 The singleton coordinator keeps its scope/factory boundary so child session, bridge, classifier state, and other run-owned objects remain scoped. After manual admission—or after a positive scheduled detector result—it creates one run scope, resolves exactly one unkeyed child backend, invokes it once with the existing request/reporter/token, awaits finality and scope disposal, then releases only the matching handle. Rejected, detector-zero, and pre-dispatch cancellation/failure paths create/resolve no backend scope. The coordinator does not inject the executor, launcher details, both implementations, an enumerable, or a generic selection service.
 
+The existing block-36 regression directly references the temporary selection, keyed backend registrations, and coordinator constructor. Preserve its accepted-empty scenario, observable lifecycle assertions, and no-effect guarantees while mechanically migrating that fixture wiring to the new non-keyed child contract. Do not retain deleted production types, add compatibility aliases, or recreate an obsolete selection layer merely to keep the old fixture syntax. Its archived planning artifacts remain unchanged.
+
 Alternative: keep `IProcessingRunBackend` with a single production implementation. Rejected because its neutral name and transition-era tests preserve the false possibility of another production execution strategy. Alternative: inject a singleton child adapter directly. Rejected because it can collapse established run ownership or construct child dependencies before detector gating.
 
 ### 3. Make executor ownership worker-only without deleting Lookup/Data dependencies

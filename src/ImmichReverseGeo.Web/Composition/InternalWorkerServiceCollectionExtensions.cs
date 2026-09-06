@@ -27,6 +27,7 @@ internal static class InternalWorkerServiceCollectionExtensions
 
         services.AddSharedComposition(context);
         services.AddReusableHeavyComposition();
+        services.AddWorkerExecutionComposition();
         return services;
     }
 
