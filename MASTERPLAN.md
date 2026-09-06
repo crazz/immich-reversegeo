@@ -685,7 +685,7 @@ The Web process can launch, observe, cancel, and recover from a child processing
 
 **Dependencies and sequencing** — Requires the Phase 2 coordinator/executor and Phase 3–4 protocol, launcher, bridge, cancellation, block-29 shutdown, block-30 failure classification, block-31 advisory lock, and block-32 process-verification gate. Block 34 exercises manual execution with explicit child selection; block 35 exercises eligible scheduled execution; block 36 proves an empty schedule resolves neither backend/geodata graph; block 37 changes only the internal production default to child while retaining a temporary explicit in-process fallback; block 38 removes the enum, selection singleton, keyed production switch, and production in-process adapter/registration. This block adds no Phase 6 deployment-mode surface.
 
-**OpenSpec** — [`33-add-temporary-worker-backend-switch`](openspec/changes/33-add-temporary-worker-backend-switch/).
+**OpenSpec** — [`33-add-temporary-worker-backend-switch`](openspec/changes/archive/2026-09-06-33-add-temporary-worker-backend-switch/).
 
 ### 34. `feat: execute manual runs in child worker`
 
