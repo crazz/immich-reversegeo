@@ -763,7 +763,7 @@ Preserve separate configuration boundaries: block 12's copied Enabled/Cron sched
 
 **Dependencies and sequencing** — Entry requires applied and passing blocks 33–37 plus the production-package rollout evidence from block 37: startup prerequisites, mandatory success/no-work/terminal outcomes, local rejection, advisory Busy/exit 3, cancellation/protocol/crash, and forced-kill raw evidence, exact state finality, complete process/stream/activity/scope/handle cleanup, safe retrigger, and zero in-process resolution. If any gate fails, stop and repair or revert block 37 before deleting its transition seam; do not partially apply block 38. Do not remove Lookup/Data heavy Web services owned by block 55 or enter block-39 test scope. After block 38, rollback is only a source/version revert followed by rebuild and redeploy of the prior application version; preserve diagnostics and never restore a runtime selector, code-only emergency seam, or per-run in-process fallback.
 
-**OpenSpec** — [`38-remove-production-in-process-execution`](openspec/changes/38-remove-production-in-process-execution/).
+**OpenSpec** — [`38-remove-production-in-process-execution`](openspec/changes/archive/2026-09-06-38-remove-production-in-process-execution/).
 
 ### 39. `test: assert Web processing path does not load geodata`
 
