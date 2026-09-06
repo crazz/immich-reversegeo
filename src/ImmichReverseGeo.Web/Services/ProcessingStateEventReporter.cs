@@ -19,6 +19,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
     private readonly Dictionary<Guid, IDisposable> _activities = [];
     private ProcessingRunRequest? _armedRequest;
     private ProcessingRunRequest? _lastReleasedRequest;
+    private ProcessingRunRequest? _predispatchFinalizationClaim;
     private bool _terminal;
     private DateTimeOffset? _startedAtUtc;
     private ProcessingProgress? _lastProgress;
@@ -62,6 +63,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 
             _armedRequest = request;
             _lastReleasedRequest = null;
+            _predispatchFinalizationClaim = null;
             _terminal = false;
             _startedAtUtc = null;
             _lastProgress = null;
@@ -115,6 +117,70 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         lock (_projectionGate)
         {
             return FinalizeUnderLock(request, result, origin, null);
+        }
+    }
+
+    internal bool TryFinalizePredispatch(
+        ProcessingRunRequest request,
+        ProcessingRunOutcome outcome,
+        string? safeFailureMessage)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (outcome is not ProcessingRunOutcome.Completed
+            and not ProcessingRunOutcome.Cancelled
+            and not ProcessingRunOutcome.Failed)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(outcome),
+                outcome,
+                "Predispatch finalization supports completed, cancelled, and failed outcomes only.");
+        }
+
+        if (outcome == ProcessingRunOutcome.Failed)
+        {
+            ArgumentException.ThrowIfNullOrWhiteSpace(safeFailureMessage);
+        }
+        else if (safeFailureMessage is not null)
+        {
+            throw new ArgumentException(
+                "Only failed predispatch finalization may include a failure message.",
+                nameof(safeFailureMessage));
+        }
+
+        lock (_projectionGate)
+        {
+            if (ReferenceEquals(_predispatchFinalizationClaim, request)
+                && _finalizationReceipt is null
+                && (ReferenceEquals(_armedRequest, request)
+                    || ReferenceEquals(_lastReleasedRequest, request)))
+            {
+                return true;
+            }
+
+            if (!ReferenceEquals(_armedRequest, request)
+                || _terminal
+                || _finalizationReceipt is not null)
+            {
+                return false;
+            }
+
+            _predispatchFinalizationClaim = request;
+            _terminal = true;
+            try
+            {
+                if (outcome == ProcessingRunOutcome.Completed)
+                {
+                    ProjectEligibility(0);
+                }
+
+                ProjectTerminal(outcome, safeFailureMessage, terminalEvent: null);
+                return true;
+            }
+            catch
+            {
+                _predispatchFinalizationClaim = null;
+                throw;
+            }
         }
     }
 
@@ -250,6 +316,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 
             try
             {
+                _predispatchFinalizationClaim = null;
                 _controlObserver?.Invoke("abandon", request);
                 foreach (var activity in _activities.Values)
                 {
@@ -361,11 +428,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
                 case RunStarted:
                     break;
                 case EligibilityDetermined eligibility:
-                    _eligibilityProjected = true;
-                    _state.StartRun(eligibility.EligibleCount);
-                    _state.AppendLog(eligibility.EligibleCount == 0
-                        ? "Run started — nothing to process, all assets already have location data."
-                        : $"Run started. {eligibility.EligibleCount} assets to process.");
+                    ProjectEligibility(eligibility.EligibleCount);
                     break;
                 case ProgressChanged progress:
                     _state.ApplyProgress(progress.Progress.UpdatedCount, progress.Progress.SkippedCount, progress.Progress.FailedCount);
@@ -386,6 +449,15 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         }
 
         return true;
+    }
+
+    private void ProjectEligibility(long eligibleCount)
+    {
+        _eligibilityProjected = true;
+        _state.StartRun(eligibleCount);
+        _state.AppendLog(eligibleCount == 0
+            ? "Run started — nothing to process, all assets already have location data."
+            : $"Run started. {eligibleCount} assets to process.");
     }
 
     private void ProjectLog(LogEmitted log)
@@ -433,13 +505,16 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 
         var receipt = new ProcessingRunFinalizationReceipt(request, result, origin);
         _finalizationReceipt = receipt;
-        ProjectTerminal(result, terminalEvent);
+        ProjectTerminal(result.Outcome, result.FailureMessage, terminalEvent);
         return new ProcessingRunFinalizationAttempt(
             ProcessingRunFinalizationDisposition.Committed,
             receipt);
     }
 
-    private void ProjectTerminal(ProcessingRunResult result, ProcessingEvent? terminalEvent)
+    private void ProjectTerminal(
+        ProcessingRunOutcome outcome,
+        string? failureMessage,
+        ProcessingEvent? terminalEvent)
     {
         ExceptionDispatchInfo? firstFailure = null;
         var progress = _lastProgress;
@@ -472,13 +547,13 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
                 Attempt(() => _beforeProjection(terminalEvent));
             }
 
-            if (result.Outcome == ProcessingRunOutcome.Cancelled)
+            if (outcome == ProcessingRunOutcome.Cancelled)
             {
                 Attempt(() => _state.AppendLog("Run cancelled."));
             }
-            else if (result.Outcome == ProcessingRunOutcome.Failed)
+            else if (outcome == ProcessingRunOutcome.Failed)
             {
-                Attempt(() => _state.IncrementError($"Fatal: {result.FailureMessage}"));
+                Attempt(() => _state.IncrementError($"Fatal: {failureMessage}"));
             }
 
             foreach (var activity in _activities.Values)
@@ -498,8 +573,8 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
                         updated,
                         skipped,
                         failed,
-                        result.Outcome,
-                        result.FailureMessage,
+                        outcome,
+                        failureMessage,
                         priorLastError,
                         completedAt,
                         priorLog);

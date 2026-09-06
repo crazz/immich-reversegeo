@@ -58,6 +58,7 @@ internal static class ProcessingServiceRegistration
             return new ProcessingRunCoordinator(
                 sp.GetRequiredService<ProcessingState>(),
                 sp.GetRequiredService<ProcessingStateEventReporter>(),
+                sp.GetRequiredService<IScheduledRunWorkGate>(),
                 sp.GetRequiredService<TemporaryProcessingBackendSelection>(),
                 sp.GetRequiredService<IServiceScopeFactory>(),
                 sp.GetService<Microsoft.Extensions.Logging.ILogger<ProcessingRunCoordinator>>()

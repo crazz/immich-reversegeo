@@ -24,6 +24,7 @@ public sealed class ProcessingCompositionTurn2Tests
         services.AddSingleton((ImmichDbRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichDbRepository)));
         services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
         services.AddSingleton((SkippedAssetsRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
+        services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
         services.AddProcessingServices();
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 
@@ -68,6 +69,7 @@ public sealed class ProcessingCompositionTurn2Tests
                 services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
                 services.AddSingleton((SkippedAssetsRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
                 services.AddSingleton<IProcessingRunCoordinatorObserver>(lifecycle);
+                services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
                 services.AddProcessingServices();
                 services.AddSingleton<IProcessingRunExecutor>(executor);
                 services.AddSingleton<IProcessingScheduleConfiguration>(new DisabledSchedule());

@@ -32,8 +32,8 @@ The initial implementation performs two exact counts for an eligible occurrence:
 
 Preserve block 13 order exactly:
 
-1. process-local admission creates the scheduled request and publishes the matching active handle and coordinator CTS;
-2. block 33's immutable backend value is frozen on that handle;
+1. process-local admission creates the scheduled request and coordinator CTS, then constructs the active handle with block 33's immutable backend value already captured;
+2. it publishes that fully formed matching active handle;
 3. `MarkPending()` runs immediately;
 4. the exact-request state adapter is armed;
 5. the scheduled gate runs once with the coordinator-owned token;
@@ -96,4 +96,3 @@ Block 35 adds functional eligible/empty/busy/cancel/failure coverage at the sche
 ## Audit Reconciliation
 
 Scope is scheduled accepted execution only and consumes the established detector/local-finalizer contracts and prerequisites; it neither changes manual routing nor makes child-worker the default. The default remains in-process until block 37. Its detector-zero local path emits no worker producer event or worker result, while a canonical advisory Busy remains a child terminal distinct from local admission rejection.
-

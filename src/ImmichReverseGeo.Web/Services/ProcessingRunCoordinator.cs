@@ -59,9 +59,12 @@ internal interface IProcessingRunCoordinatorObserver
 
 public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, IScheduledRunTrigger, IHostedService, IDisposable, IAsyncDisposable
 {
+    private const string ScheduledWorkDetectionFailureMessage = "Scheduled work detection failed.";
+
     private readonly object _admissionGate = new();
     private readonly ProcessingState _state;
     private readonly ProcessingStateEventReporter _reporter;
+    private readonly IScheduledRunWorkGate _scheduledRunWorkGate;
     private readonly TemporaryProcessingBackendSelection _backendSelection;
     private readonly IServiceScopeFactory _backendScopeFactory;
     private readonly ILogger<ProcessingRunCoordinator> _logger;
@@ -79,6 +82,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
+        IScheduledRunWorkGate scheduledRunWorkGate,
         TemporaryProcessingBackendSelection backendSelection,
         IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
@@ -87,6 +91,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         : this(
             state,
             reporter,
+            scheduledRunWorkGate,
             backendSelection,
             backendScopeFactory,
             logger,
@@ -101,6 +106,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
+        IScheduledRunWorkGate scheduledRunWorkGate,
         TemporaryProcessingBackendSelection backendSelection,
         IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
@@ -110,6 +116,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         : this(
             state,
             reporter,
+            scheduledRunWorkGate,
             backendSelection,
             backendScopeFactory,
             logger,
@@ -124,6 +131,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
+        IScheduledRunWorkGate scheduledRunWorkGate,
         TemporaryProcessingBackendSelection backendSelection,
         IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
@@ -134,6 +142,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         : this(
             state,
             reporter,
+            scheduledRunWorkGate,
             backendSelection,
             backendScopeFactory,
             logger,
@@ -148,6 +157,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
+        IScheduledRunWorkGate scheduledRunWorkGate,
         TemporaryProcessingBackendSelection backendSelection,
         IServiceScopeFactory backendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
@@ -159,6 +169,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(reporter);
+        ArgumentNullException.ThrowIfNull(scheduledRunWorkGate);
         ArgumentNullException.ThrowIfNull(backendSelection);
         ArgumentNullException.ThrowIfNull(backendScopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
@@ -167,6 +178,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         _state = state;
         _reporter = reporter;
+        _scheduledRunWorkGate = scheduledRunWorkGate;
         _backendSelection = backendSelection;
         _backendScopeFactory = backendScopeFactory;
         _logger = logger;
@@ -227,6 +239,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
 
         handle.ExecutionFailure?.Throw();
+        stoppingToken.ThrowIfCancellationRequested();
         return ScheduledTriggerResult.AcceptedAfterTerminal;
     }
 
@@ -562,7 +575,27 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             {
                 throw new InvalidOperationException("Processing event reporter is already armed.");
             }
-            ThrowIfShutdownCancellationRequested(handle);
+
+            if (handle.Request.Trigger == ProcessingRunTrigger.Scheduled)
+            {
+                if (!await PrepareScheduledDispatchAsync(handle).ConfigureAwait(false))
+                {
+                    return;
+                }
+
+                if (handle.Cancellation.Token.IsCancellationRequested)
+                {
+                    await FinalizePredispatchAsync(
+                        handle,
+                        ProcessingRunOutcome.Cancelled,
+                        safeFailureMessage: null).ConfigureAwait(false);
+                    return;
+                }
+            }
+            else
+            {
+                ThrowIfShutdownCancellationRequested(handle);
+            }
 
             Task<ProcessingRunResult> execution;
             try
@@ -591,6 +624,79 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         {
             handle.PreparationCompleted.TrySetResult();
         }
+    }
+
+    private async Task<bool> PrepareScheduledDispatchAsync(ActiveRun handle)
+    {
+        bool hasWork;
+        try
+        {
+            ThrowIfShutdownCancellationRequested(handle);
+            hasWork = await _scheduledRunWorkGate.HasWorkAsync(handle.Cancellation.Token).ConfigureAwait(false);
+            handle.Cancellation.Token.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException) when (handle.Cancellation.Token.IsCancellationRequested)
+        {
+            await FinalizePredispatchAsync(
+                handle,
+                ProcessingRunOutcome.Cancelled,
+                safeFailureMessage: null).ConfigureAwait(false);
+            return false;
+        }
+        catch (Exception failure)
+        {
+            ObserveRunFailure(handle, failure);
+            await FinalizePredispatchAsync(
+                handle,
+                ProcessingRunOutcome.Failed,
+                ScheduledWorkDetectionFailureMessage).ConfigureAwait(false);
+            return false;
+        }
+
+        if (hasWork)
+        {
+            return true;
+        }
+
+        await FinalizePredispatchAsync(
+            handle,
+            ProcessingRunOutcome.Completed,
+            safeFailureMessage: null).ConfigureAwait(false);
+        return false;
+    }
+
+    private async Task FinalizePredispatchAsync(
+        ActiveRun handle,
+        ProcessingRunOutcome outcome,
+        string? safeFailureMessage)
+    {
+        ExceptionDispatchInfo? projectionFailure = null;
+        try
+        {
+            if (!_reporter.TryFinalizePredispatch(handle.Request, outcome, safeFailureMessage))
+            {
+                throw new InvalidOperationException(
+                    "The processing event reporter rejected predispatch finalization for the active request.");
+            }
+        }
+        catch (Exception failure)
+        {
+            projectionFailure = ExceptionDispatchInfo.Capture(failure);
+            ObserveRunFailure(handle, failure);
+            if (!handle.IsShutdownRequested)
+            {
+                CleanupProjectionAfterFailure(handle, failure);
+            }
+        }
+        finally
+        {
+            if (handle.TryBeginCleanup())
+            {
+                await CompleteCleanupAsync(handle, projectionFailure).ConfigureAwait(false);
+            }
+        }
+
+        projectionFailure?.Throw();
     }
 
     private static void ThrowIfShutdownCancellationRequested(ActiveRun handle)

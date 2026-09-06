@@ -20,48 +20,28 @@ public sealed class ScheduledBackendCancellationTests
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
 
     [TestMethod]
-    public async Task ScheduledChild_PreCancelledTokenStopsExactSessionAndThrowsCallerTokenAfterCleanup()
+    [TestCategory("Change35")]
+    public async Task ScheduledChild_PreCancelledTokenFinalizesLocallyWithoutLaunchAndThrowsCallerTokenAfterCleanup()
     {
         var clock = new CancellationTestClock(SessionTestSupport.Start);
         await using var fixture = ScheduledChildFixture.Create(new ImmediateInvocationBuilder(), clock);
         using var stopping = new CancellationTokenSource();
         stopping.Cancel();
-        ScheduledChildLaunch? launch = null;
 
         Task<ScheduledTriggerResult> scheduled =
             ((IScheduledRunTrigger)fixture.Coordinator).TriggerScheduledAsync(stopping.Token);
-        try
-        {
-            launch = await fixture.Launcher.NextAsync().WaitAsync(Bound);
-            ChildWorkerTerminationRequest termination =
-                await launch.Session.FirstTerminationRequest.WaitAsync(Bound);
 
-            Assert.AreSame(launch.Request, fixture.Coordinator.ActiveRequest, "pre-cancel-exact-active-request");
-            Assert.AreEqual(ChildWorkerTerminationIntent.Stop, termination.Intent, "pre-cancel-stop-intent");
-            Assert.AreEqual(SessionTestSupport.Start, termination.Deadline.FirstStopAtUtc, "pre-cancel-first-deadline");
-
-            await ReadyAndAcceptAsync(launch);
-            await launch.Input.SecondFlush.WaitAsync(Bound);
-            EmitTerminal(launch, ProcessingRunOutcome.Cancelled);
-            ProcessingRunFinalizationReceipt receipt =
-                await fixture.WaitForReceiptAsync(launch.Request).WaitAsync(Bound);
-
-            Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome, "pre-cancel-normalized-terminal");
-            Assert.IsFalse(scheduled.IsCompleted, "pre-cancel-awaits-physical-finality");
-            launch.Process.Exit(130);
-
-            OperationCanceledException failure = await Assert.ThrowsAsync<OperationCanceledException>(
-                () => scheduled.WaitAsync(Bound));
-            Assert.AreEqual(stopping.Token, failure.CancellationToken, "pre-cancel-preserves-caller-token");
-            Assert.AreEqual(1, fixture.Launcher.CallCount, "pre-cancel-one-child");
-            Assert.AreEqual(0, fixture.InProcess.CallCount, "pre-cancel-no-fallback");
-            Assert.AreEqual(1, launch.Process.DisposeCalls, "pre-cancel-process-reaped-once");
-            Assert.IsNull(fixture.Coordinator.ActiveRequest, "pre-cancel-releases-after-cleanup");
-        }
-        finally
-        {
-            launch?.Process.Exit(130);
-        }
+        OperationCanceledException failure = await Assert.ThrowsAsync<OperationCanceledException>(
+            () => scheduled.WaitAsync(Bound));
+        Assert.AreEqual(stopping.Token, failure.CancellationToken, "pre-cancel-preserves-caller-token");
+        Assert.AreEqual(0, fixture.Launcher.CallCount, "pre-cancel-no-child");
+        Assert.AreEqual(0, fixture.InProcess.CallCount, "pre-cancel-no-fallback");
+        Assert.IsFalse(fixture.State.IsRunning, "pre-cancel-returns-idle");
+        Assert.IsNull(fixture.State.LastError, "pre-cancel-no-error");
+        Assert.IsNull(fixture.Coordinator.ActiveRequest, "pre-cancel-releases-after-cleanup");
+        IReadOnlyList<string> logs = fixture.State.GetRecentLog();
+        Assert.AreEqual(1, logs.Count(line => line.EndsWith("Run cancelled.", StringComparison.Ordinal)), "pre-cancel-one-cancellation");
+        Assert.AreEqual(1, logs.Count(line => line.EndsWith("Run complete. Processed=0 Skipped=0 Errors=0", StringComparison.Ordinal)), "pre-cancel-one-summary");
     }
 
     [TestMethod]
@@ -309,6 +289,8 @@ public sealed class ScheduledBackendCancellationTests
                         Path.Combine(root, "data"),
                         Path.Combine(root, "config")),
                     ProcessingBackendKind.ChildWorker);
+                services.RemoveAll<IScheduledRunWorkGate>();
+                services.AddSingleton<IScheduledRunWorkGate>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
                 services.RemoveAll<TimeProvider>();
                 services.AddSingleton(clock);
                 services.RemoveAll<IWorkerCommandInvocationBuilder>();

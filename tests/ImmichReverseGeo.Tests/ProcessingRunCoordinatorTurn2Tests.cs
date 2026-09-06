@@ -513,6 +513,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
         var coordinator = new ProcessingRunCoordinator(
             state,
             reporter,
+            AlwaysHasWorkScheduledRunGate.Instance,
             new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
             ProcessingRunBackendTestScopeFactory.Create(executor),
             logger,
@@ -1396,6 +1397,7 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
             Coordinator = new ProcessingRunCoordinator(
                 State,
                 Reporter,
+                AlwaysHasWorkScheduledRunGate.Instance,
                 new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(Executor),
                 Logger,

@@ -22,6 +22,7 @@ public class ProcessingServiceRegistrationTests
         var places = (ImmichReverseGeo.Overture.Services.OverturePlacesService)RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService));
         services.AddSingleton(places);
         services.AddSingleton((SkippedAssetsRepository)RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
+        services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
         services.AddProcessingServices();
         using var provider = services.BuildServiceProvider();
 

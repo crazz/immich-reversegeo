@@ -168,6 +168,7 @@ public sealed class SelectionProcessingBackendTests
         return new ProcessingRunCoordinator(
             provider.GetRequiredService<ProcessingState>(),
             provider.GetRequiredService<ProcessingStateEventReporter>(),
+            global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
             new TemporaryProcessingBackendSelection(backend),
             provider.GetRequiredService<IServiceScopeFactory>(),
             NullLogger<ProcessingRunCoordinator>.Instance,
@@ -194,6 +195,7 @@ public sealed class SelectionProcessingBackendTests
         services.AddSingleton((ImmichDbRepository)RuntimeHelpers.GetUninitializedObject(typeof(ImmichDbRepository)));
         services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
         services.AddSingleton((SkippedAssetsRepository)RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
+        services.AddSingleton<IScheduledRunWorkGate>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
         return services;
     }
 

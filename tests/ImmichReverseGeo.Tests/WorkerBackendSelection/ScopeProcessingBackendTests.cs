@@ -162,6 +162,7 @@ public sealed class ScopeProcessingBackendTests
         return new ProcessingRunCoordinator(
             provider.GetRequiredService<ProcessingState>(),
             provider.GetRequiredService<ProcessingStateEventReporter>(),
+            global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
             new TemporaryProcessingBackendSelection(backend),
             provider.GetRequiredService<IServiceScopeFactory>(),
             NullLogger<ProcessingRunCoordinator>.Instance,

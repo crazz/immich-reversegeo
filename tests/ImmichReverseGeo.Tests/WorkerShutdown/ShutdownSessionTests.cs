@@ -168,6 +168,7 @@ public sealed class ShutdownSessionTests
             var coordinator = new ProcessingRunCoordinator(
                 state,
                 new ProcessingStateEventReporter(state),
+                global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
                 new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(new ShutdownExecutor(invocation)),
                 NullLogger<ProcessingRunCoordinator>.Instance,

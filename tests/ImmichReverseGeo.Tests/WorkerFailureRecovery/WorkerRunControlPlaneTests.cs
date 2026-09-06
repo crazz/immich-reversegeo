@@ -142,6 +142,7 @@ public class WorkerRunControlPlaneTests
             Coordinator = new ProcessingRunCoordinator(
                 State,
                 Reporter,
+                global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
                 new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(Executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,

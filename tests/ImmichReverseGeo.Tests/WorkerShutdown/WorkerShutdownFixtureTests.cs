@@ -454,6 +454,7 @@ public sealed class WorkerShutdownFixtureTests
             var coordinator = new ProcessingRunCoordinator(
                 state,
                 reporter,
+                global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
                 new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,

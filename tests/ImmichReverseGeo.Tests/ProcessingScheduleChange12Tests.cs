@@ -425,6 +425,7 @@ public sealed class ProcessingScheduleChange12Tests
             return new ProcessingRunCoordinator(
                 state,
                 reporter,
+                AlwaysHasWorkScheduledRunGate.Instance,
                 new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,

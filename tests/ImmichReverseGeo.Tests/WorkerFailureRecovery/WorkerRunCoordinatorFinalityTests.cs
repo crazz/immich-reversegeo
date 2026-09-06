@@ -430,6 +430,7 @@ public sealed class WorkerRunCoordinatorFinalityTests
         var coordinator = new ProcessingRunCoordinator(
             state,
             reporter,
+            global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
             new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
             ProcessingRunBackendTestScopeFactory.Create(new GatedExecutor(invocation)),
             NullLogger<ProcessingRunCoordinator>.Instance,
@@ -786,6 +787,7 @@ public sealed class WorkerRunCoordinatorFinalityTests
         => new(
             state,
             reporter,
+            global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
             new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
             ProcessingRunBackendTestScopeFactory.Create(new GatedExecutor(invocations)),
             NullLogger<ProcessingRunCoordinator>.Instance,

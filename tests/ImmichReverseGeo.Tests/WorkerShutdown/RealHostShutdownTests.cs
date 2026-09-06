@@ -88,6 +88,7 @@ public class RealHostShutdownTests
             services.AddSingleton(sp => new ProcessingRunCoordinator(
                 sp.GetRequiredService<ProcessingState>(),
                 sp.GetRequiredService<ProcessingStateEventReporter>(),
+                global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
                 new TemporaryProcessingBackendSelection(ProcessingBackendKind.InProcess),
                 ProcessingRunBackendTestScopeFactory.Create(execution),
                 NullLogger<ProcessingRunCoordinator>.Instance,

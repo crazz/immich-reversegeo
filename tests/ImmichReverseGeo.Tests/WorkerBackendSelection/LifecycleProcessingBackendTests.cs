@@ -129,6 +129,7 @@ public sealed class LifecycleProcessingBackendTests
             services.AddSingleton<TimeProvider>(TimeProvider.System);
             services.AddSingleton<Microsoft.Extensions.Logging.ILogger<ProcessingRunCoordinator>>(
                 NullLogger<ProcessingRunCoordinator>.Instance);
+            services.AddSingleton<IScheduledRunWorkGate>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
             services.AddProcessingControlPlaneServices(ProcessingBackendKind.InProcess);
             services.AddSingleton(executor);
             services.AddSingleton<IProcessingRunExecutor>(executor);
