@@ -701,7 +701,7 @@ A duplicate manual trigger while admission or child cleanup is owned remains sil
 
 **Dependencies and sequencing** — Apply blocks 13, 25–30, and 33 first and re-read their exact source APIs/lifetimes. Keep block 33’s production default unchanged and select `ChildWorker` only through the authorized internal transition/test composition in this step. Add no AppConfig, settings, environment, CLI, endpoint, Dashboard, or other public mode toggle. Do not change cron, scheduled admission, scheduling eligibility, or empty-schedule detection; scheduled routing remains outside block 34.
 
-**OpenSpec** — [`34-execute-manual-runs-in-child-worker`](openspec/changes/34-execute-manual-runs-in-child-worker/).
+**OpenSpec** — [`34-execute-manual-runs-in-child-worker`](openspec/changes/archive/2026-09-06-34-execute-manual-runs-in-child-worker/).
 
 ### 35. `feat: execute scheduled runs in child worker`
 
