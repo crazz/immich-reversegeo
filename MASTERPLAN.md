@@ -749,7 +749,7 @@ Preserve separate configuration boundaries: block 12's copied Enabled/Cron sched
 
 **Dependencies and sequencing** — Entry requires applied and passing blocks 33–35, the separately owned passing block-36 regression, and Phase 4 launcher/protocol/cancellation/classifier/advisory-lock integration coverage. Do not advance to block 38 until default-child startup and every mandatory terminal path preserve exact state finality, leave no orphan process, stream, activity, backend scope, or coordinator handle, allow safe retrigger, and show no in-process/geodata resolution. Roll back block 37 when packaged child prerequisites fail, mandatory default/process coverage fails, lifecycle/state parity regresses, cleanup leaks owned resources, or a supported environment cannot start the child; rollback is a source-level revert or explicit internal composition change followed by rebuild/redeploy, never a public runtime control or per-run fallback. Preserve failure evidence before rollback. After stable default-path evidence, block 38 removes the enum/switch, emergency seam, and production in-process adapter/registration.
 
-**OpenSpec** — [`37-make-child-worker-default-backend`](openspec/changes/37-make-child-worker-default-backend/).
+**OpenSpec** — [`37-make-child-worker-default-backend`](openspec/changes/archive/2026-09-06-37-make-child-worker-default-backend/).
 
 ### 38. `cleanup: remove production in-process execution`
 
