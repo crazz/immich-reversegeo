@@ -73,6 +73,20 @@ Test notes:
 - If you call `dotnet test` directly, use `--project <path-to-csproj>` with this repo's MTP setup.
 - The root `.runsettings` excludes `Integration` and `Performance` by default; use `integration.runsettings` for explicit integration runs while still excluding `Performance`.
 
+### Agent test runs
+
+Use the reusable `scripts/run-tests.mjs` runner for agent test work:
+
+- `npm run agent:test` — full default suite.
+- `npm run agent:test -- --filter 'FullyQualifiedName~AcceptedEmptyScheduledWorkerGatingTests'` — focused Web tests; `--project <csproj>` selects another test project.
+- `npm run agent:test:integration` — explicit Web integration tests; an optional filter can select a mixed integration-enabled matrix. Performance stays excluded.
+
+The runner fixes the working directory and locale, saves each attempt separately under `_out/agent-tests/`, streams output, and preserves failures including an empty test selection. Keep the existing normal test commands available.
+
+For Codex on this macOS workspace, use `exec_command` with `sandbox_permissions: "require_escalated"` for these .NET runs: the default sandbox previously stalled the CLI before output. The script cannot grant permissions. Resume a running command through `write_stdin` with the returned session ID; do not start a duplicate run. Only the current .NET owner runs build/test/publish commands; transfer ownership after processes finish and files are stable.
+
+Use the `immich-reversegeo-tests` skill when available. Its local instructions are at `~/.codex/skills/immich-reversegeo-tests/SKILL.md` (or under `$CODEX_HOME/skills`); pass the resolved location and the needed filter to delegated agents even if the skill is not yet listed in their active catalog. Report the executed command, test outcome, exit code, duration, and log path. Reuse the runner across changes; verify it again after relevant runner, SDK, or environment changes.
+
 ---
 
 ## Key Architecture
