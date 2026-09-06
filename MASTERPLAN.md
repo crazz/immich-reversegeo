@@ -643,7 +643,7 @@ Compose `HostOptions.ShutdownTimeout` around the remaining portion of block 28's
 
 **Dependencies and sequencing** — Requires Phase 3 worker composition and exit-code mapping; complements but does not replace Phase 2 local coordinator arbitration; block 32 verifies process-level behavior.
 
-**OpenSpec** — [31-add-postgresql-advisory-run-lock](openspec/changes/31-add-postgresql-advisory-run-lock/)
+**OpenSpec** — [31-add-postgresql-advisory-run-lock](openspec/changes/archive/2026-09-06-31-add-postgresql-advisory-run-lock/)
 
 ### 32. `test: cover cross-process run exclusion`
 
