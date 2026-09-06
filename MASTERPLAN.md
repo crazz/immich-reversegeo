@@ -735,7 +735,7 @@ Preserve separate configuration boundaries: block 12's copied Enabled/Cron sched
 
 **Dependencies and sequencing** — Requires block 35; block 26 is prerequisite evidence only for the finalized process boundary that this regression proves is never entered, and its fixture executable is not launched and complements block 1 without duplicating its broader in-process collaborator assertions. Re-read the applied block-35 seam names during implementation; preserve the behavioral boundary if names differ, and do not modify block 35 or block 37.
 
-**OpenSpec** — [`36-verify-empty-schedules-do-not-launch-workers`](openspec/changes/36-verify-empty-schedules-do-not-launch-workers/).
+**OpenSpec** — [`36-verify-empty-schedules-do-not-launch-workers`](openspec/changes/archive/2026-09-06-36-verify-empty-schedules-do-not-launch-workers/).
 
 ### 37. `feat: make child worker the default backend`
 
