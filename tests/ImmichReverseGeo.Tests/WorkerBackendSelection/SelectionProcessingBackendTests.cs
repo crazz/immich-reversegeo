@@ -17,7 +17,7 @@ public sealed class SelectionProcessingBackendTests
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(10);
 
     [TestMethod]
-    public void AddProcessingServices_DefaultSelectionIsInProcess()
+    public void AddProcessingServices_DefaultSelectionIsChildWorker()
     {
         var services = CreateProductionRegistrationServices();
         services.AddProcessingServices();
@@ -25,7 +25,7 @@ public sealed class SelectionProcessingBackendTests
         using var provider = services.BuildServiceProvider(validateScopes: true);
         var selection = provider.GetRequiredService<TemporaryProcessingBackendSelection>();
 
-        Assert.AreEqual(ProcessingBackendKind.InProcess, selection.Backend, "default-selection");
+        Assert.AreEqual(ProcessingBackendKind.ChildWorker, selection.Backend, "default-selection");
     }
 
     [TestMethod]
@@ -113,6 +113,62 @@ public sealed class SelectionProcessingBackendTests
     }
 
     [TestMethod]
+    public async Task AddProcessingServices_DefaultChildWorkerDispatchesManualAndEligibleScheduledRequests()
+    {
+        var services = CreateProductionRegistrationServices();
+        var scheduledGate = new PositiveScheduledWorkGate();
+        services.AddProcessingServices();
+        ReplaceKeyedBackend(
+            services,
+            ProcessingBackendKind.InProcess,
+            (_, _) => throw new InvalidOperationException("The unselected in-process backend must stay lazy."));
+        ReplaceKeyedBackend(
+            services,
+            ProcessingBackendKind.ChildWorker,
+            (sp, _) => new DefaultSelectionChildWorkerBackend(
+                sp.GetRequiredService<SelectionDispatchRecorder>(),
+                sp.GetRequiredService<PositiveScheduledWorkGate>()));
+        services.AddSingleton<IScheduledRunWorkGate>(scheduledGate);
+        services.AddSingleton(scheduledGate);
+        services.AddSingleton(sp => new SelectionDispatchRecorder(
+            sp.GetRequiredService<ProcessingState>(),
+            sp.GetRequiredService<ProcessingStateEventReporter>(),
+            gateExecution: false));
+
+        await using var provider = services.BuildServiceProvider(validateScopes: true);
+        var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
+        var recorder = provider.GetRequiredService<SelectionDispatchRecorder>();
+        var reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
+        var state = provider.GetRequiredService<ProcessingState>();
+
+        Assert.AreEqual(ProcessingBackendKind.ChildWorker,
+            provider.GetRequiredService<TemporaryProcessingBackendSelection>().Backend,
+            "ordinary-composition-default");
+        Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await coordinator.TriggerManualAsync(), "manual-admission");
+        await coordinator.WaitForActiveRunAsync().WaitAsync(TestTimeout);
+        Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal,
+            await ((IScheduledRunTrigger)coordinator).TriggerScheduledAsync(CancellationToken.None),
+            "scheduled-admission");
+        await coordinator.WaitForActiveRunAsync().WaitAsync(TestTimeout);
+
+        var invocations = recorder.Invocations.ToArray();
+        Assert.AreEqual(2, invocations.Length, "one-backend-per-admitted-trigger");
+        Assert.AreEqual(1, scheduledGate.Calls, "eligible-scheduled-detector-once");
+        CollectionAssert.AreEqual(new[] { 0, 1 }, scheduledGate.CallsWhenChildBackendConstructed.ToArray(), "detector-before-selected-backend-resolution");
+        CollectionAssert.AreEqual(
+            new[] { ProcessingRunTrigger.Manual, ProcessingRunTrigger.Scheduled },
+            invocations.Select(invocation => invocation.Request.Trigger).ToArray(),
+            "manual-then-scheduled-dispatch");
+        Assert.IsTrue(invocations.All(invocation => invocation.Backend == ProcessingBackendKind.ChildWorker), "selected-child-only");
+        Assert.IsTrue(invocations.All(invocation => ReferenceEquals(reporter, invocation.Reporter)), "shared-reporter");
+        Assert.IsTrue(invocations.All(invocation => invocation.Token.CanBeCanceled), "coordinator-cancellation-tokens");
+        Assert.AreEqual(2, recorder.CreatedFor(ProcessingBackendKind.ChildWorker), "one-child-scope-per-admitted-request");
+        Assert.AreEqual(0, recorder.CreatedFor(ProcessingBackendKind.InProcess), "unselected-in-process-never-created");
+        Assert.IsFalse(state.IsRunning, "state-finally-idle");
+        Assert.IsNull(coordinator.ActiveRequest, "matching-handle-released");
+    }
+
+    [TestMethod]
     public async Task AddProcessingServices_PreservesSingletonCoordinatorControlPlaneAliases()
     {
         var services = CreateProductionRegistrationServices();
@@ -184,6 +240,22 @@ public sealed class SelectionProcessingBackendTests
         return backend == ProcessingBackendKind.InProcess
             ? ProcessingBackendKind.ChildWorker
             : ProcessingBackendKind.InProcess;
+    }
+
+    private static void ReplaceKeyedBackend(
+        IServiceCollection services,
+        ProcessingBackendKind backend,
+        Func<IServiceProvider, object?, IProcessingRunBackend> factory)
+    {
+        foreach (var descriptor in services
+                     .Where(descriptor => descriptor.ServiceType == typeof(IProcessingRunBackend)
+                         && Equals(descriptor.ServiceKey, backend))
+                     .ToArray())
+        {
+            services.Remove(descriptor);
+        }
+
+        services.AddKeyedScoped<IProcessingRunBackend>(backend, factory);
     }
 
     private static ServiceCollection CreateProductionRegistrationServices()
@@ -287,6 +359,28 @@ public sealed class SelectionProcessingBackendTests
         }
     }
 
+    private sealed class DefaultSelectionChildWorkerBackend : IProcessingRunBackend
+    {
+        private readonly SelectionDispatchRecorder _recorder;
+
+        public DefaultSelectionChildWorkerBackend(
+            SelectionDispatchRecorder recorder,
+            PositiveScheduledWorkGate scheduledGate)
+        {
+            _recorder = recorder;
+            scheduledGate.RecordChildBackendConstruction();
+            recorder.Created(ProcessingBackendKind.ChildWorker);
+        }
+
+        public Task<ProcessingRunResult> ExecuteAsync(
+            ProcessingRunRequest request,
+            ImmichReverseGeo.Core.Processing.IProcessingEventReporter reporter,
+            CancellationToken cancellationToken)
+        {
+            return _recorder.ExecuteAsync(ProcessingBackendKind.ChildWorker, request, reporter, cancellationToken);
+        }
+    }
+
     private sealed class SelectionCancellationFactory : IProcessingRunCancellationFactory
     {
         private int _createCount;
@@ -308,5 +402,24 @@ public sealed class SelectionProcessingBackendTests
         public CancellationToken Token => source.Token;
         public void Cancel() => source.Cancel();
         public void Dispose() => source.Dispose();
+    }
+
+    private sealed class PositiveScheduledWorkGate : IScheduledRunWorkGate
+    {
+        public int Calls { get; private set; }
+
+        public List<int> CallsWhenChildBackendConstructed { get; } = [];
+
+        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Calls++;
+            return Task.FromResult(true);
+        }
+
+        public void RecordChildBackendConstruction()
+        {
+            CallsWhenChildBackendConstructed.Add(Calls);
+        }
     }
 }

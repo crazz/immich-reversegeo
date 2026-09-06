@@ -187,7 +187,7 @@ public sealed class WorkerEventStateBridgeLifecycleTests
     public async Task RegisteredFactory_UsesTheExactAdmittedSingletonAdapterWithoutOpeningReporterSession()
     {
         var services = new ServiceCollection();
-        services.AddProcessingControlPlaneServices();
+        services.AddProcessingControlPlaneServices(ProcessingBackendKind.InProcess);
         await using var provider = services.BuildServiceProvider();
         var state = provider.GetRequiredService<ProcessingState>();
         var adapter = provider.GetRequiredService<ProcessingStateEventReporter>();

@@ -20,6 +20,8 @@ Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 
 Wait for the run to finish before starting another pass. Work that does not observe cancellation, such as a synchronous native operation, can take longer to stop. Stopping does not undo location updates already written.
 
+Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. The Dashboard and Logs continue to show the run while that worker is active.
+
 ## Lookup
 
 Use the Lookup page when you want to test a coordinate before running a full processing pass.

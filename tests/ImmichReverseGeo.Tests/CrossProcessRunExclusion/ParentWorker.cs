@@ -49,6 +49,7 @@ internal sealed class ParentWorker : IAsyncDisposable
     private bool _eventSignalDisposed;
     private bool _resourcesReleased;
     private bool _finalityObservedBeforeDetach;
+    private bool _coordinatorStopAccepted;
     private int _activeSinkCallbacks;
 
     private ParentWorker(
@@ -90,6 +91,10 @@ internal sealed class ParentWorker : IAsyncDisposable
     internal IReadOnlyList<string> ProjectedLog => State.GetRecentLog().Skip(_logStartIndex).ToArray();
     internal ChildWorkerCompletionObservation Completion => _completion ?? throw new InvalidOperationException("The Change32 worker has not completed.");
     internal ChildWorkerCancellationFacts? CancellationFacts => _session?.CancellationFacts;
+    // The raw session facts can include a disposal-origin stop after process exit.
+    // This view records only a successful explicit StopCooperatively claim by the harness.
+    internal ChildWorkerCancellationFacts? CoordinatorCancellationFacts =>
+        _coordinatorStopAccepted ? CancellationFacts : null;
     internal int TreeKillCalls { get; private set; }
     internal int LauncherCalls { get; private set; }
     internal int ProcessDisposeCalls => (_process as CapturedChildProcess)?.DisposeCalls ?? 0;
@@ -266,7 +271,7 @@ internal sealed class ParentWorker : IAsyncDisposable
         Assert.IsFalse(State.IsRunning, "Projected processing state must be idle after terminal finality.");
         Assert.IsNull(State.CurrentActivity, "Projected activities must be closed after terminal finality.");
         Assert.IsNull(_fixture.Coordinator.ActiveRequest, "The matching coordinator handle must be released after finality.");
-        AssertCapturedControllerInput(CancellationFacts is { RequestAccepted: true }
+        AssertCapturedControllerInput(_coordinatorStopAccepted
             ? WorkerProtocolV1.CancelType
             : WorkerProtocolV1.ExecuteType);
         return completion;
@@ -323,6 +328,7 @@ internal sealed class ParentWorker : IAsyncDisposable
     internal void StopCooperatively()
     {
         Assert.IsNotNull(_fixture.Coordinator.StopActiveRun(), "The active owner must receive the correlated coordinator stop.");
+        _coordinatorStopAccepted = true;
     }
 
     internal async ValueTask<ChildWorkerLaunchResult> LaunchAsync(

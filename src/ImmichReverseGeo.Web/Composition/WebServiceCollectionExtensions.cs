@@ -14,7 +14,7 @@ internal static class WebServiceCollectionExtensions
         this IServiceCollection services,
         ApplicationCompositionContext context)
     {
-        return services.AddWebComposition(context, ProcessingBackendKind.InProcess);
+        return services.AddWebComposition(context, ProcessingBackendKind.ChildWorker);
     }
 
     internal static IServiceCollection AddWebComposition(
@@ -60,6 +60,10 @@ internal static class WebServiceCollectionExtensions
             sp.GetRequiredService<IChildWorkerLauncher>(),
             sp.GetRequiredService<ProcessingStateEventReporter>(),
             sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton(sp => new SelectedProcessingBackendStartupValidator(
+            sp,
+            sp.GetRequiredService<TemporaryProcessingBackendSelection>()));
+        services.AddHostedService(sp => sp.GetRequiredService<SelectedProcessingBackendStartupValidator>());
         return services;
     }
 }

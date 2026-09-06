@@ -11,6 +11,8 @@
 ## Runtime
 
 - Start the latest image with persistent `/data` and `/config` mounts
+- Confirm the published Web artifact contains `ImmichReverseGeo.Web.dll` with its matching `.runtimeconfig.json` and `.deps.json`; the processing worker runs from this same image and assembly
+- The temporary explicit in-process processing selection is a source-level rebuild/revert seam only. Do not document or add a runtime toggle; remove the seam in Change 38.
 - Verify the web UI loads
 - Verify `/healthz` if a health endpoint is available in the release being tested
 - Verify existing settings survive a container update

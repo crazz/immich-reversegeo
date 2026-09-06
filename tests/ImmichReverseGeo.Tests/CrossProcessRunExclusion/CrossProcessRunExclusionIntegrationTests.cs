@@ -111,10 +111,10 @@ public sealed class CrossProcessRunExclusionIntegrationTests
 
         Assert.AreEqual(130, (await owner.CompleteAsync(CancellationToken.None)).ExitCode);
         Assert.AreEqual(0, owner.TreeKillCalls, "Cooperative cancellation must not terminate the process tree.");
-        ChildWorkerCancellationFacts cancellation = owner.CancellationFacts
+        ChildWorkerCancellationFacts cancellation = owner.CoordinatorCancellationFacts
             ?? throw new AssertFailedException("The correlated coordinator stop must publish cancellation facts.");
         Assert.AreEqual(ChildWorkerTerminationIntent.Stop, cancellation.FirstIntent);
-        Assert.IsTrue(cancellation.RequestAccepted, "The child must accept the captured cancel for its exact run.");
+        Assert.IsTrue(cancellation.RequestAccepted, "The child must accept the exact captured execute request before cancellation.");
         Assert.IsFalse(cancellation.GraceExpired);
         Assert.IsFalse(cancellation.KillAttempted);
         Assert.IsNull(cancellation.KillOutcome);
@@ -155,7 +155,7 @@ public sealed class CrossProcessRunExclusionIntegrationTests
             receipt.Result.FailureMessage,
             decision.Category.ToString().ToLowerInvariant(),
             "The actual control-plane receipt must expose the typed safe crash category.");
-        Assert.IsNull(owner.CancellationFacts?.FirstIntent, "Direct process death must not be classified as coordinator cancellation.");
+        Assert.IsNull(owner.CoordinatorCancellationFacts?.FirstIntent, "Direct process death must not be classified as coordinator cancellation.");
         AssertCanonicalEventOrder(owner, expectEligibility: true, expectProtectedOperation: true, expectTerminal: false);
         await @case.AssertKeyFreeAsync(CancellationToken.None);
 

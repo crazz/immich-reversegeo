@@ -63,6 +63,10 @@ Read the message in Logs and check the container's available memory and applicat
 
 If a cleanup or communication warning appears after a completed result, the recorded result stays unchanged. The warning does not undo saved changes. Do not paste raw worker output, database credentials, or connection strings into a support report.
 
+## The service fails to start after an update
+
+Immich ReverseGeo verifies the files needed to start its processing worker when the service starts. Pull or rebuild the complete application image, then recreate the service. Do not copy only the application DLL into an existing container or volume. Check the container logs for the startup message before trying to process assets.
+
 ## A run says another run is active or its lock connection was lost
 
 If the message says another run is active, wait for that run to finish before trying again. If it says the lock connection was lost, check the connection to the PostgreSQL database and wait until the affected run has finished.

@@ -11,7 +11,7 @@ internal static class ProcessingServiceRegistration
 {
     internal static IServiceCollection AddProcessingServices(this IServiceCollection services)
     {
-        return services.AddProcessingServices(ProcessingBackendKind.InProcess);
+        return services.AddProcessingServices(ProcessingBackendKind.ChildWorker);
     }
 
     internal static IServiceCollection AddProcessingServices(
@@ -26,7 +26,7 @@ internal static class ProcessingServiceRegistration
 
     internal static IServiceCollection AddProcessingControlPlaneServices(this IServiceCollection services)
     {
-        return services.AddProcessingControlPlaneServices(ProcessingBackendKind.InProcess);
+        return services.AddProcessingControlPlaneServices(ProcessingBackendKind.ChildWorker);
     }
 
     internal static IServiceCollection AddProcessingControlPlaneServices(

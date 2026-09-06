@@ -25,7 +25,7 @@ public sealed class ProcessingCompositionTurn2Tests
         services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
         services.AddSingleton((SkippedAssetsRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
         services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
-        services.AddProcessingServices();
+        services.AddProcessingServices(ProcessingBackendKind.InProcess);
         using var provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
 
         var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
@@ -70,7 +70,7 @@ public sealed class ProcessingCompositionTurn2Tests
                 services.AddSingleton((SkippedAssetsRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
                 services.AddSingleton<IProcessingRunCoordinatorObserver>(lifecycle);
                 services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
-                services.AddProcessingServices();
+                services.AddProcessingServices(ProcessingBackendKind.InProcess);
                 services.AddSingleton<IProcessingRunExecutor>(executor);
                 services.AddSingleton<IProcessingScheduleConfiguration>(new DisabledSchedule());
                 services.RemoveAll<ProcessingBackgroundService>();

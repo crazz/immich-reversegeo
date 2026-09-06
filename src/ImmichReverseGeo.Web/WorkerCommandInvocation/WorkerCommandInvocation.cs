@@ -82,12 +82,17 @@ internal sealed class WorkerCommandInvocation
 {
     internal const string TrustedWebAssemblyIdentity = "ImmichReverseGeo.Web";
 
-    private WorkerCommandInvocation(ChildProcessStartDescriptor descriptor)
+    private WorkerCommandInvocation(
+        ChildProcessStartDescriptor descriptor,
+        string applicationAssemblyPath)
     {
         Descriptor = descriptor;
+        ApplicationAssemblyPath = applicationAssemblyPath;
     }
 
     internal ChildProcessStartDescriptor Descriptor { get; }
+
+    internal string ApplicationAssemblyPath { get; }
 
     public override string ToString()
     {
@@ -197,7 +202,9 @@ internal sealed class WorkerCommandInvocation
             arguments,
             facts.WorkingDirectory!,
             ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion);
-        return WorkerCommandInvocationResolution.Succeed(new WorkerCommandInvocation(descriptor));
+        return WorkerCommandInvocationResolution.Succeed(new WorkerCommandInvocation(
+            descriptor,
+            facts.EntryAssemblyLocation!));
     }
 }
 
