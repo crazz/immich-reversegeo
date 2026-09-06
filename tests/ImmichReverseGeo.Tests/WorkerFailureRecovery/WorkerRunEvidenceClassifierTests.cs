@@ -41,6 +41,42 @@ public class WorkerRunEvidenceClassifierTests
     }
 
     [TestMethod]
+    public void Classify_CommittedFailedInfrastructureExitAcceptsCodeFiveAndPreservesOtherTerminalContracts()
+    {
+        var failed = Result(Request, ProcessingRunOutcome.Failed);
+        var accepted = WorkerRunEvidenceClassifier.Classify(Evidence(Request, Completion(Request, 5)) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(Request, failed, ProcessingRunFinalizationOrigin.WorkerTerminal)
+        });
+
+        AssertDecision(accepted, ProcessingRunOutcome.Failed, WorkerRunAuthority.CommittedReceipt, WorkerRunFailureCategory.Terminal, failed);
+        Assert.AreEqual(WorkerRunAnomaly.None, accepted.Anomalies, "failed-infrastructure-exit-with-healthy-drains-is-consistent");
+
+        var completed = Result(Request, ProcessingRunOutcome.Completed);
+        var completedWithInfrastructureExit = WorkerRunEvidenceClassifier.Classify(Evidence(Request, Completion(Request, 5)) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(Request, completed, ProcessingRunFinalizationOrigin.WorkerTerminal)
+        });
+        var failedWithSuccessfulExit = WorkerRunEvidenceClassifier.Classify(Evidence(Request, Completion(Request, 0)) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(Request, failed, ProcessingRunFinalizationOrigin.WorkerTerminal)
+        });
+        var failedWithOutputExit = WorkerRunEvidenceClassifier.Classify(Evidence(Request, Completion(Request, 6)) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(Request, failed, ProcessingRunFinalizationOrigin.WorkerTerminal),
+            ManagedExit = WorkerProcessExitFact.OutputTransport()
+        });
+
+        AssertDecision(completedWithInfrastructureExit, ProcessingRunOutcome.Completed, WorkerRunAuthority.CommittedReceipt, WorkerRunFailureCategory.Terminal, completed);
+        AssertDecision(failedWithSuccessfulExit, ProcessingRunOutcome.Failed, WorkerRunAuthority.CommittedReceipt, WorkerRunFailureCategory.Terminal, failed);
+        AssertDecision(failedWithOutputExit, ProcessingRunOutcome.Failed, WorkerRunAuthority.CommittedReceipt, WorkerRunFailureCategory.Terminal, failed);
+        Assert.IsTrue(completedWithInfrastructureExit.Anomalies.HasFlag(WorkerRunAnomaly.TerminalExitMismatch), "completed-code-five-remains-inconsistent");
+        Assert.IsTrue(failedWithSuccessfulExit.Anomalies.HasFlag(WorkerRunAnomaly.TerminalExitMismatch), "failed-code-zero-remains-inconsistent");
+        Assert.AreEqual(WorkerRunAnomaly.TerminalExitMismatch | WorkerRunAnomaly.OutputTransport,
+            failedWithOutputExit.Anomalies, "failed-output-exit-remains-a-terminal-mismatch-and-transport-anomaly");
+    }
+
+    [TestMethod]
     public void Classify_CommittedReceiptsFromBothOriginsRemainAuthoritative()
     {
         foreach (var origin in new[] { ProcessingRunFinalizationOrigin.WorkerTerminal, ProcessingRunFinalizationOrigin.ControlPlane })
@@ -53,6 +89,85 @@ public class WorkerRunEvidenceClassifierTests
 
             AssertDecision(decision, ProcessingRunOutcome.Completed, WorkerRunAuthority.CommittedReceipt, WorkerRunFailureCategory.Terminal, result);
         }
+    }
+
+    [TestMethod]
+    [TestCategory("Change32")]
+    public void Classify_ControlPlaneCrashReceiptDoesNotImpersonateWorkerTerminal()
+    {
+        var result = Result(Request, ProcessingRunOutcome.Failed);
+        var missingTerminal = new WorkerProtocolFailure(
+            WorkerProtocolFailureCode.InvalidLifecycle,
+            "The accepted run is missing its terminal event.",
+            WorkerProtocolFailureDetail.MissingTerminal);
+        var decision = WorkerRunEvidenceClassifier.Classify(Evidence(
+            Request,
+            Completion(
+                Request,
+                137,
+                firstProtocol: new ChildWorkerProtocolObservation.ProtocolFailure(missingTerminal))) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(
+                Request,
+                result,
+                ProcessingRunFinalizationOrigin.ControlPlane),
+            CleanupFailed = true,
+            ShutdownRequested = true
+        });
+
+        AssertDecision(
+            decision,
+            ProcessingRunOutcome.Failed,
+            WorkerRunAuthority.CommittedReceipt,
+            WorkerRunFailureCategory.Terminal,
+            result);
+        Assert.AreEqual(
+            WorkerRunAnomaly.CleanupFailure | WorkerRunAnomaly.ShutdownAfterTerminal,
+            decision.Anomalies,
+            "control-plane-receipt-keeps-independent-late-anomalies");
+        Assert.IsFalse(
+            decision.Anomalies.HasFlag(WorkerRunAnomaly.TerminalExitMismatch),
+            "control-plane-result-is-not-worker-exit-testimony");
+        Assert.IsFalse(
+            decision.Anomalies.HasFlag(WorkerRunAnomaly.ProtocolAfterTerminal),
+            "missing-worker-terminal-is-not-post-terminal-protocol");
+        Assert.IsFalse(
+            decision.Anomalies.HasFlag(WorkerRunAnomaly.ProjectionAfterTerminal),
+            "control-plane-commit-is-not-worker-terminal-projection");
+    }
+
+    [TestMethod]
+    [TestCategory("Change32")]
+    public void Classify_WorkerTerminalReceiptStillReportsContradictoryCrashEvidence()
+    {
+        var result = Result(Request, ProcessingRunOutcome.Failed);
+        var missingTerminal = new WorkerProtocolFailure(
+            WorkerProtocolFailureCode.InvalidLifecycle,
+            "The accepted run is missing its terminal event.",
+            WorkerProtocolFailureDetail.MissingTerminal);
+        var decision = WorkerRunEvidenceClassifier.Classify(Evidence(
+            Request,
+            Completion(
+                Request,
+                137,
+                firstProtocol: new ChildWorkerProtocolObservation.ProtocolFailure(missingTerminal))) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(
+                Request,
+                result,
+                ProcessingRunFinalizationOrigin.WorkerTerminal)
+        });
+
+        AssertDecision(
+            decision,
+            ProcessingRunOutcome.Failed,
+            WorkerRunAuthority.CommittedReceipt,
+            WorkerRunFailureCategory.Terminal,
+            result);
+        Assert.AreEqual(
+            WorkerRunAnomaly.TerminalExitMismatch | WorkerRunAnomaly.ProtocolAfterTerminal,
+            decision.Anomalies,
+            "worker-terminal-origin-keeps-exit-and-protocol-contradictions");
     }
 
     [TestMethod]
@@ -313,6 +428,85 @@ public class WorkerRunEvidenceClassifierTests
 
         Assert.AreSame(reason, facts.FirstContainmentReason, "first-containment-reason-retained");
         AssertDecision(decision, ProcessingRunOutcome.Failed, WorkerRunAuthority.ControlPlane, WorkerRunFailureCategory.InconsistentExit, null);
+    }
+
+    [TestMethod]
+    [TestCategory("Change32")]
+    public void Classify_CommittedTerminalInputCloseFailurePreservesTerminalAndAddsInputTransport()
+    {
+        foreach (var origin in new[]
+                 {
+                     ProcessingRunFinalizationOrigin.WorkerTerminal,
+                     ProcessingRunFinalizationOrigin.ControlPlane
+                 })
+        {
+            var result = Result(Request, ProcessingRunOutcome.Completed);
+            var reason = ChildWorkerFaultContainmentReason.TerminalInputCloseFailed.Instance;
+            var facts = Cancellation(
+                ChildWorkerTerminationIntent.FaultContainment,
+                graceExpired: true,
+                killAttempted: true,
+                killOutcome: ChildProcessKillOutcome.Requested,
+                firstContainmentReason: reason);
+            var decision = WorkerRunEvidenceClassifier.Classify(Evidence(Request, Completion(Request, 137)) with
+            {
+                Receipt = new ProcessingRunFinalizationReceipt(Request, result, origin),
+                Cancellation = facts
+            });
+
+            Assert.AreSame(reason, facts.FirstContainmentReason, $"{origin}-terminal-input-close-reason-retained");
+            AssertDecision(
+                decision,
+                ProcessingRunOutcome.Completed,
+                WorkerRunAuthority.CommittedReceipt,
+                WorkerRunFailureCategory.Terminal,
+                result);
+            var expected = WorkerRunAnomaly.InputTransport | WorkerRunAnomaly.ForcedTermination;
+            if (origin == ProcessingRunFinalizationOrigin.WorkerTerminal)
+            {
+                expected |= WorkerRunAnomaly.TerminalExitMismatch;
+            }
+            Assert.AreEqual(
+                expected,
+                decision.Anomalies,
+                $"{origin}-committed-result-keeps-close-and-containment-anomalies");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change32")]
+    public void Classify_IndependentTerminalInputCloseFailureAddsInputTransportWithoutReplacingFirstCause()
+    {
+        var firstReason = ChildWorkerFaultContainmentReason.SinkFailure.Instance;
+        var closeFailure = new ChildWorkerTerminalPreventingObservation(
+            ChildWorkerStopRequest.Capture(TimeProvider.System),
+            ChildWorkerFaultContainmentReason.TerminalInputCloseFailed.Instance);
+        var facts = Cancellation(
+            ChildWorkerTerminationIntent.FaultContainment,
+            firstContainmentReason: firstReason);
+        var result = Result(Request, ProcessingRunOutcome.Completed);
+
+        var decision = WorkerRunEvidenceClassifier.Classify(Evidence(Request, Completion(Request, 0)) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(
+                Request,
+                result,
+                ProcessingRunFinalizationOrigin.ControlPlane),
+            Cancellation = facts,
+            TerminalInputCloseFailure = closeFailure
+        });
+
+        Assert.AreSame(firstReason, facts.FirstContainmentReason);
+        Assert.AreSame(
+            ChildWorkerFaultContainmentReason.TerminalInputCloseFailed.Instance,
+            closeFailure.Reason);
+        AssertDecision(
+            decision,
+            ProcessingRunOutcome.Completed,
+            WorkerRunAuthority.CommittedReceipt,
+            WorkerRunFailureCategory.Terminal,
+            result);
+        Assert.IsTrue(decision.Anomalies.HasFlag(WorkerRunAnomaly.InputTransport));
     }
 
     [TestMethod]

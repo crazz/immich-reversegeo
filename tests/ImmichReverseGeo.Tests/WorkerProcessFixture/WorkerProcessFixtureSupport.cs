@@ -683,5 +683,12 @@ internal sealed class DirectFixture
 public sealed class WorkerProcessFixtureCleanup
 {
     [AssemblyCleanup]
-    public static Task ReapRemainingAsync() => WorkerProcessFixtureLease.ReapRemainingAsync();
+    public static async Task ReapRemainingAsync()
+    {
+        // The independent Change32 harness retains real child handles as well. Start both
+        // reapers before observing either result so one failure cannot orphan the other tree.
+        await Task.WhenAll(
+            WorkerProcessFixtureLease.ReapRemainingAsync(),
+            global::ImmichReverseGeo.Tests.CrossProcessRunExclusion.CrossProcessRunExclusionCase.ReapRemainingAsync());
+    }
 }

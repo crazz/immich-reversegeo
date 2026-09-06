@@ -1566,7 +1566,10 @@ public sealed partial class ChildWorkerLaunchingTests
 
     private sealed class RecordingInputStream : MemoryStream
     {
+        private readonly TaskCompletionSource _disposeStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
         internal int DisposeCalls { get; private set; }
+        internal Task DisposeStarted => _disposeStarted.Task;
         internal int WriteCalls { get; private set; }
         internal int FlushCalls { get; private set; }
         internal bool ThrowAfterWrite { get; set; }
@@ -1608,6 +1611,7 @@ public sealed partial class ChildWorkerLaunchingTests
         public override ValueTask DisposeAsync()
         {
             DisposeCalls++;
+            _disposeStarted.TrySetResult();
             return base.DisposeAsync();
         }
     }

@@ -73,6 +73,15 @@ internal abstract class ChildWorkerFaultContainmentReason
         }
     }
 
+    internal sealed class TerminalInputCloseFailed : ChildWorkerFaultContainmentReason
+    {
+        internal static TerminalInputCloseFailed Instance { get; } = new();
+
+        private TerminalInputCloseFailed()
+        {
+        }
+    }
+
     internal sealed class ProtocolFailure : ChildWorkerFaultContainmentReason
     {
         internal ProtocolFailure(WorkerProtocolFailure failure)

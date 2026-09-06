@@ -376,7 +376,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 "The child fault observation clock does not match the active run clock.");
         }
 
-        if (_reporter.GetFinalizationReceipt(handle.Request) is not null)
+        if (_reporter.GetFinalizationReceipt(handle.Request) is not null
+            && observation.Reason is not ChildWorkerFaultContainmentReason.TerminalInputCloseFailed)
         {
             return;
         }

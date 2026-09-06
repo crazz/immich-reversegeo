@@ -93,6 +93,7 @@ internal sealed class WorkerRunFinalizer
                 Receipt = _reporter.GetFinalizationReceipt(_request),
                 BridgeObservation = bridge.FirstObservation,
                 Cancellation = session.CancellationFacts,
+                TerminalInputCloseFailure = GetTerminalInputCloseFailure(session),
                 ShutdownRequested = shutdownRequested()
             };
             var decision = WorkerRunEvidenceClassifier.Classify(evidence);
@@ -121,6 +122,7 @@ internal sealed class WorkerRunFinalizer
             {
                 Receipt = receipt,
                 Cancellation = session.CancellationFacts,
+                TerminalInputCloseFailure = GetTerminalInputCloseFailure(session),
                 CleanupFailed = cleanupFailed,
                 ShutdownRequested = shutdownRequested()
             };
@@ -170,18 +172,82 @@ private async Task ObserveTransportAsync(ChildWorkerSession session)
 
     private async Task MonitorFaultAsync(ChildWorkerSession session, Action<ChildWorkerTerminalPreventingObservation> requestContainment)
     {
-        await Task.WhenAny(session.FirstTerminalPreventingObservation, session.EvidenceFinality).ConfigureAwait(false);
-        if (session.PhysicalExitConfirmed.IsCompleted || session.EvidenceFinality.IsCompleted
-            || !session.FirstTerminalPreventingObservation.IsCompletedSuccessfully)
+        var firstFaultHandled = false;
+        var closeFailureHandled = false;
+        while (true)
         {
-            return;
+            if (!firstFaultHandled && session.FirstTerminalPreventingObservation.IsCompleted)
+            {
+                firstFaultHandled = true;
+                if (session.FirstTerminalPreventingObservation.IsCompletedSuccessfully)
+                {
+                    var observation = await session.FirstTerminalPreventingObservation.ConfigureAwait(false);
+                    if (_reporter.GetFinalizationReceipt(_request) is null
+                        && observation.Reason is not ChildWorkerFaultContainmentReason.TerminalInputCloseFailed
+                        && !session.PhysicalExitConfirmed.IsCompleted
+                        && !session.EvidenceFinality.IsCompleted)
+                    {
+                        State.AdvanceTransport(WorkerRunTransportPhase.Draining);
+                        requestContainment(observation);
+                    }
+                }
+            }
+
+            if (!closeFailureHandled && session.TerminalInputCloseFailure.IsCompleted)
+            {
+                closeFailureHandled = true;
+                if (session.TerminalInputCloseFailure.IsCompletedSuccessfully
+                    && !session.PhysicalExitConfirmed.IsCompleted
+                    && !session.EvidenceFinality.IsCompleted)
+                {
+                    var closeFailure = await session.TerminalInputCloseFailure.ConfigureAwait(false);
+                    State.AdvanceTransport(WorkerRunTransportPhase.Draining);
+                    requestContainment(closeFailure);
+                }
+            }
+
+            if (session.PhysicalExitConfirmed.IsCompleted || session.EvidenceFinality.IsCompleted)
+            {
+                return;
+            }
+
+            if (!firstFaultHandled && !closeFailureHandled)
+            {
+                await Task.WhenAny(
+                    session.FirstTerminalPreventingObservation,
+                    session.TerminalInputCloseFailure,
+                    session.PhysicalExitConfirmed,
+                    session.EvidenceFinality).ConfigureAwait(false);
+            }
+            else if (!firstFaultHandled)
+            {
+                await Task.WhenAny(
+                    session.FirstTerminalPreventingObservation,
+                    session.PhysicalExitConfirmed,
+                    session.EvidenceFinality).ConfigureAwait(false);
+            }
+            else if (!closeFailureHandled)
+            {
+                await Task.WhenAny(
+                    session.TerminalInputCloseFailure,
+                    session.PhysicalExitConfirmed,
+                    session.EvidenceFinality).ConfigureAwait(false);
+            }
+            else
+            {
+                await Task.WhenAny(
+                    session.PhysicalExitConfirmed,
+                    session.EvidenceFinality).ConfigureAwait(false);
+            }
         }
-        var observation = await session.FirstTerminalPreventingObservation.ConfigureAwait(false);
-        if (_reporter.GetFinalizationReceipt(_request) is null)
-        {
-            State.AdvanceTransport(WorkerRunTransportPhase.Draining);
-            requestContainment(observation);
-        }
+    }
+
+    private static ChildWorkerTerminalPreventingObservation? GetTerminalInputCloseFailure(
+        ChildWorkerSession session)
+    {
+        return session.TerminalInputCloseFailure.IsCompletedSuccessfully
+            ? session.TerminalInputCloseFailure.Result
+            : null;
     }
 
     private ProcessingRunFinalizationReceipt Commit(WorkerRunDecision decision)

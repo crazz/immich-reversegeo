@@ -24,7 +24,7 @@ internal sealed partial class ChildWorkerSession
     private Task<ChildWorkerCancellationResult>? _stopTask;
     private Task? _cancelDeliveryTask;
     private TaskCompletionSource? _deadlineObserverSettled;
-    private Task? _containmentInputCloseTask;
+    private Task? _serializedInputCloseTask;
     private Task? _inputCloseTask;
     private Task? _resourceDisposalTask;
     private bool _processExitConfirmed;
@@ -642,15 +642,15 @@ internal sealed partial class ChildWorkerSession
             await deadlineObserver.ConfigureAwait(false);
         }
 
-        Task? containmentInputClose;
+        Task? serializedInputClose;
         lock (_resourceGate)
         {
-            containmentInputClose = _containmentInputCloseTask;
+            serializedInputClose = _serializedInputCloseTask;
         }
 
-        if (containmentInputClose is not null)
+        if (serializedInputClose is not null)
         {
-            await containmentInputClose.ConfigureAwait(false);
+            await serializedInputClose.ConfigureAwait(false);
         }
         else
         {
@@ -694,11 +694,21 @@ internal sealed partial class ChildWorkerSession
         Volatile.Write(ref _inputClosed, 1);
         CancelWithoutFailure(_inputLifetimeCancellation);
         CancelWithoutFailure(_controlCancellation);
+        return StartSerializedInputClose();
+    }
+
+    private void StartTerminalInputClose()
+    {
+        Volatile.Write(ref _inputClosed, 1);
+        _ = StartSerializedInputClose();
+    }
+
+    private Task StartSerializedInputClose()
+    {
         lock (_resourceGate)
         {
-            _containmentInputCloseTask ??=
-                CloseInputAfterWriterAsync();
-            return _containmentInputCloseTask;
+            _serializedInputCloseTask ??= CloseInputAfterWriterAsync();
+            return _serializedInputCloseTask;
         }
     }
 
@@ -723,8 +733,31 @@ internal sealed partial class ChildWorkerSession
         lock (_resourceGate)
         {
             Volatile.Write(ref _inputClosed, 1);
-            _inputCloseTask ??= DisposeStreamAsync(_standardInputStream);
+            _inputCloseTask ??= CloseStandardInputAsync();
             return _inputCloseTask;
+        }
+    }
+
+    private async Task CloseStandardInputAsync()
+    {
+        try
+        {
+            await _standardInputStream.DisposeAsync().ConfigureAwait(false);
+        }
+        catch
+        {
+            if (!PhysicalExitConfirmed.IsCompleted && HasAcceptedTerminal())
+            {
+                PublishTerminalInputCloseFailure();
+            }
+        }
+    }
+
+    private bool HasAcceptedTerminal()
+    {
+        lock (_observationGate)
+        {
+            return _terminal is not null;
         }
     }
 

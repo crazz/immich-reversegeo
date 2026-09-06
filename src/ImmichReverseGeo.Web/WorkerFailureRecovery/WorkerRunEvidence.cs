@@ -129,6 +129,7 @@ internal sealed record WorkerRunEvidence
     internal ProcessingRunFinalizationReceipt? Receipt { get; init; }
     internal WorkerEventStateBridgeObservation? BridgeObservation { get; init; }
     internal ChildWorkerCancellationFacts? Cancellation { get; init; }
+    internal ChildWorkerTerminalPreventingObservation? TerminalInputCloseFailure { get; init; }
     // Only an owned managed source may supply this. Never reconstruct it from Completion.ExitCode.
     internal WorkerProcessExitFact? ManagedExit { get; init; }
     internal bool CleanupFailed { get; init; }

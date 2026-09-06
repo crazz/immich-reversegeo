@@ -98,6 +98,27 @@ public sealed partial class ChildWorkerLaunchingTests
     }
 
     [TestMethod]
+    public async Task Protocol_WrongCorrelatedTerminalDoesNotStartNormalInputClose()
+    {
+        var request = CreateRequest();
+        var otherRunId = Guid.Parse("22222222-2222-2222-2222-222222222222");
+        var (process, sink, session) = await LaunchByteSessionAsync(921, request);
+
+        process.StandardOutput.Write(Encoding.UTF8.GetBytes(CompletedFrame(otherRunId)));
+        var startup = await session.Startup;
+
+        Assert.IsInstanceOfType<ChildWorkerStartupObservation.ProtocolFailure>(startup, "wrong-terminal: pre-ready-correlation-rejected");
+        Assert.AreEqual(0, sink.AcceptCalls, "wrong-terminal: no-sink-callback");
+        Assert.AreEqual(0, process.StandardInput.DisposeCalls, "wrong-terminal: invalid-terminal-cannot-start-normal-input-close");
+
+        process.StandardOutput.Complete();
+        process.StandardError.Complete();
+        process.Exit(2);
+        await session.Completion;
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
     [DataRow("sequence-gap", 1, WorkerProtocolFailureCode.InvalidSequence)]
     [DataRow("sequence-replay", 2, WorkerProtocolFailureCode.InvalidSequence)]
     [DataRow("duplicate-ready", 1, WorkerProtocolFailureCode.InvalidLifecycle)]
@@ -208,6 +229,8 @@ public sealed partial class ChildWorkerLaunchingTests
 
         process.StandardOutput.Write(Encoding.UTF8.GetBytes(ReadyFrame() + RunStartedFrame(request.RunId) + EligibilityFrame(request.RunId) + CompletedFrame(request.RunId)));
         Assert.IsInstanceOfType<ChildWorkerStartupObservation.SinkFailed>(await session.Startup, "ready-sink-failure: startup-before-exit");
+        await process.StandardInput.DisposeStarted;
+        Assert.AreEqual(1, process.StandardInput.DisposeCalls, "ready-sink-failure: accepted-terminal-starts-input-close-without-terminal-callback");
         process.StandardError.Write(DrainSentinel.ToArray());
         process.StandardOutput.Complete();
         process.StandardError.Complete();

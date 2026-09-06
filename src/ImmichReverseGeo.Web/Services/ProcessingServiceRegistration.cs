@@ -75,7 +75,8 @@ internal static class ProcessingServiceRegistration
             sp.GetRequiredService<IProcessingRunDelay>(),
             sp.GetRequiredService<TimeProvider>(),
             sp.GetService<IProcessingRunLock>(),
-            sp.GetService<WorkerProcessExitOutcomeAccumulator>()));
+            sp.GetService<WorkerProcessExitOutcomeAccumulator>(),
+            sp.GetService<IProcessingRunDomainOperation>()));
         services.AddSingleton<IProcessingRunExecutor>(sp => sp.GetRequiredService<ProcessingRunExecutor>());
         return services;
     }

@@ -5,7 +5,7 @@ Defines real-PostgreSQL process-boundary verification for worker exclusion, rele
 ## ADDED Requirements
 
 ### Requirement: Explicit PostgreSQL integration configuration
-The integration suite SHALL use one documented test-only PostgreSQL connection-string contract, SHALL fail fast with safe actionable setup guidance when mandatory configuration or connectivity is absent during an explicit integration run, and SHALL derive child worker database settings without placing credentials in arguments, protocol captures, stdout, or diagnostics. The configured database SHALL be disposable or dedicated to the suite and SHALL NOT be a production Immich database.
+The integration suite SHALL use one documented test-only PostgreSQL connection-string contract, SHALL fail fast with safe actionable setup guidance when mandatory configuration or connectivity is absent during an explicit integration run, and SHALL derive child worker database settings without placing credentials in arguments, protocol captures, stdout, or diagnostics. The configured database SHALL be disposable or dedicated to the suite, owned by the configured role when using the dedicated fallback, and SHALL NOT be a production Immich database.
 
 #### Scenario: Explicit integration run lacks configuration
 - **WHEN** the PostgreSQL cross-process tests are selected without the required test connection setting
@@ -16,7 +16,7 @@ The integration suite SHALL use one documented test-only PostgreSQL connection-s
 - **THEN** setup fails before worker launch, reports only the safe failed capability, and performs bounded cleanup
 
 ### Requirement: Fixed production lock identity is isolated by database
-Every cross-process case SHALL use block 31's exact production key and single-bigint PostgreSQL advisory-lock family. The suite SHALL prefer a unique disposable database per case when the configured role can create databases; otherwise it SHALL require a dedicated pre-provisioned database whose name has the documented `immich_reversegeo_test_` prefix, serialize fixed-key cases, and verify the key has no owner before and after each case. It SHALL NOT randomize the production lock key to obtain parallelism.
+Every cross-process case SHALL use block 31's exact production key and single-bigint PostgreSQL advisory-lock family. The suite SHALL prefer a unique disposable database per case when the configured role can create databases; otherwise it SHALL require a dedicated pre-provisioned database whose name has the documented `immich_reversegeo_test_` prefix and is owned by the configured role. Before each serialized fallback admission, it SHALL verify the database's empty `public` schema and a free exact key; an unknown owner SHALL leave the database untouched. Cleanup MAY release the serialization lease after a bounded completed attempt, but each later admission SHALL revalidate ownership, schema emptiness, and key freedom. It SHALL NOT randomize the production lock key to obtain parallelism.
 
 #### Scenario: Database creation is available
 - **WHEN** the configured role can create and drop databases
@@ -24,10 +24,10 @@ Every cross-process case SHALL use block 31's exact production key and single-bi
 
 #### Scenario: Dedicated database fallback is used
 - **WHEN** database creation is unavailable but a dedicated suite database is configured
-- **THEN** fixed-key cases execute non-concurrently and prove no pre-existing or residual owner for the production key
+- **THEN** fixed-key cases execute non-concurrently only after the configured role owns the dedicated database, its `public` schema is empty, and the production key is free; later admission revalidates those invariants after cleanup
 
 ### Requirement: The process harness exercises the production lock path
-The suite SHALL launch independent test apphost processes using block 26's finalized descriptor, staging, stream, handshake, and process-lease patterns, but SHALL NOT add PostgreSQL scenarios to block 26's closed hermetic fixture. The block-32 apphost SHALL compose the applied worker host/executor/reporter and real block-31 lock collaborator, substituting only a deterministic post-lock domain-operation probe. The parent harness SHALL route its observations through the applied block-30 finalizer and coordinator/projection path. The production internal-worker descriptor SHALL also receive an uncontended no-work smoke test.
+The suite SHALL launch independent test apphost processes using block 26's finalized descriptor, staging, stream, handshake, and process-lease patterns, but SHALL NOT add PostgreSQL scenarios to block 26's closed hermetic fixture. The block-32 apphost SHALL compose the applied worker host/executor/reporter and real block-31 lock collaborator, using the existing narrow internal post-lock operation seam. After real lock ownership is verified, the controlled operation SHALL invoke the supplied production-domain closure once against the empty database to emit eligibility 0 before it publishes its atomic backend/hold markers and typed log handshake; a successful release SHALL NOT invoke that closure again. The parent harness SHALL route its observations through the applied block-30 finalizer and coordinator/projection path. The production internal-worker descriptor SHALL also receive an uncontended no-work smoke test.
 
 #### Scenario: Lock-owning worker reaches its hold point
 - **WHEN** the first block-32 worker accepts execute
@@ -60,7 +60,7 @@ The suite SHALL prove a newly started second process can acquire the same produc
 - **THEN** PostgreSQL releases the session lock, block 30 records one Failed crash/missing-terminal finality, and a fresh process acquires and completes
 
 ### Requirement: Detected owner connection loss is covered when supported
-The suite SHALL capability-detect whether its PostgreSQL role can terminate the exact test-owned backend. When supported, it SHALL terminate only the backend identified by the unique test application/session marker, require ownership-loss infrastructure finality with exit 5 when stdout remains healthy, stop further protected work after detected loss, and prove fresh-process reacquisition. Only this case MAY be reported inconclusive when the privilege is unavailable, with the missing capability stated explicitly.
+The suite SHALL capability-detect whether its PostgreSQL role can terminate the exact test-owned backend. When supported, it SHALL terminate only the backend identified by the unique test application/session marker, require ownership-loss infrastructure finality with exit 5 when stdout remains healthy, without a spurious terminal-exit mismatch, stop further protected work after detected loss, and prove fresh-process reacquisition. Only this case MAY be reported inconclusive when the privilege is unavailable, with the missing capability stated explicitly. The accepted Failed exit compatibility is limited to the existing busy/3, domain/4, and infrastructure/5 outcomes; unrelated exits and evidence defects remain anomalous.
 
 #### Scenario: Test role can terminate the owner backend
 - **WHEN** the harness terminates the exact lock-owning backend after the held handshake
@@ -105,5 +105,4 @@ All PostgreSQL process tests SHALL carry the `Integration` category. The reposit
 
 ## Audit Reconciliation
 
-The real-process Busy assertion must require the canonical sequence: `run-started`, no eligibility event, one failed Busy terminal whose four counts are all zero, and reserved exit evidence 3. It must also prove no executor/producer work, rather than accepting a merely zero aggregate result.
-
+The real-process Busy assertion must require the canonical sequence: `run-started`, no eligibility event, one failed Busy terminal whose four counts are all zero, and reserved exit evidence 3. It must also prove no domain, heavy, or producer work inside the already-invoked executor, rather than accepting a merely zero aggregate result.

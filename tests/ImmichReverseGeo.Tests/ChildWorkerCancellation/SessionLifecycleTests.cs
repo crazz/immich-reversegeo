@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 
 namespace ImmichReverseGeo.Tests.ChildWorkerCancellation;
@@ -31,6 +32,66 @@ public sealed class SessionLifecycleTests
         Assert.AreEqual(0, fixture.Process.KillCalls);
         Assert.AreEqual(0L, fixture.Clock.TimerGeneration);
         Assert.AreEqual(0, fixture.Clock.ActiveTimerCount);
+    }
+
+    [TestMethod]
+    public async Task TerminalWhileAdmittedCancelWriteBlocked_CompletesCanonicalCancelBeforeOneInputClose()
+    {
+        var input = new SessionInputStream { BlockWriteCall = 2 };
+        SessionTestSupport.SessionFixture fixture = await SessionTestSupport.CreateAsync(input: input);
+        SessionTestSupport.EmitReady(fixture);
+        await fixture.Session.WaitForStartupAsync().WaitAsync(TestTimeout);
+
+        Task<ChildWorkerCancellationResult> stop = fixture.Session.RequestStop();
+        await input.SecondWrite.WaitAsync(TestTimeout);
+
+        SessionTestSupport.EmitCompletedTerminal(fixture);
+        await fixture.Sink.TerminalAccepted.WaitAsync(TestTimeout);
+
+        Assert.AreEqual(0, input.DisposeCalls, "terminal-race: admitted-cancel-write-retains-writer-before-close");
+        Assert.IsFalse(stop.IsCompleted, "terminal-race: terminal-does-not-cancel-admitted-write");
+
+        input.ReleaseBlockedWrite();
+        await input.SecondFlush.WaitAsync(TestTimeout);
+        await input.DisposeStarted.WaitAsync(TestTimeout);
+
+        Assert.AreEqual(2, input.Frames.Count, "terminal-race: canonical-execute-and-cancel-both-line-terminated");
+        Assert.AreEqual(2, input.FlushCalls, "terminal-race: canonical-cancel-flushes-before-close");
+        Assert.AreEqual(1, input.DisposeCalls, "terminal-race: one-physical-close");
+
+        fixture.Process.Exit(0);
+        ChildWorkerCancellationResult result = await stop.WaitAsync(TestTimeout);
+
+        Assert.AreEqual(ChildWorkerCancelDeliveryPhase.Flushed, result.Facts.DeliveryPhase, "terminal-race: normal-terminal-does-not-cancel-admitted-input-token");
+        Assert.AreEqual(0, fixture.Process.KillCalls, "terminal-race: no-terminal-owned-kill");
+        Assert.AreEqual(WorkerProtocolV1.CompletedType, result.Completion.Terminal!.Type, "terminal-race: accepted-terminal-preserved");
+        AssertResourcesDisposedOnce(fixture);
+    }
+
+    [TestMethod]
+    public async Task CancelAfterAcceptedTerminal_UsesInputClosedPhaseWithoutExtraWrite()
+    {
+        SessionTestSupport.SessionFixture fixture = await SessionTestSupport.CreateAsync();
+        SessionTestSupport.EmitReady(fixture);
+        await fixture.Session.WaitForStartupAsync().WaitAsync(TestTimeout);
+        SessionTestSupport.EmitCompletedTerminal(fixture);
+        await fixture.Sink.TerminalAccepted.WaitAsync(TestTimeout);
+        await fixture.Input.DisposeStarted.WaitAsync(TestTimeout);
+
+        Task<ChildWorkerCancellationResult> stop = fixture.Session.RequestStop();
+        await fixture.Session.WaitForCancellationDeliveryAsync().WaitAsync(TestTimeout);
+
+        Assert.AreEqual(ChildWorkerCancelDeliveryPhase.InputClosed, fixture.Session.CancellationFacts!.DeliveryPhase, "post-terminal-cancel: input-closed-phase");
+        Assert.AreEqual(1, fixture.Input.WriteCalls, "post-terminal-cancel: no-extra-cancel-bytes");
+        Assert.AreEqual(1, fixture.Input.FlushCalls, "post-terminal-cancel: no-extra-cancel-flush");
+        Assert.AreEqual(1, fixture.Input.DisposeCalls, "post-terminal-cancel: one-terminal-owned-close");
+
+        fixture.Process.Exit(0);
+        ChildWorkerCancellationResult result = await stop.WaitAsync(TestTimeout);
+
+        Assert.AreEqual(0, fixture.Process.KillCalls, "post-terminal-cancel: no-kill");
+        Assert.AreEqual(WorkerProtocolV1.CompletedType, result.Completion.Terminal!.Type, "post-terminal-cancel: terminal-preserved");
+        AssertResourcesDisposedOnce(fixture);
     }
 
     [TestMethod]

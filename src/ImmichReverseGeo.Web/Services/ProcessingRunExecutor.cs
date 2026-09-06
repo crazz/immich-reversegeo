@@ -26,6 +26,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
     private readonly TimeProvider _timeProvider;
     private readonly IProcessingRunLock? _runLock;
     private readonly WorkerProcessExitOutcomeAccumulator? _workerOutcomes;
+    private readonly IProcessingRunDomainOperation _domainOperation;
 
     public ProcessingRunExecutor(
         ILogger<ProcessingRunExecutor> logger,
@@ -50,7 +51,8 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
         IProcessingRunDelay delay,
         TimeProvider timeProvider,
         IProcessingRunLock? runLock = null,
-        WorkerProcessExitOutcomeAccumulator? workerOutcomes = null)
+        WorkerProcessExitOutcomeAccumulator? workerOutcomes = null,
+        IProcessingRunDomainOperation? domainOperation = null)
     {
         if (runLock is not null && workerOutcomes is null)
         {
@@ -67,6 +69,7 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
         _timeProvider = timeProvider;
         _runLock = runLock;
         _workerOutcomes = workerOutcomes;
+        _domainOperation = domainOperation ?? DefaultProcessingRunDomainOperation.Instance;
     }
 
     public async Task<ProcessingRunResult> ExecuteAsync(
@@ -126,7 +129,10 @@ public sealed class ProcessingRunExecutor : IProcessingRunExecutor
                 if (runDomainWork)
                 {
                     domainWorkStarted = true;
-                    await ExecuteDomainAsync(session, runLockLease, counts, activeToken).ConfigureAwait(false);
+                    await _domainOperation.ExecuteAsync(
+                        session,
+                        () => ExecuteDomainAsync(session, runLockLease, counts, activeToken),
+                        activeToken).ConfigureAwait(false);
                 }
             }
             catch (ProcessingEventReportingException ex)

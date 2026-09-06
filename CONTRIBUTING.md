@@ -72,6 +72,34 @@ dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj
 
 When the variable is unset, those tests report as inconclusive. They do not use the app's `DB_*` settings and do not create Immich tables or other schema objects.
 
+### Cross-process PostgreSQL tests (Change 32)
+
+Change 32 runs real worker processes and always uses the test-only `IMMICH_REVERSEGEO_TEST_POSTGRES_CONNECTION_STRING` setting. Give it a disposable PostgreSQL 16 database and role; never point it at an Immich database. A focused run without that setting, or with a malformed, unreachable, or unsuitable database, fails before a worker starts. This is intentionally different from the Change 31 opt-in suite above, which remains inconclusive when its setting is absent.
+
+Prefer a role that can create and drop databases. The suite then creates a unique GUID-named database for every case, creates only the minimal empty Immich-compatible schema it needs, and removes it after the case. If the role cannot create databases, configure one dedicated database whose name starts with `immich_reversegeo_test_`. The role must own that database, its `public` schema must be empty, and the fixed production advisory-lock key must be free both before and after each case. The fallback keeps fixed-key cases in one test process serialized; concurrent test processes still need separate dedicated databases.
+
+The test connection needs only the privileges required to connect, use the advisory lock, inspect its own test backends, and create the disposable schema. The connection-loss case also needs permission to terminate its own published test backend. If that last capability is unavailable, only the connection-loss case can be inconclusive; contention, successful release, domain failure, cancellation, and crash coverage remain mandatory.
+
+Keep the connection string in the process environment only. Do not put it in arguments, captures, reports, test names, or committed files. The harness derives the literal production `DB_HOST`, `DB_PORT`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_DATABASE_NAME` values for each child and assigns `PGAPPNAME`. It serializes special values through the connection-string builder. If a configured PostgreSQL transport, authentication, or security option cannot be represented by that child environment, setup fails instead of silently dropping it.
+
+The suite also checks a normal worker-finality path in which an accepted terminal leaves the child waiting for controller input. The controller seals further writes, lets an already admitted write and flush settle, and half-closes stdin once so the child can receive peer EOF. This does not request Stop, cancellation, a deadline, or a kill. If the physical close fails before exit, the accepted terminal remains authoritative and the existing bounded InputTransport containment path records the failure.
+
+Run the focused suite with:
+
+```bash
+dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --settings integration.runsettings --filter "TestCategory=Change32&TestCategory=Integration"
+```
+
+For a repeatable staging check, first make a clean Release build, then repeat the same command with `--no-build`; publish the test project to an ignored local path so its staged test and production apphosts are checked too:
+
+```bash
+dotnet build --configuration Release
+dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --no-build --settings integration.runsettings --filter "TestCategory=Change32&TestCategory=Integration"
+dotnet publish tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --output _out/change32-test-publish
+```
+
+`npm run test` excludes both Integration and Performance categories. `npm run test:integration` selects Integration while `integration.runsettings` excludes Performance. The command also ignores Microsoft.Testing.Platform exit code 8, which lets the legacy test assembly's empty Integration selection pass; failed tests still return exit code 2. Change 31's PostgreSQL CI job remains unchanged. Change 32 adds no CI provisioning; Change 69 owns that orchestration.
+
 ### PostgreSQL advisory-lock interoperability
 
 The version 1 processing-run lock is a same-database coordination contract, not a setting. Cooperating clients use the signed bigint key `-7970420658158250032` (hex `0x916360A3F80AD7D0`), derived from SHA-256 `916360a3f80ad7d0ae2a32661692f1381e43b2f336f19a58491ce5582ffb9dbf` over the UTF-8 label `immich-reversegeo/postgresql-advisory-run-lock/v1`.

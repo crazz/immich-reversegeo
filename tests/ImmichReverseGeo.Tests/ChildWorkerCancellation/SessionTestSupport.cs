@@ -49,6 +49,32 @@ internal static class SessionTestSupport
         fixture.Process.StandardOutputSource.Enqueue(Frame(ready));
     }
 
+    internal static void EmitCompletedTerminal(SessionFixture fixture)
+    {
+        var timestamp = fixture.Clock.GetUtcNow();
+        fixture.Process.StandardOutputSource.Enqueue(Frame(new WorkerProtocolEvent(
+            WorkerProtocolV1.LifecycleCategory,
+            WorkerProtocolV1.RunStartedType,
+            2,
+            timestamp,
+            fixture.Request.RunId,
+            new RunStartedPayload("manual", timestamp))));
+        fixture.Process.StandardOutputSource.Enqueue(Frame(new WorkerProtocolEvent(
+            WorkerProtocolV1.LifecycleCategory,
+            WorkerProtocolV1.EligibilityDeterminedType,
+            3,
+            timestamp,
+            fixture.Request.RunId,
+            new EligibilityDeterminedPayload(0))));
+        fixture.Process.StandardOutputSource.Enqueue(Frame(new WorkerProtocolEvent(
+            WorkerProtocolV1.TerminalCategory,
+            WorkerProtocolV1.CompletedType,
+            4,
+            timestamp,
+            fixture.Request.RunId,
+            new CompletedPayload("manual", timestamp, timestamp, 0, 0, 0, 0))));
+    }
+
     internal static byte[] Frame(WorkerProtocolEvent @event)
     {
         var serialized = WorkerProtocolCodec.Serialize(@event);
@@ -376,6 +402,10 @@ internal sealed class SessionRecordingSink : IWorkerProtocolEventSink
 {
     private readonly object _gate = new();
     private readonly List<WorkerProtocolEvent> _events = [];
+    private readonly TaskCompletionSource _terminalAccepted =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+    internal Task TerminalAccepted => _terminalAccepted.Task;
 
     internal IReadOnlyList<WorkerProtocolEvent> Events
     {
@@ -397,6 +427,11 @@ internal sealed class SessionRecordingSink : IWorkerProtocolEventSink
             _events.Add(@event);
         }
 
+        if (WorkerProtocolV1.IsTerminal(@event.Type))
+        {
+            _terminalAccepted.TrySetResult();
+        }
+
         return ValueTask.CompletedTask;
     }
 }
@@ -406,6 +441,8 @@ internal sealed class SessionInputStream : Stream
     private readonly object _gate = new();
     private readonly MemoryStream _written = new();
     private readonly TaskCompletionSource _secondFlush =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _disposeStarted =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _firstWrite =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -427,6 +464,7 @@ internal sealed class SessionInputStream : Stream
     internal Task FirstWrite => _firstWrite.Task;
     internal Task SecondWrite => _secondWrite.Task;
     internal Task SecondFlush => _secondFlush.Task;
+    internal Task DisposeStarted => _disposeStarted.Task;
     internal Task SynchronousWriteEntered => _synchronousWriteEntered.Task;
 
     internal int BlockWriteCall
@@ -543,6 +581,7 @@ internal sealed class SessionInputStream : Stream
     {
         if (Interlocked.Increment(ref _disposeCalls) == 1)
         {
+            _disposeStarted.TrySetResult();
             _blockedWriteRelease.TrySetResult();
         }
 

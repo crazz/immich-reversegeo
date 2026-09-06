@@ -389,6 +389,35 @@ public sealed partial class ChildWorkerLaunchingTests
     }
 
     [TestMethod]
+    public async Task TerminalInputClose_StartsBeforeBlockedTerminalCallbackSettlesAndDisposesOnce()
+    {
+        var request = CreateRequest();
+        var sink = new RecordingSink { BlockCall = 4 };
+        var (process, _, session) = await LaunchByteSessionAsync(954, request, sink);
+
+        process.StandardOutput.Write(Encoding.UTF8.GetBytes(
+            ReadyFrame() + RunStartedFrame(request.RunId) + EligibilityFrame(request.RunId) + CompletedFrame(request.RunId)));
+        await sink.BlockedCallEntered;
+        await process.StandardInput.DisposeStarted;
+
+        Assert.AreEqual(1, process.StandardInput.DisposeCalls, "terminal-close: input-half-closed-before-terminal-callback-settles");
+        Assert.AreEqual(1, process.StandardInput.WriteCalls, "terminal-close: canonical-execute-remains-single-write");
+        Assert.AreEqual(1, process.StandardInput.FlushCalls, "terminal-close: canonical-execute-remains-single-flush");
+        Assert.IsFalse(session.Completion.IsCompleted, "terminal-close: terminal-input-close-does-not-impersonate-exit");
+
+        sink.ReleaseBlockedCall();
+        process.StandardOutput.Complete();
+        process.StandardError.Complete();
+        process.Exit(0);
+        var completion = await session.Completion;
+        await session.DisposeAsync();
+
+        Assert.AreEqual(WorkerProtocolV1.CompletedType, completion.Terminal!.Type, "terminal-close: terminal-preserved");
+        Assert.AreEqual(1, process.StandardInput.DisposeCalls, "terminal-close: single-physical-dispose-after-session-disposal");
+        Assert.AreEqual(1, process.DisposeCalls, "terminal-close: process-disposed-once");
+    }
+
+    [TestMethod]
     public async Task Completion_ExitFirstWaitsForTrailingAcceptedTerminalStderrAndBothFinalities()
     {
         var request = CreateRequest();

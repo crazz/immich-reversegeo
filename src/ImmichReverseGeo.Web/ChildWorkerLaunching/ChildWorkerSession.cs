@@ -88,6 +88,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private Task? _disposeTask;
     private readonly TaskCompletionSource<ChildWorkerTerminalPreventingObservation> _firstTerminalPreventingObservation =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource<ChildWorkerTerminalPreventingObservation> _terminalInputCloseFailure =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ChildWorkerEvidenceFinalityGate? _evidenceFinalityGate;
     private ChildWorkerProtocolObservation? _firstProtocolObservation;
     private WorkerProtocolEvent? _terminal;
@@ -283,6 +285,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     internal Task<ChildWorkerCompletionObservation> Settlement => _settlement;
     internal Task<ChildWorkerTerminalPreventingObservation> FirstTerminalPreventingObservation
         => _firstTerminalPreventingObservation.Task;
+    internal Task<ChildWorkerTerminalPreventingObservation> TerminalInputCloseFailure
+        => _terminalInputCloseFailure.Task;
     internal Task<ChildWorkerStartupObservation> WaitForStartupAsync(CancellationToken cancellationToken = default) => Startup.WaitAsync(cancellationToken);
     internal Task<ChildWorkerCompletionObservation> WaitForCompletionAsync(CancellationToken cancellationToken = default) => Completion.WaitAsync(cancellationToken);
 
@@ -455,6 +459,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                     {
                         _terminal = @event;
                     }
+
+                    StartTerminalInputClose();
                 }
 
                 if (!TryAdmitSinkCallback())
@@ -637,6 +643,47 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                 observedAt,
                 reason);
             _firstTerminalPreventingObservation.SetResult(observation);
+        }
+    }
+
+    private void PublishTerminalInputCloseFailure()
+    {
+        lock (_terminalPreventingObservationGate)
+        {
+            if (_terminalInputCloseFailure.Task.IsCompleted)
+            {
+                return;
+            }
+
+            ChildWorkerStopRequest observedAt;
+            try
+            {
+                observedAt = ChildWorkerStopRequest.CaptureFaultObservation(
+                    _timeProvider);
+            }
+            catch
+            {
+                var failure = new InvalidOperationException(
+                    TerminalPreventingObservationTimestampFailureDiagnostic);
+                _terminalInputCloseFailure.SetException(failure);
+                _ = _terminalInputCloseFailure.Task.Exception;
+                if (!_firstTerminalPreventingObservation.Task.IsCompleted)
+                {
+                    _firstTerminalPreventingObservation.SetException(failure);
+                    _ = _firstTerminalPreventingObservation.Task.Exception;
+                }
+
+                return;
+            }
+
+            var observation = new ChildWorkerTerminalPreventingObservation(
+                observedAt,
+                ChildWorkerFaultContainmentReason.TerminalInputCloseFailed.Instance);
+            _terminalInputCloseFailure.SetResult(observation);
+            if (!_firstTerminalPreventingObservation.Task.IsCompleted)
+            {
+                _firstTerminalPreventingObservation.SetResult(observation);
+            }
         }
     }
 

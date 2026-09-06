@@ -2,6 +2,7 @@ using System;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerEventStateBridge;
 
 namespace ImmichReverseGeo.Web.WorkerFailureRecovery;
@@ -26,14 +27,21 @@ internal static class WorkerRunEvidenceClassifier
                 throw new ArgumentException("The receipt must belong to the exact request.", nameof(evidence));
             }
             return new(receipt.Result.Outcome, WorkerRunAuthority.CommittedReceipt,
-                WorkerRunFailureCategory.Terminal, evidence.LastPhase, TerminalAnomalies(evidence, receipt.Result), receipt.Result);
+                WorkerRunFailureCategory.Terminal, evidence.LastPhase,
+                TerminalAnomalies(
+                    evidence,
+                    receipt.Result,
+                    receipt.Origin == ProcessingRunFinalizationOrigin.WorkerTerminal),
+                receipt.Result);
         }
 
         if (evidence.BridgeObservation is WorkerEventStateBridgeObservation.TerminalProjectionNotCommitted candidate)
         {
             RequireMatchingResult(evidence, candidate.Candidate);
             return new(candidate.Candidate.Outcome, WorkerRunAuthority.ValidatedTerminal,
-                WorkerRunFailureCategory.Terminal, evidence.LastPhase, TerminalAnomalies(evidence, candidate.Candidate), candidate.Candidate);
+                WorkerRunFailureCategory.Terminal, evidence.LastPhase,
+                TerminalAnomalies(evidence, candidate.Candidate, workerTerminalReported: true),
+                candidate.Candidate);
         }
 
         if (evidence.BridgeObservation is WorkerEventStateBridgeObservation.ProjectionResponseIndeterminate)
@@ -203,30 +211,36 @@ private static bool IsExpectedTerminationEnd(WorkerRunEvidence evidence, ChildWo
         }
     }
 
-    private static WorkerRunAnomaly TerminalAnomalies(WorkerRunEvidence evidence, ProcessingRunResult result)
+    private static WorkerRunAnomaly TerminalAnomalies(
+        WorkerRunEvidence evidence,
+        ProcessingRunResult result,
+        bool workerTerminalReported)
     {
         var anomalies = WorkerRunAnomaly.None;
         if (evidence.Completion is { } raw)
         {
-            var consistent = raw.ExitObserved && (result.Outcome switch
+            if (workerTerminalReported)
             {
-                ProcessingRunOutcome.Completed => raw.ExitCode == 0,
-                ProcessingRunOutcome.Cancelled => raw.ExitCode == 130,
-                // Code 3 is reserved advisory evidence for the existing Failed busy terminal.
-                ProcessingRunOutcome.Failed => raw.ExitCode is 3 or 4,
-                _ => false
-            });
-            if (!consistent)
-            {
-                anomalies |= WorkerRunAnomaly.TerminalExitMismatch;
-            }
-            if (raw.FirstProtocolObservation is ChildWorkerProtocolObservation.ProtocolFailure)
-            {
-                anomalies |= WorkerRunAnomaly.ProtocolAfterTerminal;
-            }
-            if (raw.FirstProtocolObservation is ChildWorkerProtocolObservation.SinkFailure || evidence.BridgeObservation is not null)
-            {
-                anomalies |= WorkerRunAnomaly.ProjectionAfterTerminal;
+                var consistent = raw.ExitObserved && (result.Outcome switch
+                {
+                    ProcessingRunOutcome.Completed => raw.ExitCode == 0,
+                    ProcessingRunOutcome.Cancelled => raw.ExitCode == 130,
+                    // Existing typed contract: 3 busy, 4 domain, and 5 infrastructure failures.
+                    ProcessingRunOutcome.Failed => raw.ExitCode is 3 or 4 or 5,
+                    _ => false
+                });
+                if (!consistent)
+                {
+                    anomalies |= WorkerRunAnomaly.TerminalExitMismatch;
+                }
+                if (raw.FirstProtocolObservation is ChildWorkerProtocolObservation.ProtocolFailure)
+                {
+                    anomalies |= WorkerRunAnomaly.ProtocolAfterTerminal;
+                }
+                if (raw.FirstProtocolObservation is ChildWorkerProtocolObservation.SinkFailure || evidence.BridgeObservation is not null)
+                {
+                    anomalies |= WorkerRunAnomaly.ProjectionAfterTerminal;
+                }
             }
             if (raw.StandardOutputFinality is ChildWorkerStreamFinality.ReadFailed
                 || raw.StandardErrorFinality is ChildWorkerStreamFinality.ReadFailed || evidence.ManagedExit?.ExitCode == 6)
@@ -234,13 +248,13 @@ private static bool IsExpectedTerminationEnd(WorkerRunEvidence evidence, ChildWo
                 anomalies |= WorkerRunAnomaly.OutputTransport;
             }
         }
+        var inputTransportFailed = evidence.TerminalInputCloseFailure is not null;
         if (evidence.Cancellation is { } cancel)
         {
-            if (cancel.DeliveryPhase is ChildWorkerCancelDeliveryPhase.SerializationFailed or ChildWorkerCancelDeliveryPhase.WriteFailed
-                or ChildWorkerCancelDeliveryPhase.FlushFailed)
-            {
-                anomalies |= WorkerRunAnomaly.InputTransport;
-            }
+            inputTransportFailed |= cancel.DeliveryPhase is ChildWorkerCancelDeliveryPhase.SerializationFailed
+                or ChildWorkerCancelDeliveryPhase.WriteFailed
+                or ChildWorkerCancelDeliveryPhase.FlushFailed
+                || cancel.FirstContainmentReason is ChildWorkerFaultContainmentReason.TerminalInputCloseFailed;
             if (cancel.KillAttempted && cancel.KillOutcome == ChildProcessKillOutcome.Requested)
             {
                 anomalies |= WorkerRunAnomaly.ForcedTermination;
@@ -249,6 +263,10 @@ private static bool IsExpectedTerminationEnd(WorkerRunEvidence evidence, ChildWo
             {
                 anomalies |= WorkerRunAnomaly.KillRejected;
             }
+        }
+        if (inputTransportFailed)
+        {
+            anomalies |= WorkerRunAnomaly.InputTransport;
         }
         if (evidence.CleanupFailed)
         {
