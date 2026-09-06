@@ -663,7 +663,7 @@ After every terminal path, assert exact-once projection, no activity residue, no
 
 **Dependencies and sequencing** — Requires applied/finalized blocks 26, 30, and 31 plus the Phase 2 coordinator/projection path. Reuse their exact protocol, process, classifier, lease, projection, and cleanup owners; stop rather than duplicating them. Do not modify block 26's closed scenario catalog or production internal-worker CLI, and do not touch parallel block 33. This closes Phase 4's cross-process exclusion evidence.
 
-**OpenSpec** — [32-cover-cross-process-run-exclusion](openspec/changes/32-cover-cross-process-run-exclusion/)
+**OpenSpec** — [32-cover-cross-process-run-exclusion](openspec/changes/archive/2026-09-06-32-cover-cross-process-run-exclusion/)
 
 ### Checkpoint D
 
