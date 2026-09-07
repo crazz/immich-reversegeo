@@ -50,7 +50,14 @@ public class WorkerRunFinalizerFixtureTests
         var observed = await RunAsync(scenario);
 
         Assert.AreEqual(scenario.Outcome, observed.Result.Outcome, $"{scenario.Label}-outcome");
-        CollectionAssert.Contains(scenario.AllowedCategories, observed.Decision.Category, $"{scenario.Label}-causal-category");
+        CollectionAssert.Contains(
+            scenario.AllowedCategories,
+            observed.Decision.Category,
+            $"{scenario.Label}-causal-category: actual={observed.Decision.Category}; "
+            + $"startup={observed.Completion.Startup.GetType().Name}; "
+            + $"accepted-run-started={observed.Completion.AcceptedRunStarted}; "
+            + $"protocol={observed.Completion.FirstProtocolObservation?.GetType().Name ?? "none"}; "
+            + $"exit-observed={observed.Completion.ExitObserved}; exit-code={observed.Completion.ExitCode?.ToString() ?? "none"}");
         Assert.AreEqual(scenario.ExitCode, observed.Completion.ExitCode, $"{scenario.Label}-raw-exit");
         Assert.AreSame(observed.Request, observed.Receipt.Request, $"{scenario.Label}-receipt-request");
         Assert.AreSame(observed.Request, observed.Receipt.Result.Request, $"{scenario.Label}-receipt-result-request");

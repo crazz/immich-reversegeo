@@ -208,7 +208,10 @@ internal sealed record ChildWorkerCompletionObservation(
     ChildWorkerStreamFinality StandardErrorFinality,
     WorkerProtocolEvent? Terminal,
     ChildWorkerProtocolObservation? FirstProtocolObservation,
-    ChildWorkerStandardErrorTail StandardErrorTail);
+    ChildWorkerStandardErrorTail StandardErrorTail)
+{
+    internal bool AcceptedRunStarted { get; init; }
+}
 
 internal interface IChildProcessFactory
 {

@@ -3,14 +3,115 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerEventStateBridge;
+using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
 
 namespace ImmichReverseGeo.Tests.ChildWorkerLaunching;
 
 public sealed partial class ChildWorkerLaunchingTests
 {
+    [TestMethod]
+    [DataRow("write", "accepted-run-started")]
+    [DataRow("write", "malformed-post-ready")]
+    [DataRow("write", "no-post-ready-event")]
+    [DataRow("flush", "accepted-run-started")]
+    [DataRow("flush", "malformed-post-ready")]
+    [DataRow("flush", "no-post-ready-event")]
+    public async Task Finalizer_ExecuteTransportRaceUsesOnlyAcceptedRunStartedAsPostReadyEvidence(
+        string transport,
+        string scenario)
+    {
+        var label = $"{transport}-{scenario}";
+        var request = CreateRequest();
+        var process = new ByteProcess(956);
+        process.StandardInput.ThrowAfterWrite = transport == "write";
+        process.StandardInput.ThrowOnFlush = transport == "flush";
+        var state = new ProcessingState();
+        var reporter = new ProcessingStateEventReporter(state);
+        Assert.IsTrue(reporter.Arm(request), $"{label}: reporter-armed");
+        state.MarkPending();
+        var bridge = new WorkerEventStateBridgeFactory(reporter).Create(request);
+        var launch = await new ChildWorkerLauncher(new RecordingFactory { Process = process }).LaunchAsync(
+            CreateInvocation(), request, bridge, TestOptions(), CancellationToken.None);
+        var session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(launch, $"{label}: started-session").Session;
+        var finalizer = new WorkerRunFinalizer(request, reporter, session.Clock);
+        var resultTask = finalizer.Start(
+            session,
+            bridge,
+            fault => _ = session.RequestTermination(new ChildWorkerTerminationRequest(
+                fault.ObservedAt,
+                ChildWorkerTerminationIntent.FaultContainment,
+                fault.Reason)),
+            static () => false);
+
+        var suffix = scenario switch
+        {
+            "accepted-run-started" => RunStartedFrame(request.RunId) + EligibilityFrame(request.RunId),
+            "malformed-post-ready" => "{]\n",
+            _ => string.Empty
+        };
+        process.StandardOutput.Write(Encoding.UTF8.GetBytes(ReadyFrame()));
+        var startup = await session.Startup;
+        process.StandardOutput.Write(Encoding.UTF8.GetBytes(suffix));
+        process.StandardOutput.Complete();
+        process.StandardError.Complete();
+        process.Exit(42);
+
+        var result = await resultTask;
+        Assert.IsNotNull(finalizer.Evidence?.Completion, $"{label}: frozen-completion");
+        var completion = finalizer.Evidence!.Completion!;
+        if (transport == "write")
+        {
+            Assert.IsInstanceOfType<ChildWorkerStartupObservation.RequestWriteFailed>(
+                startup,
+                $"{label}: raw-startup-remains-write-failure");
+        }
+        else
+        {
+            Assert.IsInstanceOfType<ChildWorkerStartupObservation.RequestFlushFailed>(
+                startup,
+                $"{label}: raw-startup-remains-flush-failure");
+        }
+        Assert.AreSame(startup, completion.Startup, $"{label}: completion-retains-raw-startup");
+        Assert.AreEqual(ProcessingRunOutcome.Failed, result.Outcome, $"{label}: failed-outcome");
+        Assert.AreEqual(42, completion.ExitCode, $"{label}: physical-exit");
+
+        if (scenario == "accepted-run-started")
+        {
+            Assert.IsNotNull(state.LastRunStarted, $"{label}: accepted-run-started-and-eligibility");
+            Assert.IsTrue(completion.AcceptedRunStarted, $"{label}: accepted-run-started-evidence");
+            Assert.AreEqual(
+                WorkerRunFailureCategory.UnmappedExit,
+                finalizer.Decision?.Category,
+                $"{label}: accepted-run-started-proves-execute-consumption");
+        }
+        else
+        {
+            var expectedCategory = transport == "write"
+                ? WorkerRunFailureCategory.ExecuteWrite
+                : WorkerRunFailureCategory.ExecuteFlush;
+            Assert.IsNull(state.LastRunStarted, $"{label}: no-accepted-run-started");
+            Assert.IsFalse(completion.AcceptedRunStarted, $"{label}: no-run-started-evidence");
+            Assert.AreEqual(
+                expectedCategory,
+                finalizer.Decision?.Category,
+                $"{label}: raw-transport-failure-keeps-precedence");
+        }
+
+        if (scenario == "malformed-post-ready")
+        {
+            var protocol = Assert.IsInstanceOfType<ChildWorkerProtocolObservation.ProtocolFailure>(
+                completion.FirstProtocolObservation,
+                $"{label}: malformed-observation-retained");
+            Assert.AreEqual(WorkerProtocolFailureCode.MalformedJson, protocol.Failure.Code, $"{label}: malformed-code");
+        }
+    }
+
     [TestMethod]
     public async Task Pumps_BlockedReadyCallbackDoesNotBackpressureLargerThanPipeCapacityStderr()
     {

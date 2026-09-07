@@ -56,7 +56,12 @@ internal static class WorkerRunEvidenceClassifier
 
         var raw = evidence.Completion!;
         var startupFailure = ClassifyStartup(raw.Startup);
-        if (startupFailure is not null && !IsExpectedTerminationEnd(evidence, raw.Startup))
+        var acceptedRunStartedOverridesExecuteTransportFailure = raw.AcceptedRunStarted
+            && raw.Startup is ChildWorkerStartupObservation.RequestWriteFailed
+                or ChildWorkerStartupObservation.RequestFlushFailed;
+        if (startupFailure is not null
+            && !acceptedRunStartedOverridesExecuteTransportFailure
+            && !IsExpectedTerminationEnd(evidence, raw.Startup))
         {
             return Failed(evidence, startupFailure.Value);
         }

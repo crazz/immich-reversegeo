@@ -93,6 +93,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private readonly ChildWorkerEvidenceFinalityGate? _evidenceFinalityGate;
     private ChildWorkerProtocolObservation? _firstProtocolObservation;
     private WorkerProtocolEvent? _terminal;
+    private bool _acceptedRunStarted;
     private int _startupAuthority;
     private bool _sinkCallbackAdmitted;
     private bool _suppressCallbacks;
@@ -372,7 +373,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         var startup = await _startup.Task.ConfigureAwait(false);
         lock (_observationGate)
         {
-            return new ChildWorkerCompletionObservation(ProcessId, RunId, startup, exit.Observed, exit.Code, standardOutputFinality, standardErrorFinality, _terminal, _firstProtocolObservation, _standardError.Snapshot());
+            return new ChildWorkerCompletionObservation(ProcessId, RunId, startup, exit.Observed, exit.Code, standardOutputFinality, standardErrorFinality, _terminal, _firstProtocolObservation, _standardError.Snapshot())
+            {
+                AcceptedRunStarted = _acceptedRunStarted
+            };
         }
     }
 
@@ -471,6 +475,14 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                 if (!await DeliverAdmittedEventAsync(@event).ConfigureAwait(false))
                 {
                     continue;
+                }
+
+                if (@event.Type == WorkerProtocolV1.RunStartedType)
+                {
+                    lock (_observationGate)
+                    {
+                        _acceptedRunStarted = true;
+                    }
                 }
 
                 if (@event.Type == WorkerProtocolV1.ReadyType && TryReserveReady())
