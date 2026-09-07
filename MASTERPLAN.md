@@ -777,7 +777,7 @@ Preserve separate configuration boundaries: block 12's copied Enabled/Cron sched
 
 **Dependencies and sequencing** — Requires applied blocks 19–20 and 33–38; consume their finalized names and do not modify block 38. This boundary is deliberately processing-route-specific. After Lookup/Data worker cutover, block 55 strengthens it to absence of heavy geodata/cache/exporter/index/executor descriptors across Standard and Web-only composition and reviews removable direct references; block 56 extends dependency checks across all Web components and control services.
 
-**OpenSpec** — [`39-assert-web-processing-does-not-load-geodata`](openspec/changes/39-assert-web-processing-does-not-load-geodata/).
+**OpenSpec** — [`39-assert-web-processing-does-not-load-geodata`](openspec/changes/archive/2026-09-07-39-assert-web-processing-does-not-load-geodata/).
 
 ### Checkpoint E
 
