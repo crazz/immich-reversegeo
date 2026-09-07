@@ -48,6 +48,30 @@ public class ConfigServiceTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
+    public async Task SaveConfig_WithDeploymentModeEnvironmentValue_DoesNotPersistIt()
+    {
+        const string deploymentMode = "web-only";
+        var previousValue = Environment.GetEnvironmentVariable("IMMICH_REVERSEGEO_MODE");
+
+        try
+        {
+            Environment.SetEnvironmentVariable("IMMICH_REVERSEGEO_MODE", deploymentMode);
+            var service = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+
+            await service.SaveConfigAsync(new AppConfig());
+
+            var settings = await File.ReadAllTextAsync(Path.Combine(_tempDir, "settings.json"));
+            Assert.IsFalse(settings.Contains("deploymentMode", StringComparison.OrdinalIgnoreCase));
+            Assert.IsFalse(settings.Contains(deploymentMode, StringComparison.Ordinal));
+        }
+        finally
+        {
+            Environment.SetEnvironmentVariable("IMMICH_REVERSEGEO_MODE", previousValue);
+        }
+    }
+
+    [TestMethod]
     public async Task GetConfig_LegacySettingsWithoutCityResolver_AddsCompatibleDefaults()
     {
         Directory.CreateDirectory(_tempDir);

@@ -11,10 +11,13 @@ var workerErrorWriter = Console.Error;
 
 ApplicationRoleStartup.Begin(
     args,
+    Environment.GetEnvironmentVariable,
     workerErrorWriter,
     RunWebApplication,
     RunInternalWorker,
-    _ => Environment.ExitCode = InternalWorkerProcess.CompleteInvalidInvocation(workerErrorWriter));
+    RunOnce,
+    _ => Environment.ExitCode = InternalWorkerProcess.CompleteInvalidInvocation(workerErrorWriter),
+    code => Environment.ExitCode = code);
 
 void RunInternalWorker(IReadOnlyList<string> selectedArguments)
 {
@@ -24,7 +27,7 @@ void RunInternalWorker(IReadOnlyList<string> selectedArguments)
         InternalWorkerHost.RunProductionAsync);
 }
 
-void RunWebApplication(IReadOnlyList<string> selectedArguments)
+void RunWebApplication(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode deploymentMode, IReadOnlyList<string> selectedArguments)
 {
     var builder = WebApplication.CreateBuilder(selectedArguments.ToArray());
     var environment = builder.Environment.IsDevelopment()
@@ -34,7 +37,8 @@ void RunWebApplication(IReadOnlyList<string> selectedArguments)
         environment,
         builder.Environment.ContentRootPath,
         Environment.GetEnvironmentVariable("DATA_DIR"),
-        Environment.GetEnvironmentVariable("CONFIG_DIR"));
+        Environment.GetEnvironmentVariable("CONFIG_DIR"),
+        deploymentMode);
 
     builder.Services.AddWebComposition(context);
 
@@ -52,4 +56,8 @@ void RunWebApplication(IReadOnlyList<string> selectedArguments)
         .AddInteractiveServerRenderMode();
 
     app.Run();
+}
+
+void RunOnce(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode deploymentMode, IReadOnlyList<string> selectedArguments)
+{
 }

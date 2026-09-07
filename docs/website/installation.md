@@ -18,6 +18,8 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
 
 ## Preferred setup
 
+The reference Compose file omits `IMMICH_REVERSEGEO_MODE`, which selects the compatible Standard default. If you need to set the public selector, use one exact lowercase value: `standard`, `web-only`, or `run-once`. It is an environment setting, not a `settings.json` option, so restart the container after changing it. Use Standard for now; Web-only and Run-once are recognized startup values, but their runtime behavior is not available yet.
+
 - Add the service to your existing Immich `docker-compose.yml`.
 - Reuse the same `.env` file that already contains your Immich database settings.
 - Keep `/config` and `/data` persisted with Docker volumes.

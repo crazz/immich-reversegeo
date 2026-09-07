@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.Services;
@@ -59,6 +60,21 @@ public sealed class SharedCompositionTests
             "/composition/config");
 
         Assert.AreEqual("ApplicationCompositionContext (Development)", context.ToString());
+    }
+
+    [TestMethod]
+    public void Context_RetainsTheImmutablePublicDeploymentModeWithoutChangingPaths()
+    {
+        var context = ApplicationCompositionContext.Create(
+            CompositionEnvironment.Production,
+            "/composition/content",
+            "/composition/data",
+            "/composition/config",
+            DeploymentMode.WebOnly);
+
+        Assert.AreSame(DeploymentMode.WebOnly, context.DeploymentMode);
+        Assert.AreEqual("/composition/data", context.DataDirectory);
+        Assert.AreEqual("/composition/config", context.ConfigDirectory);
     }
 
     [TestMethod]

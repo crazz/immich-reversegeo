@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using ImmichReverseGeo.Core.ApplicationRole;
 
 namespace ImmichReverseGeo.Web.Composition;
 
@@ -19,13 +20,15 @@ internal sealed class ApplicationCompositionContext
         string contentRoot,
         string dataDirectory,
         string configDirectory,
-        string bundledDataDirectory)
+        string bundledDataDirectory,
+        DeploymentMode? deploymentMode)
     {
         Environment = environment;
         ContentRoot = contentRoot;
         DataDirectory = dataDirectory;
         ConfigDirectory = configDirectory;
         BundledDataDirectory = bundledDataDirectory;
+        DeploymentMode = deploymentMode;
     }
 
     internal CompositionEnvironment Environment { get; }
@@ -38,6 +41,8 @@ internal sealed class ApplicationCompositionContext
 
     internal string BundledDataDirectory { get; }
 
+    internal DeploymentMode? DeploymentMode { get; }
+
     public override string ToString()
     {
         return $"ApplicationCompositionContext ({Environment})";
@@ -47,7 +52,8 @@ internal sealed class ApplicationCompositionContext
         CompositionEnvironment environment,
         string contentRoot,
         string? dataDirectoryOverride,
-        string? configDirectoryOverride)
+        string? configDirectoryOverride,
+        DeploymentMode? deploymentMode = null)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
 
@@ -66,6 +72,7 @@ internal sealed class ApplicationCompositionContext
             contentRoot,
             dataDirectoryOverride ?? defaultDataDirectory,
             configDirectoryOverride ?? defaultConfigDirectory,
-            bundledDataDirectory);
+            bundledDataDirectory,
+            deploymentMode);
     }
 }

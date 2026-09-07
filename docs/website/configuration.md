@@ -4,6 +4,12 @@ icon: material/tune-variant
 
 # Configuration
 
+## Deployment mode selection
+
+Immich ReverseGeo reads the optional `IMMICH_REVERSEGEO_MODE` environment variable once when the container starts. Omit it to select the compatible Standard default. The only accepted values are `standard`, `web-only`, and `run-once`; use lowercase exactly as shown. Empty, padded, case-varied, or unknown values stop startup with exit code 2.
+
+The selected value is not saved in `settings.json`. Change it in your Compose or container environment and restart the container. Use Standard for now. Web-only and Run-once are recognized startup values, but their runtime behavior is not available yet.
+
 <div class="section-intro">
 The Settings page is intentionally small. Most users only need to check the database connection, pick a schedule, and tune how aggressively processing should run. Country-specific city matching now lives on its own City Resolver page.
 </div>

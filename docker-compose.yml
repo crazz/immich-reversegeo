@@ -14,6 +14,8 @@ services:
       - .env                 # reuse Immich's own .env (DB_USERNAME, DB_PASSWORD, etc.)
     environment:
       - ASPNETCORE_URLS=http://+:8080
+      # Optional public deployment selector; omit for the compatible Standard default.
+      # - IMMICH_REVERSEGEO_MODE=standard # exact values: standard, web-only, run-once
     stop_grace_period: 40s
     restart: unless-stopped
 
