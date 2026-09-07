@@ -847,7 +847,7 @@ Preserve existing network and storage behavior: production containers remain on 
 
 **Dependencies and sequencing** — Requires the finalized and applied blocks 40–41 plus the Phase 3–5 role, composition, coordinator, detector, launcher, event-bridge, startup-validation, advisory-exclusion, and shutdown contracts. Block 44 owns resolved-mode and safe ProcessAssets lifecycle UI; blocks 45–46 own cross-mode/image evidence; blocks 47–49/51 own generalized protocol and capability-specific Lookup/cache page state; block 50 owns generic coordinator arbitration diagnostics without PID/JobId UI; block 55 owns final heavy-Web removal; and block 70 owns comprehensive deployment-mode trade-off guidance. The current source/artifact mismatch is a hard apply-time prerequisite check, not permission to duplicate missing contracts. Block 43 is parallel-owned and untouched.
 
-**OpenSpec** — [42-implement-web-only-deployment-mode](openspec/changes/42-implement-web-only-deployment-mode/)
+**OpenSpec** — [42-implement-web-only-deployment-mode](openspec/changes/archive/2026-09-08-42-implement-web-only-deployment-mode/)
 
 ### 43. `feat: implement run-once mode`
 
