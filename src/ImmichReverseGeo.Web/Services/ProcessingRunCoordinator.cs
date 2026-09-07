@@ -47,6 +47,7 @@ internal enum ProcessingRunAdmissionAttempt
 internal interface IProcessingRunCoordinatorObserver
 {
     ValueTask BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt attempt) => ValueTask.CompletedTask;
+    ValueTask BeforeChildDispatchClaimAsync(ProcessingRunRequest request) => ValueTask.CompletedTask;
     void CoordinatorStarted() { }
     void CoordinatorStopping() { }
     void CoordinatorStopped() { }
@@ -586,6 +587,25 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 ThrowIfShutdownCancellationRequested(handle);
             }
 
+            if (_observer is not null)
+            {
+                await _observer.BeforeChildDispatchClaimAsync(handle.Request).ConfigureAwait(false);
+            }
+
+            if (!TryClaimChildDispatch(handle))
+            {
+                if (!handle.IsShutdownRequested && handle.Cancellation.Token.IsCancellationRequested)
+                {
+                    await FinalizePredispatchAsync(
+                        handle,
+                        ProcessingRunOutcome.Cancelled,
+                        safeFailureMessage: null).ConfigureAwait(false);
+                    return;
+                }
+
+                throw new OperationCanceledException(handle.Cancellation.Token);
+            }
+
             Task<ProcessingRunResult> execution;
             try
             {
@@ -612,6 +632,21 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         finally
         {
             handle.PreparationCompleted.TrySetResult();
+        }
+    }
+
+    private bool TryClaimChildDispatch(ActiveRun handle)
+    {
+        lock (_admissionGate)
+        {
+            if (!_admissionOpen
+                || !ReferenceEquals(_active, handle)
+                || handle.IsShutdownRequested)
+            {
+                return false;
+            }
+
+            return handle.TryClaimChildDispatch();
         }
     }
 
@@ -828,7 +863,10 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         try
         {
-            if (!_reporter.AbandonProjectedActivities(handle.Request))
+            var abandoned = handle.HasClaimedChildDispatch
+                ? _reporter.AbandonProjectedActivities(handle.Request)
+                : _reporter.AbandonForShutdown(handle.Request);
+            if (!abandoned)
             {
                 _reporter.RollbackPendingAfterArmRejection(handle.Request);
             }
@@ -1183,6 +1221,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private sealed class ActiveRun
     {
         private int _cleanupStarted;
+        private bool _childDispatchClaimed;
         private int _cancellationFailureObserved;
         private int _shutdownRequested;
         private Task? _ownedExecution;
@@ -1223,6 +1262,17 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         public ExceptionDispatchInfo? ExecutionFailure { get; set; }
         public bool HasOwnedExecution => Volatile.Read(ref _ownedExecution) is not null;
         public bool IsShutdownRequested => Volatile.Read(ref _shutdownRequested) != 0;
+        public bool HasClaimedChildDispatch
+        {
+            get
+            {
+                lock (_childGate)
+                {
+                    return _childDispatchClaimed;
+                }
+            }
+        }
+
         public bool OwnsFinalization
         {
             get
@@ -1237,6 +1287,24 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         public void MarkShutdownRequested()
         {
             Volatile.Write(ref _shutdownRequested, 1);
+        }
+
+        public bool TryClaimChildDispatch()
+        {
+            lock (_childGate)
+            {
+                if (_childDispatchClaimed
+                    || (Request.Trigger == ProcessingRunTrigger.Scheduled
+                        && (_stopRequest is not null
+                            || _stopClaimsClosed
+                            || Cancellation.Token.IsCancellationRequested)))
+                {
+                    return false;
+                }
+
+                _childDispatchClaimed = true;
+                return true;
+            }
         }
 
         public void SetOwnedExecution(Task execution)

@@ -418,6 +418,122 @@ public class ProcessingStateEventReporterTests
     }
 
     [TestMethod]
+    [TestCategory("Change41")]
+    public async Task AbandonForShutdown_ReleasesExactArmAfterCleanupNotificationFailureWithoutInventingATerminal()
+    {
+        var state = CompletedPriorState();
+        var reporter = new ProcessingStateEventReporter(state);
+        var request = Request();
+        state.MarkPending();
+        Assert.IsTrue(reporter.Arm(request));
+        var opened = await OpenEligibleAsync(reporter, request, 2);
+        var firstActivity = await opened.Session.BeginActivityAsync("first shutdown activity");
+        var secondActivity = await opened.Session.BeginActivityAsync("second shutdown activity");
+        state.IncrementError("preexisting shutdown sentinel");
+        var priorCompletion = state.LastRunCompleted;
+        var priorError = state.LastError;
+        var priorLog = state.GetRecentLog().ToArray();
+        Action brokenObserver = () => throw new InvalidOperationException("shutdown notification failed");
+        state.OnChanged += brokenObserver;
+
+        try
+        {
+            var failure = Assert.ThrowsExactly<InvalidOperationException>(
+                () => reporter.AbandonForShutdown(request));
+            Assert.AreEqual("shutdown notification failed", failure.Message, "first cleanup failure is preserved");
+        }
+        finally
+        {
+            state.OnChanged -= brokenObserver;
+        }
+
+        Assert.IsFalse(state.IsRunning, "shutdown clears pending even when notification fails");
+        Assert.IsNull(state.CurrentActivity, "shutdown attempts every owned activity cleanup");
+        Assert.IsFalse(reporter.IsArmed(request), "shutdown releases the exact arm in finally");
+        Assert.AreEqual(priorCompletion, state.LastRunCompleted, "shutdown preserves historical completion");
+        Assert.AreEqual(priorError, state.LastError, "shutdown preserves historical error");
+        CollectionAssert.AreEqual(priorLog, state.GetRecentLog().ToArray(), "shutdown adds no terminal log");
+
+        var later = Request();
+        state.MarkPending();
+        Assert.IsTrue(reporter.Arm(later), "released shutdown arm permits a later isolated test session");
+        var laterSnapshot = Snapshot(state);
+        await AcceptRawAsync(reporter, new EligibilityDetermined(request, 99));
+        AssertSnapshot(laterSnapshot, state);
+        Assert.IsTrue(reporter.AbandonForShutdown(later));
+
+        await firstActivity.DisposeAsync();
+        await secondActivity.DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestCategory("Change41")]
+    public void AbandonForShutdown_WrongRequestCannotMutateOrReleaseTheCurrentArm()
+    {
+        var state = CompletedPriorState();
+        var reporter = new ProcessingStateEventReporter(state);
+        var current = Request();
+        var stale = Request();
+        state.MarkPending();
+        Assert.IsTrue(reporter.Arm(current));
+        var before = Snapshot(state);
+
+        Assert.IsFalse(reporter.AbandonForShutdown(stale));
+
+        AssertSnapshot(before, state);
+        Assert.IsTrue(reporter.IsArmed(current));
+        Assert.IsTrue(reporter.AbandonForShutdown(current));
+    }
+
+    [TestMethod]
+    [TestCategory("Change41")]
+    public async Task AbandonForShutdown_ReentrantActivityNotificationCannotReleaseAReplacementArm()
+    {
+        var state = new ProcessingState();
+        ProcessingStateEventReporter? reporter = null;
+        var current = Request();
+        var replacement = Request();
+        reporter = new ProcessingStateEventReporter(
+            state,
+            beforeProjection: null,
+            (action, request) =>
+            {
+                if (action == "release" && ReferenceEquals(request, current))
+                {
+                    Assert.IsTrue(reporter!.Arm(replacement), "release callback can establish the next exact arm");
+                }
+            });
+        state.MarkPending();
+        Assert.IsTrue(reporter.Arm(current));
+        var opened = await OpenEligibleAsync(reporter, current, 1);
+        var activity = await opened.Session.BeginActivityAsync("reentrant shutdown activity");
+        var reentrantAttempts = 0;
+        state.OnChanged += ReenterAbandonment;
+
+        try
+        {
+            Assert.IsTrue(reporter.AbandonForShutdown(current));
+        }
+        finally
+        {
+            state.OnChanged -= ReenterAbandonment;
+        }
+
+        Assert.IsTrue(reentrantAttempts > 0, "activity disposal and pending cleanup exercised reentrant notifications");
+        Assert.IsFalse(reporter.IsArmed(current));
+        Assert.IsTrue(reporter.IsArmed(replacement), "outer cleanup cannot release the replacement arm");
+        Assert.IsTrue(reporter.AbandonForShutdown(replacement));
+        await activity.DisposeAsync();
+        return;
+
+        void ReenterAbandonment()
+        {
+            reentrantAttempts++;
+            Assert.IsFalse(reporter.AbandonForShutdown(current), "claimed shutdown cleanup rejects reentry");
+        }
+    }
+
+    [TestMethod]
     public async Task HandledFailureThenTerminalFailure_PreservesDomainCountAndAddsOneLegacyFatal()
     {
         var state = new ProcessingState();

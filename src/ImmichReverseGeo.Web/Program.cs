@@ -1,11 +1,8 @@
 using System;
 using System.Collections.Generic;
-using System.Linq;
 using ImmichReverseGeo.Web.ApplicationRole;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.WorkerHost;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.Extensions.Hosting;
 
 var workerErrorWriter = Console.Error;
 
@@ -29,33 +26,13 @@ void RunInternalWorker(IReadOnlyList<string> selectedArguments)
 
 void RunWebApplication(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode deploymentMode, IReadOnlyList<string> selectedArguments)
 {
-    var builder = WebApplication.CreateBuilder(selectedArguments.ToArray());
-    var environment = builder.Environment.IsDevelopment()
-        ? CompositionEnvironment.Development
-        : CompositionEnvironment.Production;
-    var context = ApplicationCompositionContext.Create(
-        environment,
-        builder.Environment.ContentRootPath,
-        Environment.GetEnvironmentVariable("DATA_DIR"),
-        Environment.GetEnvironmentVariable("CONFIG_DIR"),
-        deploymentMode);
-
-    builder.Services.AddWebComposition(context);
-
-    var app = builder.Build();
-
-    if (!app.Environment.IsDevelopment())
+    if (ReferenceEquals(deploymentMode, ImmichReverseGeo.Core.ApplicationRole.DeploymentMode.Standard))
     {
-        app.UseExceptionHandler("/Error");
+        StandardWebApplication.Run(deploymentMode, selectedArguments, Environment.GetEnvironmentVariable);
+        return;
     }
 
-    app.UseAntiforgery();
-
-    app.MapStaticAssets();
-    app.MapRazorComponents<ImmichReverseGeo.Web.Components.App>()
-        .AddInteractiveServerRenderMode();
-
-    app.Run();
+    WebApplicationComposition.RunLegacyWeb(deploymentMode, selectedArguments, Environment.GetEnvironmentVariable);
 }
 
 void RunOnce(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode deploymentMode, IReadOnlyList<string> selectedArguments)

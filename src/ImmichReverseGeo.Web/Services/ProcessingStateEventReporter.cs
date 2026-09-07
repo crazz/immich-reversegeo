@@ -302,6 +302,56 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         }
     }
 
+    internal bool AbandonForShutdown(ProcessingRunRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        lock (_projectionGate)
+        {
+            if (!ReferenceEquals(_armedRequest, request) || _terminal)
+            {
+                return false;
+            }
+
+            _terminal = true;
+            var activities = _activities.Values.ToArray();
+            _activities.Clear();
+            ExceptionDispatchInfo? firstFailure = null;
+            foreach (var activity in activities)
+            {
+                try
+                {
+                    activity.Dispose();
+                }
+                catch (Exception failure)
+                {
+                    firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+                }
+            }
+            try
+            {
+                _state.ClearPending();
+            }
+            catch (Exception failure)
+            {
+                firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+            }
+            finally
+            {
+                try
+                {
+                    ReleaseArm();
+                }
+                catch (Exception failure)
+                {
+                    firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+                }
+            }
+
+            firstFailure?.Throw();
+            return true;
+        }
+    }
+
     internal bool Abandon(ProcessingRunRequest request, Exception failure)
     {
         ArgumentNullException.ThrowIfNull(request);

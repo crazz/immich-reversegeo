@@ -243,6 +243,113 @@ public sealed class CoordinatorScheduledGateTests
         AssertNoChildBoundary(fixture, "unexpected-detector-failure");
     }
 
+    [TestMethod]
+    [TestCategory("Change41")]
+    public async Task ScheduledEligibility_HostShutdownWinsDispatchClaimWithoutResolvingAChild()
+    {
+        var gate = new SignalGate();
+        var dispatch = new DispatchClaimGate();
+        await using var fixture = ScheduledCoordinatorFixture.CreateWithObserver(
+            gate,
+            dispatch,
+            ProcessFixturePlan.NoWork);
+        Task<ScheduledTriggerResult> scheduled = fixture.TriggerScheduledAsync();
+        Exception? scheduledFailure = null;
+        var childScopeCreationAttempts = -1;
+
+        try
+        {
+            await gate.Entered.Task.WaitAsync(Bound);
+            gate.Decide(true);
+            await dispatch.Entered.Task.WaitAsync(Bound);
+
+            Task shutdown = fixture.Coordinator.BeginShutdown();
+            await dispatch.CancellationObserved.Task.WaitAsync(Bound);
+
+            Assert.AreEqual(
+                ProcessingRunAdmissionResult.Stopping,
+                await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
+                "shutdown closes admission before the child dispatch claim");
+            Assert.AreEqual(0, fixture.ChildScopeCreationAttempts, "blocked claim has not created a child scope");
+
+            dispatch.Release.TrySetResult();
+            Task childLaunch = fixture.Launcher.WaitForLaunchCountAsync(1);
+            Task firstOutcome = await Task.WhenAny(scheduled, childLaunch).WaitAsync(Bound);
+            if (ReferenceEquals(firstOutcome, childLaunch))
+            {
+                await childLaunch.WaitAsync(Bound);
+                await fixture.Launcher.Leases.Single().CompleteAsync().WaitAsync(Bound);
+            }
+
+            childScopeCreationAttempts = fixture.ChildScopeCreationAttempts;
+            try
+            {
+                await scheduled.WaitAsync(Bound);
+            }
+            catch (Exception failure)
+            {
+                scheduledFailure = failure;
+            }
+
+            await shutdown.WaitAsync(Bound);
+        }
+        finally
+        {
+            dispatch.Release.TrySetResult();
+            if (fixture.Launcher.Leases.Count == 1)
+            {
+                await fixture.Launcher.Leases[0].CompleteAsync().WaitAsync(Bound);
+            }
+        }
+
+        Assert.AreEqual(0, childScopeCreationAttempts, "shutdown winner creates no child scope");
+        Assert.AreEqual(0, fixture.ChildBackendResolutionAttempts, "shutdown winner resolves no child backend");
+        Assert.AreEqual(0, fixture.Launcher.CallCount, "shutdown winner starts no child process");
+        Assert.IsInstanceOfType<OperationCanceledException>(
+            scheduledFailure,
+            "the shutdown-fenced scheduled request preserves its cancellation boundary");
+        Assert.IsNull(fixture.Coordinator.ActiveRequest, "shutdown cleanup releases the exact request");
+        Assert.IsFalse(fixture.State.IsRunning, "shutdown cleanup rolls back pending state");
+        Assert.IsNull(fixture.State.LastRunCompleted, "host shutdown does not invent a normal terminal");
+        Assert.IsNull(fixture.State.LastError, "host shutdown does not invent a failure terminal");
+    }
+
+    [TestMethod]
+    [TestCategory("Change41")]
+    public async Task ScheduledEligibility_CallerCancellationWinsDispatchClaimAndFinalizesLocally()
+    {
+        var gate = new SignalGate();
+        var dispatch = new DispatchClaimGate();
+        await using var fixture = ScheduledCoordinatorFixture.CreateWithObserver(gate, dispatch);
+        using var callerCancellation = new CancellationTokenSource();
+        Task<ScheduledTriggerResult> scheduled = fixture.TriggerScheduledAsync(callerCancellation.Token);
+
+        try
+        {
+            await gate.Entered.Task.WaitAsync(Bound);
+            gate.Decide(true);
+            await dispatch.Entered.Task.WaitAsync(Bound);
+            callerCancellation.Cancel();
+
+            dispatch.Release.TrySetResult();
+            var failure = await Assert.ThrowsAsync<OperationCanceledException>(
+                () => scheduled.WaitAsync(Bound));
+            Assert.AreEqual(callerCancellation.Token, failure.CancellationToken);
+        }
+        finally
+        {
+            dispatch.Release.TrySetResult();
+        }
+
+        Assert.AreEqual(0, fixture.ChildScopeCreationAttempts, "cancel-before-claim creates no child scope");
+        Assert.AreEqual(0, fixture.ChildBackendResolutionAttempts, "cancel-before-claim resolves no child backend");
+        Assert.AreEqual(0, fixture.Launcher.CallCount, "cancel-before-claim starts no child process");
+        Assert.IsNull(fixture.Coordinator.ActiveRequest, "local cancellation releases the exact request");
+        Assert.IsFalse(fixture.State.IsRunning, "local cancellation reaches idle");
+        Assert.IsNotNull(fixture.State.LastRunCompleted, "local cancellation retains its established terminal");
+        Assert.IsNull(fixture.State.LastError, "local cancellation adds no failure");
+    }
+
     private static void AssertNoChildBoundary(ScheduledCoordinatorFixture fixture, string scenario)
     {
         Assert.AreEqual(0, fixture.ChildScopeCreationAttempts, scenario + "-no-child-scope");
@@ -293,6 +400,22 @@ public sealed class CoordinatorScheduledGateTests
 
         internal static ScheduledCoordinatorFixture Create(SignalGate gate, params ProcessFixturePlan[] plans)
         {
+            return CreateCore(gate, observer: null, plans);
+        }
+
+        internal static ScheduledCoordinatorFixture CreateWithObserver(
+            SignalGate gate,
+            IProcessingRunCoordinatorObserver observer,
+            params ProcessFixturePlan[] plans)
+        {
+            return CreateCore(gate, observer, plans);
+        }
+
+        private static ScheduledCoordinatorFixture CreateCore(
+            SignalGate gate,
+            IProcessingRunCoordinatorObserver? observer,
+            ProcessFixturePlan[] plans)
+        {
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change35-scheduled", Guid.NewGuid().ToString("N"));
             var services = new ServiceCollection();
             var launcher = new ProcessFixtureLauncher(plans);
@@ -329,7 +452,9 @@ public sealed class CoordinatorScheduledGateTests
                         sp.GetRequiredService<ProcessingStateEventReporter>(),
                         sp.GetRequiredService<IScheduledRunWorkGate>(),
                         childBoundary,
-                        Microsoft.Extensions.Logging.Abstractions.NullLogger<ProcessingRunCoordinator>.Instance);
+                        Microsoft.Extensions.Logging.Abstractions.NullLogger<ProcessingRunCoordinator>.Instance,
+                        Guid.NewGuid,
+                        observer);
                 });
                 var provider = services.BuildServiceProvider(validateScopes: true);
                 var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
@@ -500,6 +625,26 @@ public sealed class CoordinatorScheduledGateTests
         internal void Fail(Exception failure)
         {
             _decision.TrySetException(failure);
+        }
+    }
+
+    private sealed class DispatchClaimGate : IProcessingRunCoordinatorObserver
+    {
+        internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource Release { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource CancellationObserved { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async ValueTask BeforeChildDispatchClaimAsync(ProcessingRunRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            Entered.TrySetResult();
+            await Release.Task.ConfigureAwait(false);
+        }
+
+        public void BeforeRequestCancellation(ProcessingRunRequest request)
+        {
+            ArgumentNullException.ThrowIfNull(request);
+            CancellationObserved.TrySetResult();
         }
     }
 

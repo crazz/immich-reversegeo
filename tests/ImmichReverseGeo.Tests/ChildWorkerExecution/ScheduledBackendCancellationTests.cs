@@ -202,6 +202,7 @@ public sealed class ScheduledBackendCancellationTests
 
     private static async Task ReadyAndAcceptAsync(ScheduledChildLaunch launch)
     {
+        await launch.ReadyTimerCreated.WaitAsync(Bound);
         launch.Process.StandardOutputSource.Enqueue(
             SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
         await launch.Session.ExecuteRequestAccepted.WaitAsync(Bound);
@@ -366,13 +367,24 @@ public sealed class ScheduledBackendCancellationTests
                 input,
                 ChildProcessKillOutcome.Requested,
                 exitOnKill: false);
+            Task readyTimerCreated = options.TimeProvider switch
+            {
+                CancellationTestClock clock => clock.WaitForTimerCreatedAsync(clock.TimerGeneration),
+                BlockingTimestampClock clock => clock.WaitForTimerCreatedAsync(clock.TimerGeneration),
+                _ => throw new InvalidOperationException("The scheduled cancellation fixture requires a signaling clock.")
+            };
             ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
                 process,
                 request,
                 eventSink,
                 options,
                 new ChildWorkerObserverArmingAcknowledgements());
-            var launch = new ScheduledChildLaunch(request, input, process, session);
+            var launch = new ScheduledChildLaunch(
+                request,
+                input,
+                process,
+                session,
+                readyTimerCreated);
             _allLaunches.Add(launch);
             _launches.Enqueue(launch);
             _available.Release();
@@ -400,7 +412,8 @@ public sealed class ScheduledBackendCancellationTests
         ProcessingRunRequest Request,
         SessionInputStream Input,
         SessionTestProcess Process,
-        ChildWorkerSession Session);
+        ChildWorkerSession Session,
+        Task ReadyTimerCreated);
 
     private sealed class ImmediateInvocationBuilder : IWorkerCommandInvocationBuilder
     {
@@ -454,6 +467,13 @@ public sealed class ScheduledBackendCancellationTests
             TimeSpan period)
         {
             return _inner.CreateTimer(callback, state, dueTime, period);
+        }
+
+        internal long TimerGeneration => _inner.TimerGeneration;
+
+        internal Task WaitForTimerCreatedAsync(long afterGeneration)
+        {
+            return _inner.WaitForTimerCreatedAsync(afterGeneration);
         }
 
         internal void BlockNextTimestamp()

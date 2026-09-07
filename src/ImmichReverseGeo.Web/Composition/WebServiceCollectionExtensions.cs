@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
@@ -10,6 +11,20 @@ namespace ImmichReverseGeo.Web.Composition;
 
 internal static class WebServiceCollectionExtensions
 {
+    internal static IServiceCollection AddStandardWebComposition(
+        this IServiceCollection services,
+        ApplicationCompositionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(context);
+        if (!ReferenceEquals(context.DeploymentMode, DeploymentMode.Standard))
+        {
+            throw new ArgumentException("Standard Web composition requires the resolved Standard deployment mode.", nameof(context));
+        }
+
+        return services.AddWebComposition(context);
+    }
+
     internal static IServiceCollection AddWebComposition(
         this IServiceCollection services,
         ApplicationCompositionContext context)
