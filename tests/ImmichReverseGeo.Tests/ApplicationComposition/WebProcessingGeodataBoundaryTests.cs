@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.Reflection;
 using System.Runtime.CompilerServices;
+using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Gadm.Services;
@@ -25,6 +26,42 @@ namespace ImmichReverseGeo.Tests.ApplicationComposition;
 public sealed class WebProcessingGeodataBoundaryTests
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 7, 0, 0, 0, TimeSpan.Zero);
+
+    [TestMethod]
+    [TestCategory("Change42")]
+    public async Task ProductionWebOnlyManualRoot_PreservesTheChildBoundaryWithoutScheduledOrGeodataResolution()
+    {
+        await using var fixture = WebBoundaryFixture.Create(0, webOnly: true);
+
+        var guard = new ProcessingFactoryGraph(fixture.ProductionDescriptors);
+        string? failure = guard.FindForbiddenPath(
+            typeof(IManualProcessingRunCoordinator),
+            typeof(IChildProcessingRunBackend));
+
+        Assert.IsNull(failure, failure);
+        Assert.AreEqual(0, guard.OpaqueFactoryCount, guard.OpaqueFactorySummary);
+        Assert.IsTrue(
+            guard.CapturedFactoryTypes.Contains(typeof(IChildProcessingRunBackend)),
+            "the guard executes the actual WebOnly child-boundary factory");
+        foreach (Type absent in new[]
+        {
+            typeof(ProcessingBackgroundService),
+            typeof(IScheduledRunTrigger),
+            typeof(IScheduledRunWorkGate),
+            typeof(IScheduledRunWorkCounter)
+        })
+        {
+            Assert.AreEqual(0, fixture.ProductionDescriptors.Count(descriptor => descriptor.ServiceType == absent), absent.Name);
+        }
+
+        var manual = fixture.Provider.GetRequiredService<IManualProcessingRunCoordinator>();
+        Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await manual.TriggerManualAsync(), "web-only-manual-admission");
+        _ = fixture.Boundary.SingleInvocation();
+        Assert.AreEqual(0, fixture.CountRepository.Calls, "web-only-manual-has-no-scheduled-counter");
+        Assert.AreEqual(0, fixture.Forbidden.TotalResolutionCount, "web-only-manual-forbidden-resolution");
+        Assert.AreEqual(0, fixture.IndexObserver.Calls, "web-only-manual-country-index-load");
+        AssertNoChildRuntimeEffect(fixture, "web-only-manual");
+    }
 
     [TestMethod]
     public void ProductionProcessingFactoryGraph_RejectsNoForbiddenDependency()
@@ -342,7 +379,8 @@ public sealed class WebProcessingGeodataBoundaryTests
         internal static WebBoundaryFixture Create(
             long count,
             bool accidentalCountryIndexBackend = false,
-            bool preserveProductionCounter = false)
+            bool preserveProductionCounter = false,
+            bool webOnly = false)
         {
             string fixtureRoot = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change39-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(fixtureRoot);
@@ -352,16 +390,28 @@ public sealed class WebProcessingGeodataBoundaryTests
                 Path.Combine(AppContext.BaseDirectory, "data", "iso3166.json"),
                 Path.Combine(bundledDataDirectory, "iso3166.json"));
             var services = new ServiceCollection();
-            services.AddWebComposition(ApplicationCompositionContext.Create(
+            var context = ApplicationCompositionContext.Create(
                 CompositionEnvironment.Development,
                 fixtureRoot,
                 Path.Combine(fixtureRoot, "data"),
-                Path.Combine(fixtureRoot, "config")));
+                Path.Combine(fixtureRoot, "config"),
+                webOnly ? DeploymentMode.WebOnly : DeploymentMode.Standard);
+            if (webOnly)
+            {
+                services.AddWebOnlyWebComposition(context);
+            }
+            else
+            {
+                services.AddWebComposition(context);
+            }
             IReadOnlyList<ServiceDescriptor> productionDescriptors = services.ToArray();
 
-            Assert.IsNotNull(
-                services.Single(descriptor => descriptor.ServiceType == typeof(IScheduledRunWorkGate)).ImplementationFactory,
-                "the production count-gate factory must remain inspectable before the test override");
+            if (!webOnly)
+            {
+                Assert.IsNotNull(
+                    services.Single(descriptor => descriptor.ServiceType == typeof(IScheduledRunWorkGate)).ImplementationFactory,
+                    "the production count-gate factory must remain inspectable before the test override");
+            }
             Assert.IsNotNull(
                 services.Single(descriptor => descriptor.ServiceType == typeof(IChildProcessingRunBackend)).ImplementationFactory,
                 "the production child-boundary factory must remain inspectable before the test override");

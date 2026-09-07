@@ -65,7 +65,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private readonly object _admissionGate = new();
     private readonly ProcessingState _state;
     private readonly ProcessingStateEventReporter _reporter;
-    private readonly IScheduledRunWorkGate _scheduledRunWorkGate;
+    private readonly IScheduledRunWorkGate? _scheduledRunWorkGate;
     private readonly IServiceScopeFactory _childBackendScopeFactory;
     private readonly ILogger<ProcessingRunCoordinator> _logger;
     private readonly Func<Guid> _createRunId;
@@ -159,10 +159,46 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         IProcessingRunCoordinatorObserver? observer,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
+        : this(
+            state,
+            reporter,
+            scheduledRunWorkGate,
+            childBackendScopeFactory,
+            logger,
+            createRunId,
+            cancellationFactory,
+            observer,
+            applicationLifetime,
+            timeProvider,
+            scheduledRunsSupported: true)
+    {
+    }
+
+    private ProcessingRunCoordinator(
+        ProcessingState state,
+        ProcessingStateEventReporter reporter,
+        IScheduledRunWorkGate? scheduledRunWorkGate,
+        IServiceScopeFactory childBackendScopeFactory,
+        ILogger<ProcessingRunCoordinator> logger,
+        Func<Guid> createRunId,
+        IProcessingRunCancellationFactory cancellationFactory,
+        IProcessingRunCoordinatorObserver? observer,
+        IHostApplicationLifetime? applicationLifetime,
+        TimeProvider? timeProvider,
+        bool scheduledRunsSupported)
     {
         ArgumentNullException.ThrowIfNull(state);
         ArgumentNullException.ThrowIfNull(reporter);
-        ArgumentNullException.ThrowIfNull(scheduledRunWorkGate);
+        if (scheduledRunsSupported)
+        {
+            ArgumentNullException.ThrowIfNull(scheduledRunWorkGate);
+        }
+        else if (scheduledRunWorkGate is not null)
+        {
+            throw new ArgumentException(
+                "A manual-only coordinator cannot use a scheduled work gate.",
+                nameof(scheduledRunWorkGate));
+        }
         ArgumentNullException.ThrowIfNull(childBackendScopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(createRunId);
@@ -188,6 +224,30 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
     }
 
+    internal static ProcessingRunCoordinator CreateManualOnly(
+        ProcessingState state,
+        ProcessingStateEventReporter reporter,
+        IServiceScopeFactory childBackendScopeFactory,
+        ILogger<ProcessingRunCoordinator> logger,
+        Func<Guid> createRunId,
+        IProcessingRunCoordinatorObserver? observer,
+        IHostApplicationLifetime? applicationLifetime = null,
+        TimeProvider? timeProvider = null)
+    {
+        return new ProcessingRunCoordinator(
+            state,
+            reporter,
+            scheduledRunWorkGate: null,
+            childBackendScopeFactory,
+            logger,
+            createRunId,
+            new ProcessingRunCancellationFactory(),
+            observer,
+            applicationLifetime,
+            timeProvider,
+            scheduledRunsSupported: false);
+    }
+
     public async Task<ProcessingRunAdmissionResult> TriggerManualAsync()
     {
         await BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt.Manual).ConfigureAwait(false);
@@ -203,6 +263,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
     async Task<ScheduledTriggerResult> IScheduledRunTrigger.TriggerScheduledAsync(CancellationToken stoppingToken)
     {
+        if (_scheduledRunWorkGate is null)
+        {
+            throw new InvalidOperationException("Scheduled processing is not available in this deployment mode.");
+        }
+
         await BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt.Scheduled).ConfigureAwait(false);
         var reservation = Reserve(ProcessingRunTrigger.Scheduled, stoppingToken);
         if (reservation.Result != ProcessingRunAdmissionResult.Accepted)
@@ -656,7 +721,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         try
         {
             ThrowIfShutdownCancellationRequested(handle);
-            hasWork = await _scheduledRunWorkGate.HasWorkAsync(handle.Cancellation.Token).ConfigureAwait(false);
+            hasWork = await _scheduledRunWorkGate!.HasWorkAsync(handle.Cancellation.Token).ConfigureAwait(false);
             handle.Cancellation.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException) when (handle.Cancellation.Token.IsCancellationRequested)

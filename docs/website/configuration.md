@@ -8,7 +8,9 @@ icon: material/tune-variant
 
 Immich ReverseGeo reads the optional `IMMICH_REVERSEGEO_MODE` environment variable once when the container starts. Omit it to select the compatible Standard default. The only accepted values are `standard`, `web-only`, and `run-once`; use lowercase exactly as shown. Empty, padded, case-varied, or unknown values stop startup with exit code 2.
 
-The selected value is not saved in `settings.json`. Change it in your Compose or container environment and restart the container. Standard runs the Web app, manual controls, and internal schedule; accepted processing runs execute in temporary child workers. Web-only and Run-once are recognized startup values, but their separate runtime behavior is not available yet.
+The selected value is not saved in `settings.json`. Change it in your Compose or container environment and restart the container. Standard runs the Web app, manual controls, and internal schedule. Web-only runs the same Web app and keeps manual processing available, but it does not start the internal scheduler. Existing schedule values remain visible and editable in Settings and become active again when you return to Standard mode. Run-once is recognized, but its runtime behavior is not available yet.
+
+Web-only does not add an HTTP, command-line, or queue trigger, so an external scheduler cannot start processing by itself. The Lookup and Data pages remain available with their current behavior; they do not yet use the temporary processing worker boundary.
 
 <div class="section-intro">
 The Settings page is intentionally small. Most users only need to check the database connection, pick a schedule, and tune how aggressively processing should run. Country-specific city matching now lives on its own City Resolver page.

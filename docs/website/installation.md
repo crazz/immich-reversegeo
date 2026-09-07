@@ -18,7 +18,9 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
 
 ## Preferred setup
 
-The reference Compose file omits `IMMICH_REVERSEGEO_MODE`, which selects the compatible Standard default. Standard runs the Web app and schedule, and starts temporary child workers for accepted processing runs. If you need to set the public selector, use one exact lowercase value: `standard`, `web-only`, or `run-once`. It is an environment setting, not a `settings.json` option, so restart the container after changing it. Web-only and Run-once are recognized startup values, but their separate runtime behavior is not available yet.
+The reference Compose file omits `IMMICH_REVERSEGEO_MODE`, which selects the compatible Standard default. Standard runs the Web app and schedule, and starts temporary child workers for accepted processing runs. If you need the Web interface and manual runs without the internal scheduler, set `IMMICH_REVERSEGEO_MODE=web-only`. Saved schedule values stay in Settings but remain inactive until you return to Standard mode.
+
+Use one exact lowercase value: `standard`, `web-only`, or `run-once`. This is an environment setting, not a `settings.json` option, so restart the container after changing it. Run-once is recognized, but its runtime behavior is not available yet.
 
 - Add the service to your existing Immich `docker-compose.yml`.
 - Reuse the same `.env` file that already contains your Immich database settings.

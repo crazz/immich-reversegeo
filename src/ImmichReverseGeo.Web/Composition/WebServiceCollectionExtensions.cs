@@ -29,10 +29,33 @@ internal static class WebServiceCollectionExtensions
         this IServiceCollection services,
         ApplicationCompositionContext context)
     {
+        return AddWebCompositionCore(services, context, scheduledRunsEnabled: true);
+    }
+
+    internal static IServiceCollection AddWebOnlyWebComposition(
+        this IServiceCollection services,
+        ApplicationCompositionContext context)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+        ArgumentNullException.ThrowIfNull(context);
+        if (!ReferenceEquals(context.DeploymentMode, DeploymentMode.WebOnly))
+        {
+            throw new ArgumentException("Web-only composition requires the resolved Web-only deployment mode.", nameof(context));
+        }
+
+        return AddWebCompositionCore(services, context, scheduledRunsEnabled: false);
+    }
+
+    private static IServiceCollection AddWebCompositionCore(
+        IServiceCollection services,
+        ApplicationCompositionContext context,
+        bool scheduledRunsEnabled)
+    {
         ArgumentNullException.ThrowIfNull(services);
         ArgumentNullException.ThrowIfNull(context);
 
         services.AddSharedComposition(context);
+        services.AddSingleton(context);
 
         // Transitional Web dependency until Change 55 moves heavy work out of this root.
         services.AddReusableHeavyComposition();
@@ -46,11 +69,18 @@ internal static class WebServiceCollectionExtensions
             .SetApplicationName("ImmichReverseGeo")
             .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionDirectory));
 
-        services.AddSingleton<IScheduledRunWorkCounter>(sp => new RepositoryScheduledRunWorkCounter(
-            () => sp.GetRequiredService<ImmichDbRepository>()));
-        services.AddSingleton<IScheduledRunWorkGate>(sp => new CountBackedScheduledRunWorkGate(
-            sp.GetRequiredService<IScheduledRunWorkCounter>().GetUnprocessedCountAsync));
-        services.AddProcessingControlPlaneServices();
+        if (scheduledRunsEnabled)
+        {
+            services.AddSingleton<IScheduledRunWorkCounter>(sp => new RepositoryScheduledRunWorkCounter(
+                () => sp.GetRequiredService<ImmichDbRepository>()));
+            services.AddSingleton<IScheduledRunWorkGate>(sp => new CountBackedScheduledRunWorkGate(
+                sp.GetRequiredService<IScheduledRunWorkCounter>().GetUnprocessedCountAsync));
+            services.AddProcessingControlPlaneServices();
+        }
+        else
+        {
+            services.AddManualProcessingControlPlaneServices();
+        }
         services.AddSingleton<SystemChildProcessFactory>();
         services.AddSingleton<IChildProcessFactory>(sp => sp.GetRequiredService<SystemChildProcessFactory>());
         services.AddSingleton(sp => new ChildWorkerLauncher(sp.GetRequiredService<IChildProcessFactory>()));

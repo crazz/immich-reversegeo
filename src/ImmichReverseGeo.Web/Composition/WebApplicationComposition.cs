@@ -52,16 +52,4 @@ internal static class WebApplicationComposition
         return app;
     }
 
-    internal static void RunLegacyWeb(
-        DeploymentMode deploymentMode,
-        IReadOnlyList<string> arguments,
-        Func<string, string?> environmentVariableReader)
-    {
-        var builder = CreateBuilder(
-            deploymentMode,
-            arguments,
-            environmentVariableReader,
-            static (services, context) => services.AddWebComposition(context));
-        Build(builder).Run();
-    }
 }

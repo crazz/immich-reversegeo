@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @inject ConfigService Config
 @inject ImmichDbRepository Db
+@inject ApplicationCompositionContext Composition
 
 <h2>Settings</h2>
 
@@ -58,6 +59,10 @@
 <section class="settings-card">
     <h3>Schedule</h3>
     <p class="section-intro">Choose when automatic processing should run. Manual runs from the dashboard still work at any time.</p>
+    @if (ReferenceEquals(Composition.DeploymentMode, DeploymentMode.WebOnly))
+    {
+        <div class="alert alert-success">Web-only mode keeps these schedule settings, but internal scheduling is disabled. Manual runs remain available from the dashboard.</div>
+    }
     <div class="form-group">
         <label><input type="checkbox" @bind="_cfg.Schedule.Enabled" /> Run processing automatically on a schedule</label>
     </div>

@@ -32,7 +32,7 @@ void RunWebApplication(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode depl
         return;
     }
 
-    WebApplicationComposition.RunLegacyWeb(deploymentMode, selectedArguments, Environment.GetEnvironmentVariable);
+    WebOnlyWebApplication.Run(deploymentMode, selectedArguments, Environment.GetEnvironmentVariable);
 }
 
 void RunOnce(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode deploymentMode, IReadOnlyList<string> selectedArguments)
