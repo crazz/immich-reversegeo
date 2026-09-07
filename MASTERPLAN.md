@@ -825,7 +825,7 @@ Preserve existing network and storage behavior: production containers remain on 
 
 **Dependencies and sequencing** — Requires finalized block 40 plus applied Phase 3–5 role, composition, coordinator, detector, launcher, worker-only executor, advisory-lock, and shutdown contracts; consume their landed names instead of creating parallel abstractions. Do not edit block 40. Block 42 owns Web-only composition, block 43 external Run-once composition, block 44 mode/worker UI, block 45 the cross-mode composition matrix, block 46 production-image/Docker/volume smoke, and Phase 7 Lookup/Data worker migration.
 
-**OpenSpec** — [41-implement-standard-deployment-mode](openspec/changes/41-implement-standard-deployment-mode/)
+**OpenSpec** — [41-implement-standard-deployment-mode](openspec/changes/archive/2026-09-07-41-implement-standard-deployment-mode/)
 
 ### 42. `feat: implement Web-only mode`
 
