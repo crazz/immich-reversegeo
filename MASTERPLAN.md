@@ -805,7 +805,7 @@ Keep one neutral production image and the existing entrypoint: do not bake a dep
 
 **Dependencies and sequencing** — Requires finalized Phase 3 blocks 18–19. This block defines selection only: blocks 41 and 42 own Standard and Web-only composition, block 43 owns Run-once host/execution/lifecycle, block 44 owns any UI, and block 46 owns executable Docker mode smoke tests. Do not implement or document those later behaviors here.
 
-**OpenSpec** — [40-add-deployment-mode-configuration](openspec/changes/40-add-deployment-mode-configuration/)
+**OpenSpec** — [40-add-deployment-mode-configuration](openspec/changes/archive/2026-09-07-40-add-deployment-mode-configuration/)
 
 ### 41. `feat: implement Standard mode`
 
