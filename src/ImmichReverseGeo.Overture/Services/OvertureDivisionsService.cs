@@ -31,6 +31,8 @@ public class OvertureDivisionsService
     private readonly Func<double, double, string?, string, CancellationToken, OvertureDivisionLookupDiagnostics> _divisionQuery;
     private readonly Func<byte[], Point, bool> _geometryContains;
     private readonly Func<SqliteConnection, string, string, CancellationToken, bool> _hasColumn;
+    private readonly Func<string, bool> _fileExists;
+    private Action? _beforeBundledCountryIndexLoad;
     private Action<OvertureHasColumnCheckpoint>? _hasColumnCheckpoint;
     private STRtree<BundledCountryArea>? _bundledCountryIndex;
 
@@ -48,6 +50,7 @@ public class OvertureDivisionsService
         _alpha2ToIso3 = alpha2ToIso3;
         _geometryContains = OvertureDataAccess.TryGeometryContains;
         _hasColumn = HasColumn;
+        _fileExists = File.Exists;
         _cachedDivisionQuery = QueryCachedDivisionAreas;
         _divisionQuery = QueryDivisionAreas;
     }
@@ -64,6 +67,8 @@ public class OvertureDivisionsService
         _cachedDivisionQuery = hooks.CachedDivisionQuery ?? _cachedDivisionQuery;
         _divisionQuery = hooks.DivisionQuery ?? _divisionQuery;
         _geometryContains = hooks.GeometryContains ?? _geometryContains;
+        _fileExists = hooks.FileExists ?? _fileExists;
+        _beforeBundledCountryIndexLoad = hooks.BeforeBundledCountryIndexLoad;
         _hasColumnCheckpoint = hooks.HasColumnCheckpoint;
     }
 
@@ -74,7 +79,7 @@ public class OvertureDivisionsService
     {
         ct.ThrowIfCancellationRequested();
         var bundledPath = Path.Combine(_bundledDataDir, "defaults", "overture-country-divisions.db");
-        if (!File.Exists(bundledPath))
+        if (!_fileExists(bundledPath))
         {
             ct.ThrowIfCancellationRequested();
             return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch(
@@ -196,8 +201,8 @@ public class OvertureDivisionsService
             {
                 return _bundledCountryIndex;
             }
-
             ct.ThrowIfCancellationRequested();
+            _beforeBundledCountryIndexLoad?.Invoke();
             var index = LoadBundledCountryIndex(bundledPath, ct);
             ct.ThrowIfCancellationRequested();
             _bundledCountryIndex = index;
@@ -659,6 +664,8 @@ internal sealed class OvertureDivisionsTestHooks
     public Func<double, double, string?, CancellationToken, OvertureDivisionLookupDiagnostics?>? CachedDivisionQuery { get; init; }
     public Func<double, double, string?, string, CancellationToken, OvertureDivisionLookupDiagnostics>? DivisionQuery { get; init; }
     public Func<byte[], Point, bool>? GeometryContains { get; init; }
+    public Func<string, bool>? FileExists { get; init; }
+    public Action? BeforeBundledCountryIndexLoad { get; init; }
     public Action<OvertureHasColumnCheckpoint>? HasColumnCheckpoint { get; init; }
 }
 

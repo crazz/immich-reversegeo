@@ -31,10 +31,10 @@ internal static class WebServiceCollectionExtensions
             .SetApplicationName("ImmichReverseGeo")
             .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionDirectory));
 
-        services.AddSingleton<IScheduledRunWorkGate>(sp =>
-            new CountBackedScheduledRunWorkGate(cancellationToken =>
-                sp.GetRequiredService<ImmichDbRepository>()
-                    .GetUnprocessedCountAsync(cancellationToken)));
+        services.AddSingleton<IScheduledRunWorkCounter>(sp => new RepositoryScheduledRunWorkCounter(
+            () => sp.GetRequiredService<ImmichDbRepository>()));
+        services.AddSingleton<IScheduledRunWorkGate>(sp => new CountBackedScheduledRunWorkGate(
+            sp.GetRequiredService<IScheduledRunWorkCounter>().GetUnprocessedCountAsync));
         services.AddProcessingControlPlaneServices();
         services.AddSingleton<SystemChildProcessFactory>();
         services.AddSingleton<IChildProcessFactory>(sp => sp.GetRequiredService<SystemChildProcessFactory>());

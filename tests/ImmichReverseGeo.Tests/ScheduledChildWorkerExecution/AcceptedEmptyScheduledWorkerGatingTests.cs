@@ -110,6 +110,10 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
                 ?? throw new AssertFailedException("local empty finalization did not record a zero completion timestamp");
 
             Assert.AreEqual(1, detector.CallCount, "the normal empty outcome does not retry detection");
+            AcceptedEmptyScheduledRunAssertions.AssertLocalEmptyOutcome(
+                state,
+                ownedCoordinator,
+                "accepted-empty");
             StateSnapshot[] snapshots = transitions.Snapshots;
             int pendingIndex = FindStage(snapshots, 0,
                 snapshot => snapshot.IsRunning

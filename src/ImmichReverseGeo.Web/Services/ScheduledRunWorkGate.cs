@@ -9,6 +9,19 @@ internal interface IScheduledRunWorkGate
     Task<bool> HasWorkAsync(CancellationToken cancellationToken);
 }
 
+internal interface IScheduledRunWorkCounter
+{
+    Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken);
+}
+
+internal sealed class RepositoryScheduledRunWorkCounter(Func<ImmichDbRepository> getRepository) : IScheduledRunWorkCounter
+{
+    public Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken)
+    {
+        return getRepository().GetUnprocessedCountAsync(cancellationToken);
+    }
+}
+
 internal sealed class CountBackedScheduledRunWorkGate : IScheduledRunWorkGate
 {
     private readonly Func<CancellationToken, Task<long>> _getUnprocessedCount;
