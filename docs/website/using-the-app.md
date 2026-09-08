@@ -22,6 +22,16 @@ Wait for the run to finish before starting another pass. Work that does not obse
 
 Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. The Dashboard and Logs continue to show the run while that worker is active.
 
+The Service Status card stays visible while database statistics load or when the database is unavailable. It shows:
+
+- **Deployment mode:** `Standard` or `Web-only`
+- **Internal scheduling:** whether this Web host permits the built-in scheduler; your saved schedule still controls whether Standard actually runs it
+- **ProcessAssets worker:** `Idle`, `Starting`, `Running`, `Cancelling`, or `Failed`
+
+Web-only disables the built-in scheduler without changing your saved schedule, and manual Dashboard runs remain available. Run-once starts no Web UI, so it has no Service Status card.
+
+`Failed` remains visible so an unexpected worker failure does not immediately look idle. Open Logs for the recorded processing details. The next worker start clears the retained failure; restarting the Web host creates a fresh `Idle` status.
+
 ## Lookup
 
 Use the Lookup page when you want to test a coordinate before running a full processing pass.

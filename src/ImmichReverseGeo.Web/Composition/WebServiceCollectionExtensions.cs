@@ -57,6 +57,16 @@ internal static class WebServiceCollectionExtensions
         services.AddSharedComposition(context);
         services.AddSingleton(context);
 
+        if (ReferenceEquals(context.DeploymentMode, DeploymentMode.Standard)
+            || ReferenceEquals(context.DeploymentMode, DeploymentMode.WebOnly))
+        {
+            services.AddSingleton(_ => new ProcessAssetsWebStatus(context.DeploymentMode));
+            services.AddSingleton<IProcessAssetsWebStatus>(sp =>
+                sp.GetRequiredService<ProcessAssetsWebStatus>());
+            services.AddSingleton<IProcessAssetsWorkerStatusSink>(sp =>
+                sp.GetRequiredService<ProcessAssetsWebStatus>());
+        }
+
         // Transitional Web dependency until Change 55 moves heavy work out of this root.
         services.AddReusableHeavyComposition();
 
@@ -95,7 +105,8 @@ internal static class WebServiceCollectionExtensions
             sp.GetRequiredService<IWorkerCommandInvocationBuilder>(),
             sp.GetRequiredService<IChildWorkerLauncher>(),
             sp.GetRequiredService<ProcessingStateEventReporter>(),
-            sp.GetRequiredService<TimeProvider>()));
+            sp.GetRequiredService<TimeProvider>(),
+            sp.GetService<IProcessAssetsWorkerStatusSink>()));
         services.AddSingleton(sp => new ChildWorkerStartupValidator(sp));
         services.AddHostedService(sp => sp.GetRequiredService<ChildWorkerStartupValidator>());
         return services;

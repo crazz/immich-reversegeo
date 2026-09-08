@@ -1,6 +1,6 @@
 ## Context
 
-See [proposal.md](proposal.md) for motivation and the [deployment-mode worker-status specification](specs/deployment-mode-worker-status/spec.md) for observable behavior. The checked-in source still shows the pre-migration baseline: `ProcessingState` owns processing counters/logs and a broad `OnChanged` event, Dashboard directly injects `ProcessingBackgroundService`, and NavMenu infers a dot from `IsRunning`/`LastError`. The finalized plans for blocks 13, 24–30, and 40–43 establish the coordinator-owned child session, immutable deployment-mode startup snapshot, safe failure classification, and Standard/Web-only composition, but their exact applied names are not present in this checkout yet. Block 44 implementation must re-read and consume those landed contracts rather than invent parallel lifecycle or mode ownership.
+See [proposal.md](proposal.md) for motivation and the [deployment-mode worker-status specification](specs/deployment-mode-worker-status/spec.md) for observable behavior. Applied blocks 13, 24–30, and 40–43 provide the `ProcessingRunCoordinator`-owned child session, immutable `ApplicationCompositionContext.DeploymentMode`, `WorkerRunFinalizer` finality, and `WorkerRunDiagnostics` safe category renderer. Block 44 consumes those exact contracts without adding parallel lifecycle, mode, or failure ownership.
 
 The original MASTERPLAN placeholder mentioned PID and run ID. The direct block-44 request supersedes that placeholder for this reconciliation: neither identity is user-visible. Exact identities remain internal only where prerequisite contracts need them for stale-event rejection and cleanup.
 
@@ -60,7 +60,7 @@ Alternative: expose a generic `Detail` string from the launcher. Rejected becaus
 
 ### 4. Notify only on effective immutable snapshot changes
 
-Serialize publications through the session owner or a short model lock, compare the full UI-safe value, increment the presentation revision, then notify after the new snapshot is visible. Idempotent, stale, or unrelated processing updates produce no lifecycle notification. New components read the current snapshot synchronously before subscribing, so browser reload and circuit replacement in the same host do not wait for another event.
+Serialize publications through the session owner or a short model lock, compare the full UI-safe value, increment the presentation revision, then notify after the new snapshot is visible. Idempotent, stale, or unrelated processing updates produce no lifecycle notification. New components subscribe first, synchronously reread the current snapshot, and retain the greatest revision seen from either path. This closes the subscription window while ensuring browser reload and circuit replacement in the same host do not wait for another event.
 
 This is process-lifetime continuity, not durable recovery. On host restart, block 40 resolves mode again and the new coordinator/read model begins Idle; no worker or failure status is written to `settings.json`, `/config`, `/data`, browser storage, or another file. This avoids reviving a worker claim the new process does not own.
 

@@ -61,6 +61,8 @@ Things that affect throughput:
 
 Read the message in Logs and check the container's available memory and application installation. A failed or cancelled run keeps location changes that were already saved. Wait until the app shows that the run has finished before starting another run manually.
 
+The Dashboard may retain `Failed` after the worker has released its resources. The short message in Service Status comes from a fixed, safe failure category; it intentionally omits raw worker output, process values, exception details, and environment values. Use Logs for the recorded operator-facing details. A database-stat refresh or an automatic check that finds no work does not clear this status. The next actual worker start clears it, and restarting the Web host returns the status to `Idle`.
+
 If a cleanup or communication warning appears after a completed result, the recorded result stays unchanged. The warning does not undo saved changes. Do not paste raw worker output, database credentials, or connection strings into a support report.
 
 ## The service fails to start after an update

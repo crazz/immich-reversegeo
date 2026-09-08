@@ -10,6 +10,8 @@ Immich ReverseGeo reads the optional `IMMICH_REVERSEGEO_MODE` environment variab
 
 The selected value is not saved in `settings.json`. Change it in your Compose or container environment and restart the container. Standard runs the Web app, manual controls, and internal schedule. Web-only runs the same Web app and keeps manual processing available, but it does not start the internal scheduler. Existing schedule values remain visible and editable in Settings and become active again when you return to Standard mode.
 
+The Dashboard reads this resolved startup mode and shows it as a read-only value. Reloading or reconnecting to the same running Web host shows its current worker status immediately. A host restart resolves the mode again and begins at `Idle`; worker status and retained failures are not saved to configuration or data storage.
+
 Run-once starts no Web server or internal scheduler. It loads the existing settings, makes one globally excluded processing attempt, writes ordinary progress logs, and exits. It does not retry. Use it as a disposable Compose job under cron or another external scheduler; see [Optional Run-once job](./installation.md#optional-run-once-job).
 
 Web-only does not add an HTTP, command-line, or queue trigger, so an external scheduler cannot start processing by itself. The Lookup and Data pages remain available with their current behavior; they do not yet use the temporary processing worker boundary.

@@ -1,4 +1,5 @@
 using System.Reflection;
+using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.AspNetCore.Components;
 using Microsoft.AspNetCore.Components.RenderTree;
@@ -116,6 +117,7 @@ public sealed class DashboardCoordinatorBindingTests
         var component = new ImmichReverseGeo.Web.Components.Pages.Dashboard();
         SetInjected(component, "State", new ProcessingState());
         SetInjected(component, "RunCoordinator", coordinator);
+        SetInjected(component, "WorkerStatus", new ProcessAssetsWebStatus(DeploymentMode.Standard));
         typeof(ImmichReverseGeo.Web.Components.Pages.Dashboard)
             .GetField("_circuitReady", BindingFlags.Instance | BindingFlags.NonPublic)!
             .SetValue(component, true);

@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
@@ -35,6 +36,7 @@ public sealed class WebCompositionTests
             var pageDependencies = new[]
             {
                 typeof(ProcessingState),
+                typeof(IProcessAssetsWebStatus),
                 typeof(IManualProcessingRunCoordinator),
                 typeof(ImmichDbRepository),
                 typeof(SkippedAssetsRepository),
@@ -438,7 +440,8 @@ public sealed class WebCompositionTests
             CompositionEnvironment.Development,
             contentRoot,
             dataDirectory,
-            configDirectory));
+            configDirectory,
+            DeploymentMode.Standard));
         return services;
     }
 

@@ -320,6 +320,10 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 _timeProvider,
                 ChildWorkerTerminationIntent.Stop,
                 trackCancellationDispatch: false);
+            if (claim.IsFirst)
+            {
+                handle.ObserveWorkerCancellation();
+            }
         }
 
         if (claim.IsFirst)
@@ -349,7 +353,12 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 return false;
             }
 
-            return _active.TryClaimChildExecution(finalizer);
+            var claimed = _active.TryClaimChildExecution(finalizer);
+            if (claimed)
+            {
+                finalizer.ObserveAdmission(_active.IsStopRequested);
+            }
+            return claimed;
         }
     }
 
@@ -481,6 +490,10 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 _timeProvider,
                 ChildWorkerTerminationIntent.Stop,
                 trackCancellationDispatch: true);
+            if (claim.IsFirst)
+            {
+                handle.ObserveWorkerCancellation();
+            }
         }
 
         if (claim.IsFirst)
@@ -545,6 +558,10 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 _timeProvider,
                 ChildWorkerTerminationIntent.Shutdown,
                 trackCancellationDispatch: true);
+            if (stopClaim is { IsFirst: true })
+            {
+                handle!.ObserveWorkerCancellation();
+            }
             start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             shutdown = CompleteShutdownAsync(handle, stopClaim, start.Task);
             _shutdownTask = shutdown;
@@ -615,6 +632,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             trackCancellationDispatch: false);
         if (claim.IsFirst)
         {
+            handle.ObserveWorkerCancellation();
             StartAttachedTermination(handle);
         }
     }
@@ -1327,6 +1345,16 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         public ExceptionDispatchInfo? ExecutionFailure { get; set; }
         public bool HasOwnedExecution => Volatile.Read(ref _ownedExecution) is not null;
         public bool IsShutdownRequested => Volatile.Read(ref _shutdownRequested) != 0;
+        public bool IsStopRequested
+        {
+            get
+            {
+                lock (_childGate)
+                {
+                    return _stopRequest is not null;
+                }
+            }
+        }
         public bool HasClaimedChildDispatch
         {
             get
@@ -1658,7 +1686,18 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 finalizer = _finalizer;
             }
 
-            finalizer?.State.AdvanceTransport(WorkerRunTransportPhase.Released);
+            finalizer?.ObserveRelease();
+        }
+
+        public void ObserveWorkerCancellation()
+        {
+            WorkerRunFinalizer? finalizer;
+            lock (_childGate)
+            {
+                finalizer = _finalizer;
+            }
+
+            finalizer?.ObserveCancellation();
         }
 
         public ExceptionDispatchInfo? RequestCancellation()

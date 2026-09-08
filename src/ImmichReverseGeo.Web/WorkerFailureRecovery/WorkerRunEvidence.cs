@@ -20,8 +20,14 @@ internal enum WorkerRunCommitPhase
 internal sealed class WorkerRunFinalityState
 {
     private readonly object _gate = new();
+    private readonly Action<WorkerRunTransportPhase>? _transportObserver;
     private WorkerRunTransportPhase _transport;
     private WorkerRunCommitPhase _commit;
+
+    internal WorkerRunFinalityState(Action<WorkerRunTransportPhase>? transportObserver = null)
+    {
+        _transportObserver = transportObserver;
+    }
 
     internal (WorkerRunTransportPhase Transport, WorkerRunCommitPhase Commit) Snapshot
     {
@@ -36,12 +42,28 @@ internal sealed class WorkerRunFinalityState
 
     internal void AdvanceTransport(WorkerRunTransportPhase phase)
     {
+        var changed = false;
         lock (_gate)
         {
             if (phase > _transport)
             {
                 _transport = phase;
+                changed = true;
             }
+        }
+
+        if (!changed || _transportObserver is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _transportObserver(phase);
+        }
+        catch
+        {
+            // A read-only presentation observer cannot affect worker finality.
         }
     }
 

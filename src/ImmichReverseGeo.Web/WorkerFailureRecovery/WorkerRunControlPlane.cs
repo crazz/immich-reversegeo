@@ -18,20 +18,23 @@ internal sealed class WorkerRunControlPlane
     private readonly IChildWorkerLauncher _launcher;
     private readonly ProcessingStateEventReporter _reporter;
     private readonly TimeProvider _clock;
+    private readonly IProcessAssetsWorkerStatusSink? _statusSink;
 
     internal WorkerRunControlPlane(IWorkerCommandInvocationBuilder builder, IChildWorkerLauncher launcher,
-        ProcessingStateEventReporter reporter, TimeProvider clock)
+        ProcessingStateEventReporter reporter, TimeProvider clock,
+        IProcessAssetsWorkerStatusSink? statusSink = null)
     {
         _builder = builder;
         _launcher = launcher;
         _reporter = reporter;
         _clock = clock;
+        _statusSink = statusSink;
     }
 
     internal async Task<ProcessingRunResult> ExecuteAsync(ProcessingRunCoordinator coordinator, ProcessingRunRequest request)
     {
         var evidenceGate = new ChildWorkerEvidenceFinalityGate();
-        var finalizer = new WorkerRunFinalizer(request, _reporter, _clock, evidenceGate);
+        var finalizer = new WorkerRunFinalizer(request, _reporter, _clock, evidenceGate, _statusSink);
         if (!coordinator.TryClaimChildExecution(request, finalizer))
         {
             throw new InvalidOperationException("The exact admitted request cannot claim child execution.");

@@ -1,12 +1,56 @@
 @page "/"
 @rendermode InteractiveServer
+@using System.Threading
 @inject ProcessingState State
 @inject IManualProcessingRunCoordinator RunCoordinator
+@inject IProcessAssetsWebStatus WorkerStatus
 @inject ImmichDbRepository Db
 @inject SkippedAssetsRepository Skipped
 @implements IDisposable
 
 <h2>Dashboard</h2>
+
+<section class="settings-card worker-status-card" aria-labelledby="worker-status-heading">
+    <div class="worker-status-header">
+        <div>
+            <h3 id="worker-status-heading">Service Status</h3>
+            <p class="section-intro">Deployment policy and the ProcessAssets worker in this Web host.</p>
+        </div>
+        <a href="/logs" class="worker-status-logs-link">Open Logs</a>
+    </div>
+    <dl class="worker-status-grid">
+        <div class="worker-status-field">
+            <dt>Deployment mode</dt>
+            <dd>@_workerStatus.ModeLabel</dd>
+        </div>
+        <div class="worker-status-field worker-status-policy">
+            <dt>Internal scheduling</dt>
+            <dd>
+                <strong>@_workerStatus.SchedulePolicyLabel</strong>
+                <span>@_workerStatus.SchedulePolicyDescription</span>
+            </dd>
+        </div>
+        <div class="worker-status-field worker-status-worker"
+             role="status" aria-live="polite" aria-atomic="true">
+            <dt>ProcessAssets worker</dt>
+            <dd>
+                <span class="status-dot @_workerStatus.WorkerCssClass" aria-hidden="true"></span>
+                <span>Worker: @_workerStatus.WorkerLabel</span>
+            </dd>
+        </div>
+    </dl>
+    @if (_workerStatus.Worker == ProcessAssetsWorkerState.Failed)
+    {
+        <div @key="_workerStatus.Revision" class="alert alert-error worker-status-failure" role="alert">
+            <strong>ProcessAssets worker failed.</strong>
+            @if (_workerStatus.FailureSummary is not null)
+            {
+                <span>@_workerStatus.FailureSummary</span>
+            }
+            <span>Open Logs for the recorded processing details.</span>
+        </div>
+    }
+</section>
 
 @if (!_circuitReady)
 {
@@ -95,6 +139,9 @@ else if (_dbError is not null)
     private long _unprocessedCount;
     private long _totalSkipped;
     private bool _wasRunning;
+    private ProcessAssetsWebStatusSnapshot _workerStatus = null!;
+    private IDisposable? _workerStatusSubscription;
+    private int _disposed;
 
     // Live: decrease as assets are processed/skipped during a run
     private long UnprocessedDisplay =>
@@ -116,6 +163,8 @@ else if (_dbError is not null)
 
     protected override Task OnInitializedAsync()
     {
+        _workerStatusSubscription = WorkerStatus.Subscribe(OnWorkerStatusChanged);
+        ApplyWorkerStatus(WorkerStatus.Current);
         State.OnChanged += OnStateChanged;
         _wasRunning = State.IsRunning;
         // No DB calls here — Npgsql connect timeout (15 s) would block SSR and delay
@@ -256,5 +305,41 @@ else if (_dbError is not null)
         });
     }
 
-    public void Dispose() => State.OnChanged -= OnStateChanged;
+    private void OnWorkerStatusChanged(ProcessAssetsWebStatusSnapshot snapshot)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (Volatile.Read(ref _disposed) == 0 && ApplyWorkerStatus(snapshot))
+            {
+                StateHasChanged();
+            }
+        });
+    }
+
+    private bool ApplyWorkerStatus(ProcessAssetsWebStatusSnapshot snapshot)
+    {
+        if (_workerStatus is not null && snapshot.Revision <= _workerStatus.Revision)
+        {
+            return false;
+        }
+
+        _workerStatus = snapshot;
+        return true;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        State.OnChanged -= OnStateChanged;
+        _workerStatusSubscription?.Dispose();
+    }
 }

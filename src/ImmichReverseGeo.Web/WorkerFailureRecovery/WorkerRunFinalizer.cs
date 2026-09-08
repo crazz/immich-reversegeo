@@ -15,21 +15,26 @@ internal sealed class WorkerRunFinalizer
     private readonly TimeProvider _clock;
     private readonly DateTimeOffset _admittedAtUtc;
     private readonly ChildWorkerEvidenceFinalityGate? _evidenceGate;
+    private readonly IProcessAssetsWorkerStatusSink? _statusSink;
     private readonly TaskCompletionSource<ProcessingRunResult> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _stateFinality = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _started;
 
     internal WorkerRunFinalizer(ProcessingRunRequest request, ProcessingStateEventReporter reporter, TimeProvider clock,
-        ChildWorkerEvidenceFinalityGate? evidenceGate = null)
+        ChildWorkerEvidenceFinalityGate? evidenceGate = null,
+        IProcessAssetsWorkerStatusSink? statusSink = null)
     {
         _request = request;
         _reporter = reporter;
         _clock = clock;
         _evidenceGate = evidenceGate;
+        _statusSink = statusSink;
         _admittedAtUtc = clock.GetUtcNow();
+        State = new WorkerRunFinalityState(phase => ObserveStatus(
+            sink => sink.ObserveTransport(_request, phase)));
     }
 
-    internal WorkerRunFinalityState State { get; } = new();
+    internal WorkerRunFinalityState State { get; }
     internal Task<ProcessingRunResult> Completion => _completion.Task;
     internal Task StateFinality => _stateFinality.Task;
     internal WorkerRunEvidence? Evidence { get; private set; }
@@ -52,6 +57,7 @@ internal sealed class WorkerRunFinalizer
         Evidence = evidence;
         Decision = WorkerRunEvidenceClassifier.Classify(evidence);
         var receipt = Commit(Decision);
+        ObserveStatus(sink => sink.ObserveFinality(_request, receipt.Result.Outcome, Decision.Category));
         _evidenceGate?.Release();
         _completion.TrySetResult(receipt.Result);
         return receipt.Result;
@@ -98,6 +104,7 @@ internal sealed class WorkerRunFinalizer
             };
             var decision = WorkerRunEvidenceClassifier.Classify(evidence);
             var receipt = Commit(decision);
+            ObserveStatus(sink => sink.ObserveFinality(_request, receipt.Result.Outcome, decision.Category));
             // The receipt proves a final UI winner even if its observer response was indeterminate.
             _evidenceGate?.Release();
 
@@ -148,7 +155,40 @@ internal sealed class WorkerRunFinalizer
         }
     }
 
-private async Task ObserveTransportAsync(ChildWorkerSession session)
+    internal void ObserveAdmission(bool cancellationAlreadyWon)
+    {
+        ObserveStatus(sink => sink.Admit(_request, cancellationAlreadyWon));
+    }
+
+    internal void ObserveCancellation()
+    {
+        ObserveStatus(sink => sink.ObserveCancellation(_request));
+    }
+
+    internal void ObserveRelease()
+    {
+        State.AdvanceTransport(WorkerRunTransportPhase.Released);
+        ObserveStatus(sink => sink.Release(_request));
+    }
+
+    private void ObserveStatus(Action<IProcessAssetsWorkerStatusSink> observation)
+    {
+        if (_statusSink is null)
+        {
+            return;
+        }
+
+        try
+        {
+            observation(_statusSink);
+        }
+        catch
+        {
+            // Worker ownership and finality do not depend on the read-only Web projection.
+        }
+    }
+
+    private async Task ObserveTransportAsync(ChildWorkerSession session)
     {
         await Task.WhenAny(session.ExecuteRequestAccepted, session.FirstTerminationRequest,
             session.PhysicalExitConfirmed, session.EvidenceFinality).ConfigureAwait(false);
