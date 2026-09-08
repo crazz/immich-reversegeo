@@ -55,7 +55,7 @@ public sealed record WorkerJobControllerInputSnapshot(
     Guid? JobId,
     WorkerJobKind? JobKind,
     WorkerJobDescriptor? Descriptor,
-    ProcessAssetsRequest? Request,
+    IWorkerJobRequest? Request,
     bool CancellationRequested);
 
 public sealed class WorkerJobControllerInputValidator
@@ -66,7 +66,7 @@ public sealed class WorkerJobControllerInputValidator
     private Guid? _jobId;
     private WorkerJobKind? _jobKind;
     private WorkerJobDescriptor? _descriptor;
-    private ProcessAssetsRequest? _request;
+    private IWorkerJobRequest? _request;
     private bool _cancellationRequested;
 
     public WorkerJobControllerInputValidator(IEnumerable<WorkerJobDescriptor> supportedDescriptors)
@@ -159,6 +159,11 @@ public sealed class WorkerJobControllerInputValidator
         if (message.Payload is ProcessAssetsExecutePayload execute)
         {
             _request = execute.Request;
+            _descriptor = _supportedDescriptors[message.JobKind];
+        }
+        else if (message.Payload is CoordinateLookupExecutePayload coordinateLookup)
+        {
+            _request = coordinateLookup.Request;
             _descriptor = _supportedDescriptors[message.JobKind];
         }
 

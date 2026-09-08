@@ -1588,6 +1588,8 @@ public sealed class DeploymentModeCompositionMatrixTests
                 context,
                 outcomes);
             IReadOnlyList<ServiceDescriptor> descriptors = builder.Services.ToArray();
+            builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
+            builder.Services.AddSingleton<IWorkerStandardInputStreamFactory>(new NullStandardInputFactory());
             builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
             builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(new NullNdjsonOutputFactory());
             var disposal = new DisposalReceipt();
@@ -1630,5 +1632,10 @@ public sealed class DeploymentModeCompositionMatrixTests
     private sealed class NullNdjsonOutputFactory : IWorkerNdjsonOutputStreamFactory
     {
         public Stream OpenStandardOutput() => Stream.Null;
+    }
+
+    private sealed class NullStandardInputFactory : IWorkerStandardInputStreamFactory
+    {
+        public Stream OpenStandardInput() => Stream.Null;
     }
 }

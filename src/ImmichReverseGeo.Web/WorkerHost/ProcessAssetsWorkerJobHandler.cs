@@ -109,9 +109,18 @@ internal sealed class ProcessAssetsWorkerJobFailedException(
     ProcessAssetsResult typedResult) :
     ProcessAssetsWorkerJobOutcomeException(processingResult, typedResult);
 
-internal interface IProcessAssetsWorkerJobHostReporter : IWorkerJobEventReporter
+internal interface IWorkerJobHostReporter : IWorkerJobEventReporter
 {
     DateTimeOffset? StartedAtUtc { get; }
+
+    ValueTask ReportStartedAsync(
+        string trigger,
+        DateTimeOffset startedAtUtc,
+        CancellationToken cancellationToken);
+}
+
+internal interface IProcessAssetsWorkerJobHostReporter : IWorkerJobHostReporter
+{
 
     ValueTask ReportStartedAsync(
         ProcessingRunRequest request,
@@ -151,6 +160,17 @@ internal sealed class WorkerJobNdjsonEventReporter : IProcessAssetsWorkerJobHost
                 nameof(request));
         }
 
+        return ReportStartedAsync(
+            WorkerProtocolConversions.Trigger(request.Trigger),
+            startedAtUtc,
+            cancellationToken);
+    }
+
+    public ValueTask ReportStartedAsync(
+        string trigger,
+        DateTimeOffset startedAtUtc,
+        CancellationToken cancellationToken)
+    {
         if (StartedAtUtc is not null)
         {
             throw new InvalidOperationException("The worker job started more than once.");
@@ -159,7 +179,7 @@ internal sealed class WorkerJobNdjsonEventReporter : IProcessAssetsWorkerJobHost
         StartedAtUtc = startedAtUtc;
         return _emitter.SubmitJobStartedAsync(
             _context,
-            WorkerProtocolConversions.Trigger(request.Trigger),
+            trigger,
             startedAtUtc,
             cancellationToken);
     }

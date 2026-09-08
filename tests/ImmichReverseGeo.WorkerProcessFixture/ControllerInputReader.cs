@@ -4,7 +4,10 @@ using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.WorkerProcessFixture;
 
-internal sealed record ControllerInputFrame(byte[] Bytes, ProcessingRunRequest Request);
+internal sealed record ControllerInputFrame(
+    byte[] Bytes,
+    ProcessingRunRequest Request,
+    WorkerJobDispatch? Dispatch);
 
 internal sealed class FixtureInputException(string message) : Exception(message);
 
@@ -35,7 +38,10 @@ internal sealed class ControllerInputReader
             ? new WorkerProtocolControllerInputValidator()
             : null;
         _v2Validator = protocolVersion == InternalWorkerProtocolVersion.V2
-            ? new WorkerJobControllerInputValidator([WorkerJobDescriptors.ProcessAssets])
+            ? new WorkerJobControllerInputValidator([
+                WorkerJobDescriptors.ProcessAssets,
+                WorkerJobDescriptors.CoordinateLookup
+            ])
             : null;
     }
 
@@ -98,7 +104,7 @@ internal sealed class ControllerInputReader
                 ?? throw new FixtureInputException("Cancel was accepted without execute identity."),
             _ => throw new FixtureInputException("The controller frame type was not supported.")
         };
-        return new ControllerInputFrame(rawFrame, request);
+        return new ControllerInputFrame(rawFrame, request, null);
     }
 
     private ControllerInputFrame ParseAndValidateV2(
@@ -124,14 +130,42 @@ internal sealed class ControllerInputReader
             throw new FixtureInputException($"Controller sequence was rejected: {validated.Failure!.Code}.");
         }
 
-        ProcessingRunRequest request = validated.Message!.Payload switch
+        WorkerJobDispatch dispatch = validated.Message!.Payload switch
         {
-            ProcessAssetsExecutePayload execute => execute.Request.ProcessingRequest,
-            WorkerJobCancelPayload => _v2Validator.Snapshot.Request?.ProcessingRequest
-                ?? throw new FixtureInputException("Cancel was accepted without execute identity."),
+            ProcessAssetsExecutePayload execute => new ProcessAssetsWorkerJobDispatch(
+                execute.Request.ProcessingRequest),
+            CoordinateLookupExecutePayload execute => new CoordinateLookupWorkerJobDispatch(
+                validated.Message.JobId,
+                execute.Request),
+            WorkerJobCancelPayload => CreateAcceptedDispatch(_v2Validator.Snapshot),
             _ => throw new FixtureInputException("The controller frame type was not supported.")
         };
-        return new ControllerInputFrame(rawFrame, request);
+        ProcessingRunRequest compatibilityRequest = dispatch switch
+        {
+            ProcessAssetsWorkerJobDispatch processAssets => processAssets.Request.ProcessingRequest,
+            CoordinateLookupWorkerJobDispatch => new ProcessingRunRequest(
+                dispatch.Context.JobId,
+                ProcessingRunTrigger.Manual),
+            _ => throw new FixtureInputException("The accepted job kind was not supported by the fixture.")
+        };
+        return new ControllerInputFrame(rawFrame, compatibilityRequest, dispatch);
+    }
+
+    private static WorkerJobDispatch CreateAcceptedDispatch(
+        WorkerJobControllerInputSnapshot snapshot)
+    {
+        if (snapshot.JobId is not { } jobId || snapshot.Request is null)
+        {
+            throw new FixtureInputException("Cancel was accepted without execute identity.");
+        }
+
+        return snapshot.Request switch
+        {
+            ProcessAssetsRequest processAssets when processAssets.ProcessingRequest.RunId == jobId =>
+                new ProcessAssetsWorkerJobDispatch(processAssets.ProcessingRequest),
+            CoordinateLookupRequest coordinateLookup => new CoordinateLookupWorkerJobDispatch(jobId, coordinateLookup),
+            _ => throw new FixtureInputException("The accepted request type was not supported by the fixture.")
+        };
     }
 
     private async Task<byte[]?> ReadFrameAsync()

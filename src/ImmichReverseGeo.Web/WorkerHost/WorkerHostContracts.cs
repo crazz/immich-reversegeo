@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.Web.WorkerHost;
@@ -21,15 +22,41 @@ internal interface IInitialProcessingRunAcquirer
     Task<InitialProcessingRunAcquisition> AcquireAsync(CancellationToken cancellationToken);
 }
 
-internal interface IProcessingRunLease : IAsyncDisposable
+internal interface IWorkerRunLease : IAsyncDisposable
 {
-    ProcessingRunRequest Request { get; }
+    WorkerJobContext Context { get; }
+
+    IWorkerJobRequest JobRequest { get; }
+
+    ProcessingRunRequest Request =>
+        JobRequest is ProcessAssetsRequest processAssets
+            ? processAssets.ProcessingRequest
+            : throw new InvalidOperationException(
+                "The accepted worker job is not a processing request.");
 
     CancellationToken CancellationToken { get; }
 
     void NotifyExecutionStarting();
 
     ValueTask<WorkerInputPumpFinality> SettleAsync(CancellationToken cancellationToken);
+}
+
+internal interface IProcessingRunLease : IWorkerRunLease
+{
+    new ProcessingRunRequest Request { get; }
+
+    WorkerJobContext IWorkerRunLease.Context => new(
+        Request.RunId,
+        WorkerJobKind.ProcessAssets,
+        Request.Trigger switch
+        {
+            ProcessingRunTrigger.Manual => WorkerJobRequestOrigin.Manual,
+            ProcessingRunTrigger.Scheduled => WorkerJobRequestOrigin.Scheduled,
+            ProcessingRunTrigger.RunOnce => WorkerJobRequestOrigin.RunOnce,
+            _ => throw new ArgumentOutOfRangeException(nameof(Request))
+        });
+
+    IWorkerJobRequest IWorkerRunLease.JobRequest => new ProcessAssetsRequest(Request);
 }
 
 internal abstract class WorkerInputPumpFinality
@@ -111,7 +138,7 @@ internal abstract class InitialProcessingRunAcquisition
     {
     }
 
-    internal static Accepted Accept(IProcessingRunLease lease)
+    internal static Accepted Accept(IWorkerRunLease lease)
     {
         ArgumentNullException.ThrowIfNull(lease);
         return new Accepted(lease);
@@ -130,12 +157,12 @@ internal abstract class InitialProcessingRunAcquisition
 
     internal sealed class Accepted : InitialProcessingRunAcquisition
     {
-        internal Accepted(IProcessingRunLease lease)
+        internal Accepted(IWorkerRunLease lease)
         {
             Lease = lease;
         }
 
-        internal IProcessingRunLease Lease { get; }
+        internal IWorkerRunLease Lease { get; }
     }
 
     internal sealed class PreRequestEof : InitialProcessingRunAcquisition

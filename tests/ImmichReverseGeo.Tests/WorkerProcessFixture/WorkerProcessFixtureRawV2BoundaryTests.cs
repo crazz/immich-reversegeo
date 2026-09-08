@@ -68,15 +68,15 @@ public sealed class WorkerProcessFixtureRawV2BoundaryTests
                 Encoding.UTF8.GetBytes(readyLine));
             Assert.IsTrue(ready.IsSuccess, ready.Failure?.Diagnostic);
             CollectionAssert.AreEqual(
-                new[] { WorkerJobKind.ProcessAssets },
+                new[] { WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup },
                 Assert.IsInstanceOfType<WorkerJobReadyPayload>(ready.Message!.Payload)
                     .SupportedJobKinds.ToArray(),
-                "raw-v2-ready-only-registered-kind");
+                "raw-v2-ready-exact-registered-kinds");
 
             string rawInput = row switch
             {
                 "reserved" =>
-                    "{\"protocol\":\"immich-reversegeo.worker\",\"version\":2,\"direction\":\"controller-to-worker\",\"category\":\"request\",\"type\":\"execute\",\"sequence\":1,\"timestampUtc\":\"2026-09-08T13:31:00.0000000Z\",\"jobId\":\"11111111-2222-3333-4444-555555555555\",\"jobKind\":\"CoordinateLookup\",\"payload\":{}}\n",
+                    "{\"protocol\":\"immich-reversegeo.worker\",\"version\":2,\"direction\":\"controller-to-worker\",\"category\":\"request\",\"type\":\"execute\",\"sequence\":1,\"timestampUtc\":\"2026-09-08T13:31:00.0000000Z\",\"jobId\":\"11111111-2222-3333-4444-555555555555\",\"jobKind\":\"CacheMutation\",\"payload\":{}}\n",
                 "malformed" => "{]\n",
                 _ => throw new AssertFailedException("raw-v2-unknown-row")
             };

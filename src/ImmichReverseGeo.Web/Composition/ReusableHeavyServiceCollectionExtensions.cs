@@ -43,6 +43,18 @@ internal static class ReusableHeavyServiceCollectionExtensions
         services.AddSingleton(sp => new GadmDivisionsService(
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<GadmDivisionsService>>(),
             sp.GetRequiredService<StorageOptions>().DataDir));
+        services.AddSingleton(sp => new CoordinateLookupSources(
+            sp.GetRequiredService<OvertureDivisionsService>(),
+            sp.GetRequiredService<OvertureDivisionCacheService>(),
+            sp.GetRequiredService<OverturePlacesService>(),
+            sp.GetRequiredService<GadmDivisionCacheService>(),
+            sp.GetRequiredService<GadmDivisionsService>(),
+            sp.GetRequiredService<CityResolverProfileCatalogService>()));
+        services.AddSingleton<ICoordinateLookupSources>(sp =>
+            sp.GetRequiredService<CoordinateLookupSources>());
+        services.AddSingleton(sp => new CoordinateLookupOperation(
+            sp.GetRequiredService<ICoordinateLookupSources>(),
+            sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<SkippedAssetsRepository>();
         services.AddSingleton<ImmichDbRepository>();
         return services;

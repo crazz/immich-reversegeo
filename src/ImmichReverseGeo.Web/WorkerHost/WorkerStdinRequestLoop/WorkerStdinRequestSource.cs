@@ -1,11 +1,14 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Pipes;
+using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
+using Microsoft.Win32.SafeHandles;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop;
@@ -17,10 +20,35 @@ internal interface IWorkerStandardInputStreamFactory
 
 internal sealed class WorkerStandardInputStreamFactory : IWorkerStandardInputStreamFactory
 {
+    private const int WindowsStandardInputHandle = -10;
+
     public Stream OpenStandardInput()
     {
-        return Console.OpenStandardInput();
+        // A dedicated internal worker owns its inherited redirected stdin. PipeStream
+        // cancellation lets shutdown join a pending read; Console's stream does not.
+        IntPtr handle = OperatingSystem.IsWindows()
+            ? GetStdHandle(WindowsStandardInputHandle)
+            : IntPtr.Zero;
+        var ownedHandle = new SafePipeHandle(handle, ownsHandle: true);
+        if (ownedHandle.IsInvalid)
+        {
+            ownedHandle.Dispose();
+            throw new IOException("The worker standard-input pipe is unavailable.");
+        }
+
+        try
+        {
+            return new AnonymousPipeClientStream(PipeDirection.In, ownedHandle);
+        }
+        catch
+        {
+            ownedHandle.Dispose();
+            throw;
+        }
     }
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern IntPtr GetStdHandle(int standardHandle);
 }
 
 internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, IAsyncDisposable
@@ -37,7 +65,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
     private CancellationTokenSource? _pumpCancellation;
     private Task? _pumpTask;
     private Task? _shutdownTask;
-    private WorkerStdinProcessingRunLease? _lease;
+    private WorkerStdinRunLease? _lease;
     private InputPhase _phase = InputPhase.BeforeInvocation;
     private bool _started;
     private bool _stopRequested;
@@ -87,7 +115,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
         await shutdown.ConfigureAwait(false);
     }
 
-    internal void NotifyExecutionStarting(WorkerStdinProcessingRunLease lease)
+    internal void NotifyExecutionStarting(WorkerStdinRunLease lease)
     {
         lock (_gate)
         {
@@ -100,7 +128,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
     }
 
     internal async ValueTask<WorkerInputPumpFinality> SettleAsync(
-        WorkerStdinProcessingRunLease lease,
+        WorkerStdinRunLease lease,
         CancellationToken cancellationToken)
     {
         Task shutdown;
@@ -120,6 +148,28 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
         lock (_gate)
         {
             VerifyRequestUnderGate(request);
+            if (_phase is InputPhase.BeforeInvocation or InputPhase.Executing)
+            {
+                _phase = InputPhase.Terminal;
+            }
+
+            RecordFinalityUnderGate(WorkerInputPumpFinality.ExpectedShutdown());
+            shutdown = GetOrStartShutdownUnderGate();
+        }
+
+        await shutdown.WaitAsync(cancellationToken).ConfigureAwait(false);
+    }
+
+    internal async Task NotifyTerminalAsync(IWorkerRunLease lease, CancellationToken cancellationToken)
+    {
+        Task shutdown;
+        lock (_gate)
+        {
+            if (!ReferenceEquals(_lease, lease))
+            {
+                throw new InvalidOperationException("The terminal does not match the accepted worker job.");
+            }
+
             if (_phase is InputPhase.BeforeInvocation or InputPhase.Executing)
             {
                 _phase = InputPhase.Terminal;
@@ -215,7 +265,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
                 return;
             }
 
-            WorkerStdinProcessingRunLease? acceptedLease;
+            WorkerStdinRunLease? acceptedLease;
             bool requestCancellation;
             WorkerSafeFailure? validationFailure;
             AcceptFrame(
@@ -237,7 +287,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
 
             if (requestCancellation)
             {
-                WorkerStdinProcessingRunLease? lease;
+                WorkerStdinRunLease? lease;
                 lock (_gate)
                 {
                     lease = _lease;
@@ -250,7 +300,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
 
     private void AcceptFrame(
         ReadOnlyMemory<byte> frame,
-        out WorkerStdinProcessingRunLease? acceptedLease,
+        out WorkerStdinRunLease? acceptedLease,
         out bool requestCancellation,
         out WorkerSafeFailure? validationFailure)
     {
@@ -316,6 +366,14 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
             {
                 acceptedLease = new WorkerStdinProcessingRunLease(
                     execute.Request.ProcessingRequest,
+                    this);
+                _lease = acceptedLease;
+            }
+            else if (validated.Message.Payload is CoordinateLookupExecutePayload coordinateLookup)
+            {
+                acceptedLease = new WorkerStdinCoordinateLookupLease(
+                    validated.Message.JobId,
+                    coordinateLookup.Request,
                     this);
                 _lease = acceptedLease;
             }
@@ -556,7 +614,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
         _finality.TrySetResult(finality);
     }
 
-    private void VerifyLeaseUnderGate(WorkerStdinProcessingRunLease lease)
+    private void VerifyLeaseUnderGate(WorkerStdinRunLease lease)
     {
         if (!ReferenceEquals(_lease, lease))
         {
@@ -566,7 +624,8 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
 
     private void VerifyRequestUnderGate(ProcessingRunRequest request)
     {
-        if (_lease is null || !ReferenceEquals(_lease.Request, request))
+        if (_lease is not WorkerStdinProcessingRunLease processingLease
+            || !ReferenceEquals(processingLease.Request, request))
         {
             throw new InvalidOperationException("The processing request does not match the accepted input request.");
         }
@@ -614,7 +673,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
     }
 }
 
-internal sealed class WorkerStdinProcessingRunLease : IProcessingRunLease
+internal abstract class WorkerStdinRunLease : IWorkerRunLease
 {
     private readonly WorkerStdinRequestSource _owner;
     private readonly CancellationTokenSource _cancellation = new();
@@ -623,16 +682,23 @@ internal sealed class WorkerStdinProcessingRunLease : IProcessingRunLease
     private Task? _disposeTask;
     private int _cancellationDisposed;
 
-    internal WorkerStdinProcessingRunLease(ProcessingRunRequest request, WorkerStdinRequestSource owner)
+    protected WorkerStdinRunLease(
+        WorkerJobContext context,
+        IWorkerJobRequest jobRequest,
+        WorkerStdinRequestSource owner)
     {
-        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(jobRequest);
         ArgumentNullException.ThrowIfNull(owner);
-        Request = request;
+        Context = context;
+        JobRequest = jobRequest;
         _owner = owner;
         _token = _cancellation.Token;
     }
 
-    public ProcessingRunRequest Request { get; }
+    public WorkerJobContext Context { get; }
+
+    public IWorkerJobRequest JobRequest { get; }
 
     public CancellationToken CancellationToken => _token;
 
@@ -687,5 +753,33 @@ internal sealed class WorkerStdinProcessingRunLease : IProcessingRunLease
         {
             DisposeCancellationAfterPump();
         }
+    }
+}
+
+internal sealed class WorkerStdinProcessingRunLease : WorkerStdinRunLease, IProcessingRunLease
+{
+    internal WorkerStdinProcessingRunLease(ProcessingRunRequest request, WorkerStdinRequestSource owner)
+        : base(
+            new ProcessAssetsWorkerJobDispatch(request).Context,
+            new ProcessAssetsRequest(request),
+            owner)
+    {
+        Request = request;
+    }
+
+    public ProcessingRunRequest Request { get; }
+}
+
+internal sealed class WorkerStdinCoordinateLookupLease : WorkerStdinRunLease
+{
+    internal WorkerStdinCoordinateLookupLease(
+        Guid jobId,
+        CoordinateLookupRequest request,
+        WorkerStdinRequestSource owner)
+        : base(
+            new CoordinateLookupWorkerJobDispatch(jobId, request).Context,
+            request,
+            owner)
+    {
     }
 }

@@ -11,7 +11,7 @@ namespace ImmichReverseGeo.Tests.WorkerProcessFixture;
 public sealed class WorkerProcessFixtureLauncherTests
 {
     [TestMethod]
-    public void StagedFixture_HasExactApphostRuntimeAndCoreOnlyDependencies()
+    public void StagedFixture_HasExactApphostRuntimeAndProductionHostDependencies()
     {
         var directory = WorkerProcessFixtureLease.FixtureDirectory;
         Assert.IsTrue(File.Exists(WorkerProcessFixtureLease.FixtureExecutable));
@@ -19,9 +19,9 @@ public sealed class WorkerProcessFixtureLauncherTests
         Assert.IsTrue(File.Exists(Path.Combine(directory, "ImmichReverseGeo.WorkerProcessFixture.deps.json")));
         Assert.IsTrue(File.Exists(Path.Combine(directory, "ImmichReverseGeo.WorkerProcessFixture.runtimeconfig.json")));
         Assert.IsTrue(File.Exists(Path.Combine(directory, "ImmichReverseGeo.Core.dll")));
-        Assert.IsFalse(File.Exists(Path.Combine(directory, "ImmichReverseGeo.Web.dll")));
-        Assert.IsFalse(File.Exists(Path.Combine(directory, "ImmichReverseGeo.Overture.dll")));
-        Assert.IsFalse(File.Exists(Path.Combine(directory, "ImmichReverseGeo.Gadm.dll")));
+        Assert.IsTrue(File.Exists(Path.Combine(directory, "ImmichReverseGeo.Web.dll")));
+        Assert.IsTrue(File.Exists(Path.Combine(directory, "ImmichReverseGeo.Overture.dll")));
+        Assert.IsTrue(File.Exists(Path.Combine(directory, "ImmichReverseGeo.Gadm.dll")));
         Assert.IsFalse(typeof(ChildWorkerLauncher).Assembly.GetReferencedAssemblies().Any(
             assembly => assembly.Name == "ImmichReverseGeo.WorkerProcessFixture"));
         Assert.IsFalse(Assembly.GetExecutingAssembly().GetReferencedAssemblies().Any(

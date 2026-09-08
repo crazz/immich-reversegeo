@@ -126,6 +126,17 @@ public sealed record ProcessAssetsExecutePayload : WorkerJobControllerPayload
     }
 }
 
+public sealed record CoordinateLookupExecutePayload : WorkerJobControllerPayload
+{
+    public CoordinateLookupRequest Request { get; }
+
+    public CoordinateLookupExecutePayload(CoordinateLookupRequest request)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Request = request;
+    }
+}
+
 public sealed record WorkerJobCancelPayload : WorkerJobControllerPayload;
 
 public sealed record WorkerJobControllerMessage
@@ -169,9 +180,11 @@ public sealed record WorkerJobControllerMessage
         var payloadMatches = type switch
         {
             WorkerJobProtocolV2.ExecuteType =>
-                jobKind == WorkerJobKind.ProcessAssets
-                && payload is ProcessAssetsExecutePayload execute
-                && execute.Request.ProcessingRequest.RunId == jobId,
+                (jobKind == WorkerJobKind.ProcessAssets
+                    && payload is ProcessAssetsExecutePayload execute
+                    && execute.Request.ProcessingRequest.RunId == jobId)
+                || (jobKind == WorkerJobKind.CoordinateLookup
+                    && payload is CoordinateLookupExecutePayload),
             WorkerJobProtocolV2.CancelType => payload is WorkerJobCancelPayload,
             _ => false
         };
@@ -349,6 +362,7 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
     public DateTimeOffset StartedAtUtc { get; }
     public DateTimeOffset EndedAtUtc { get; }
     public ProcessAssetsResult? ProcessAssetsResult { get; }
+    public CoordinateLookupResult? CoordinateLookupResult { get; }
     public WorkerJobSafeError? Error { get; }
 
     public WorkerJobTerminalPayload(
@@ -356,6 +370,17 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
         DateTimeOffset startedAtUtc,
         DateTimeOffset endedAtUtc,
         ProcessAssetsResult? processAssetsResult,
+        WorkerJobSafeError? error)
+        : this(outcome, startedAtUtc, endedAtUtc, processAssetsResult, null, error)
+    {
+    }
+
+    public WorkerJobTerminalPayload(
+        WorkerJobTerminalOutcome outcome,
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset endedAtUtc,
+        ProcessAssetsResult? processAssetsResult,
+        CoordinateLookupResult? coordinateLookupResult,
         WorkerJobSafeError? error)
     {
         WorkerJobProtocolV2.RequireUtc(startedAtUtc, nameof(startedAtUtc));
@@ -367,9 +392,13 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
 
         var validShape = outcome switch
         {
-            WorkerJobTerminalOutcome.Completed => processAssetsResult is not null && error is null,
-            WorkerJobTerminalOutcome.Cancelled => processAssetsResult is null && error is null,
-            WorkerJobTerminalOutcome.Failed => processAssetsResult is null && error is not null,
+            WorkerJobTerminalOutcome.Completed =>
+                (processAssetsResult is not null) != (coordinateLookupResult is not null)
+                && error is null,
+            WorkerJobTerminalOutcome.Cancelled =>
+                processAssetsResult is null && coordinateLookupResult is null && error is null,
+            WorkerJobTerminalOutcome.Failed =>
+                processAssetsResult is null && coordinateLookupResult is null && error is not null,
             _ => false
         };
         if (!validShape)
@@ -383,10 +412,17 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
             throw new ArgumentException("The terminal and typed-result timestamps must match.", nameof(processAssetsResult));
         }
 
+        if (coordinateLookupResult is not null
+            && (coordinateLookupResult.StartedAtUtc != startedAtUtc || coordinateLookupResult.EndedAtUtc != endedAtUtc))
+        {
+            throw new ArgumentException("The terminal and typed-result timestamps must match.", nameof(coordinateLookupResult));
+        }
+
         Outcome = outcome;
         StartedAtUtc = startedAtUtc;
         EndedAtUtc = endedAtUtc;
         ProcessAssetsResult = processAssetsResult;
+        CoordinateLookupResult = coordinateLookupResult;
         Error = error;
     }
 }
@@ -402,6 +438,7 @@ public sealed record WorkerJobHandlerEvent
         ArgumentNullException.ThrowIfNull(payload);
         if (payload is not ProcessAssetsEligibilityPayload
             and not ProcessAssetsProgressPayload
+            and not CoordinateLookupProgressPayload
             and not WorkerJobActivityStartedPayload
             and not WorkerJobActivityEndedPayload
             and not WorkerJobLogPayload)
@@ -494,7 +531,10 @@ public sealed record WorkerJobOutputMessage
             WorkerJobProtocolV2.ProgressChangedType => payload is ProcessAssetsProgressPayload,
             _ => false
         };
-        if (!commonMatches && !processAssetsMatches)
+        var coordinateLookupMatches = jobKind == WorkerJobKind.CoordinateLookup
+            && type == WorkerJobProtocolV2.ProgressChangedType
+            && payload is CoordinateLookupProgressPayload;
+        if (!commonMatches && !processAssetsMatches && !coordinateLookupMatches)
         {
             throw new ArgumentException("The output payload is not valid for the job kind and type.", nameof(payload));
         }
@@ -502,6 +542,14 @@ public sealed record WorkerJobOutputMessage
         if (payload is WorkerJobTerminalPayload terminalPayload
             && terminalPayload.ProcessAssetsResult is not null
             && jobKind != WorkerJobKind.ProcessAssets)
+        {
+            throw new ArgumentException("The typed terminal result does not match the job kind.", nameof(payload));
+        }
+
+
+        if (payload is WorkerJobTerminalPayload coordinateTerminal
+            && coordinateTerminal.CoordinateLookupResult is not null
+            && jobKind != WorkerJobKind.CoordinateLookup)
         {
             throw new ArgumentException("The typed terminal result does not match the job kind.", nameof(payload));
         }

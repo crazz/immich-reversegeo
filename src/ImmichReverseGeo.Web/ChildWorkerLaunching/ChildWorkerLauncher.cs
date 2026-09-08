@@ -113,10 +113,18 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
         ArgumentNullException.ThrowIfNull(dispatch);
         ArgumentNullException.ThrowIfNull(eventSink);
         ArgumentNullException.ThrowIfNull(options);
-        if (dispatch is not ProcessAssetsWorkerJobDispatch)
+        if (protocolVersion == InternalWorkerProtocolVersion.V1
+            && dispatch is not ProcessAssetsWorkerJobDispatch)
         {
             throw new NotSupportedException(
-                "Only the registered ProcessAssets job dispatch is supported.");
+                "Protocol v1 supports only the ProcessAssets job dispatch.");
+        }
+
+        if (dispatch.Context.JobKind is not WorkerJobKind.ProcessAssets
+            and not WorkerJobKind.CoordinateLookup)
+        {
+            throw new NotSupportedException(
+                "The worker-job dispatch kind is not registered for child launch.");
         }
 
         options.Validate();

@@ -6,6 +6,8 @@ internal enum FixtureScenario
 {
     Ready,
     Success,
+    SourceDegraded,
+    DomainFailure,
     NoWork,
     PreReadyCrash,
     PostReadyCrash,
@@ -17,7 +19,14 @@ internal enum FixtureScenario
     StandardErrorFlood,
     RawExit,
     CooperativeCancel,
-    Unresponsive
+    Unresponsive,
+    RealCoordinateSuccess,
+    RealCoordinateNoCountry,
+    RealCoordinateDegraded,
+    RealCoordinateDomainFailure,
+    RealCoordinateCancellation,
+    RealCoordinateOutputFailure,
+    RealCoordinateStartupFailure
 }
 
 internal enum MalformedKind
@@ -66,6 +75,8 @@ internal sealed record FixtureOptions(
         {
             ["ready"] = FixtureScenario.Ready,
             ["success"] = FixtureScenario.Success,
+            ["source-degraded"] = FixtureScenario.SourceDegraded,
+            ["domain-failure"] = FixtureScenario.DomainFailure,
             ["no-work"] = FixtureScenario.NoWork,
             ["pre-ready-crash"] = FixtureScenario.PreReadyCrash,
             ["post-ready-crash"] = FixtureScenario.PostReadyCrash,
@@ -77,8 +88,24 @@ internal sealed record FixtureOptions(
             ["stderr-flood"] = FixtureScenario.StandardErrorFlood,
             ["raw-exit"] = FixtureScenario.RawExit,
             ["cooperative-cancel"] = FixtureScenario.CooperativeCancel,
-            ["unresponsive"] = FixtureScenario.Unresponsive
+            ["unresponsive"] = FixtureScenario.Unresponsive,
+            ["real-coordinate-success"] = FixtureScenario.RealCoordinateSuccess,
+            ["real-coordinate-no-country"] = FixtureScenario.RealCoordinateNoCountry,
+            ["real-coordinate-degraded"] = FixtureScenario.RealCoordinateDegraded,
+            ["real-coordinate-domain-failure"] = FixtureScenario.RealCoordinateDomainFailure,
+            ["real-coordinate-cancellation"] = FixtureScenario.RealCoordinateCancellation,
+            ["real-coordinate-output-failure"] = FixtureScenario.RealCoordinateOutputFailure,
+            ["real-coordinate-startup-failure"] = FixtureScenario.RealCoordinateStartupFailure
         };
+
+    internal bool UsesProductionCoordinateHost => Scenario is
+        FixtureScenario.RealCoordinateSuccess or
+        FixtureScenario.RealCoordinateNoCountry or
+        FixtureScenario.RealCoordinateDegraded or
+        FixtureScenario.RealCoordinateDomainFailure or
+        FixtureScenario.RealCoordinateCancellation or
+        FixtureScenario.RealCoordinateOutputFailure or
+        FixtureScenario.RealCoordinateStartupFailure;
 
     internal static bool TryParse(string[] arguments, out FixtureOptions? options, out string error)
     {

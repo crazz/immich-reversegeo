@@ -67,6 +67,13 @@ internal static class InternalWorkerServiceCollectionExtensions
                 new WorkerJobHandlerRegistration<ProcessAssetsRequest, ProcessAssetsResult>(
                     WorkerJobDescriptors.ProcessAssets,
                     sp => sp.GetRequiredService<ProcessAssetsWorkerJobHandler>()));
+            services.AddSingleton(sp => new CoordinateLookupWorkerJobHandler(
+                sp.GetRequiredService<CoordinateLookupOperation>(),
+                sp.GetRequiredService<TimeProvider>()));
+            services.AddSingleton<IWorkerJobHandlerRegistration>(
+                new WorkerJobHandlerRegistration<CoordinateLookupRequest, CoordinateLookupResult>(
+                    WorkerJobDescriptors.CoordinateLookup,
+                    sp => sp.GetRequiredService<CoordinateLookupWorkerJobHandler>()));
             services.AddSingleton(sp => new WorkerJobHandlerRegistry(
                 sp.GetServices<IWorkerJobHandlerRegistration>()));
         }

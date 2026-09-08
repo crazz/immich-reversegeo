@@ -5,6 +5,7 @@ using System.Globalization;
 using System.Linq;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
@@ -14,6 +15,24 @@ public static class WorkerJobProtocolCodec
 {
     private const string DiagnosticTruncationMarker = "…";
     private static readonly UTF8Encoding StrictUtf8 = new(false, true);
+    private static readonly JsonSerializerOptions CoordinateJson = CreateCoordinateJsonOptions();
+
+    private static JsonSerializerOptions CreateCoordinateJsonOptions()
+    {
+        var options = new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            PropertyNameCaseInsensitive = false,
+            UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
+            RespectRequiredConstructorParameters = true
+        };
+        options.Converters.Add(new CanonicalKebabCaseEnumConverter<CoordinateLookupTieBreak>());
+        options.Converters.Add(new CanonicalKebabCaseEnumConverter<CoordinateLookupCountryStatus>());
+        options.Converters.Add(new CanonicalKebabCaseEnumConverter<CoordinateLookupSourceState>());
+        options.Converters.Add(new CanonicalKebabCaseEnumConverter<CoordinateLookupFinalSource>());
+        options.Converters.Add(new CanonicalKebabCaseEnumConverter<WorkerJobFailureCategory>());
+        return options;
+    }
 
     public static byte[] SerializeControllerInput(WorkerJobControllerMessage message)
     {
@@ -39,6 +58,9 @@ public static class WorkerJobProtocolCodec
                         "trigger",
                         WorkerProtocolConversions.Trigger(
                             execute.Request.ProcessingRequest.Trigger));
+                    break;
+                case CoordinateLookupExecutePayload execute:
+                    WriteCoordinateLookupRequest(writer, execute.Request);
                     break;
                 case WorkerJobCancelPayload:
                     break;
@@ -290,19 +312,26 @@ public static class WorkerJobProtocolCodec
             WorkerJobControllerPayload typedPayload;
             if (type == WorkerJobProtocolV2.ExecuteType)
             {
-                if (jobKind != WorkerJobKind.ProcessAssets
-                    || !HasExactProperties(payload, "trigger")
-                    || !TryString(payload, "trigger", out var trigger)
-                    || !WorkerProtocolConversions.TryTrigger(trigger, out var processingTrigger))
+                if (jobKind == WorkerJobKind.ProcessAssets
+                    && HasExactProperties(payload, "trigger")
+                    && TryString(payload, "trigger", out var trigger)
+                    && WorkerProtocolConversions.TryTrigger(trigger, out var processingTrigger))
+                {
+                    typedPayload = new ProcessAssetsExecutePayload(
+                        new ProcessAssetsRequest(
+                            new ProcessingRunRequest(jobId.Value, processingTrigger)));
+                }
+                else if (jobKind == WorkerJobKind.CoordinateLookup
+                    && TryCoordinateLookupRequest(payload, out CoordinateLookupRequest? request))
+                {
+                    typedPayload = new CoordinateLookupExecutePayload(request!);
+                }
+                else
                 {
                     return WorkerJobControllerParseResult.Failed(
                         WorkerProtocolFailureCode.InvalidPayload,
                         "The execute payload does not match the job kind.");
                 }
-
-                typedPayload = new ProcessAssetsExecutePayload(
-                    new ProcessAssetsRequest(
-                        new ProcessingRunRequest(jobId.Value, processingTrigger)));
             }
             else
             {
@@ -421,6 +450,20 @@ public static class WorkerJobProtocolCodec
                         counts.Updated,
                         counts.Skipped,
                         counts.Failed),
+            WorkerJobProtocolV2.ProgressChangedType when
+                jobKind == WorkerJobKind.CoordinateLookup
+                && HasExactProperties(payload, "step", "state", "countryCode", "message")
+                && TryString(payload, "step", out var stepText)
+                && TryCoordinateLookupProgressStep(stepText, out var step)
+                && TryString(payload, "state", out var progressStateText)
+                && TryCoordinateLookupSourceState(progressStateText, out var progressState)
+                && TryOptionalString(payload, "countryCode", out var progressCountryCode)
+                && TryString(payload, "message", out var progressMessage) =>
+                    new CoordinateLookupProgressPayload(
+                        step,
+                        progressState,
+                        progressCountryCode,
+                        progressMessage),
             WorkerJobProtocolV2.ActivityStartedType when
                 HasExactProperties(payload, "activityId", "label")
                 && TryGuid(payload, "activityId", out var activityId)
@@ -455,12 +498,13 @@ public static class WorkerJobProtocolCodec
         }
 
         ProcessAssetsResult? result = null;
+        CoordinateLookupResult? coordinateLookupResult = null;
         WorkerJobSafeError? error = null;
         if (resultElement.ValueKind != JsonValueKind.Null)
         {
-            if (jobKind != WorkerJobKind.ProcessAssets
-                || resultElement.ValueKind != JsonValueKind.Object
-                || !HasExactProperties(
+            if (jobKind == WorkerJobKind.ProcessAssets
+                && resultElement.ValueKind == JsonValueKind.Object
+                && HasExactProperties(
                     resultElement,
                     "trigger",
                     "startedAtUtc",
@@ -469,22 +513,28 @@ public static class WorkerJobProtocolCodec
                     "updatedCount",
                     "skippedCount",
                     "failedCount")
-                || !TryString(resultElement, "trigger", out var trigger)
-                || !TryTimestamp(resultElement, "startedAtUtc", out var resultStarted)
-                || !TryTimestamp(resultElement, "endedAtUtc", out var resultEnded)
-                || !TryCounts(resultElement, out var counts))
+                && TryString(resultElement, "trigger", out var trigger)
+                && TryTimestamp(resultElement, "startedAtUtc", out var resultStarted)
+                && TryTimestamp(resultElement, "endedAtUtc", out var resultEnded)
+                && TryCounts(resultElement, out var counts))
+            {
+                result = new ProcessAssetsResult(
+                    trigger,
+                    resultStarted,
+                    resultEnded,
+                    counts.Processed,
+                    counts.Updated,
+                    counts.Skipped,
+                    counts.Failed);
+            }
+            else if (jobKind == WorkerJobKind.CoordinateLookup
+                && TryCoordinateLookupResult(resultElement, out coordinateLookupResult))
+            {
+            }
+            else
             {
                 throw new ArgumentException("The terminal result does not match the job kind.");
             }
-
-            result = new ProcessAssetsResult(
-                trigger,
-                resultStarted,
-                resultEnded,
-                counts.Processed,
-                counts.Updated,
-                counts.Skipped,
-                counts.Failed);
         }
 
         if (errorElement.ValueKind != JsonValueKind.Null)
@@ -502,7 +552,448 @@ public static class WorkerJobProtocolCodec
             error = new WorkerJobSafeError(code, failureCategory, safeMessage);
         }
 
-        return new WorkerJobTerminalPayload(outcome, started, ended, result, error);
+        return new WorkerJobTerminalPayload(
+            outcome,
+            started,
+            ended,
+            result,
+            coordinateLookupResult,
+            error);
+    }
+
+    private static void WriteCoordinateLookupRequest(
+        Utf8JsonWriter writer,
+        CoordinateLookupRequest request)
+    {
+        writer.WriteNumber("latitude", request.Latitude);
+        writer.WriteNumber("longitude", request.Longitude);
+        writer.WriteBoolean("includeAirportInfrastructure", request.IncludeAirportInfrastructure);
+        writer.WriteBoolean("includeLiveOverturePlaces", request.IncludeLiveOverturePlaces);
+        writer.WriteBoolean("preferGadmAdministrativeAreas", request.PreferGadmAdministrativeAreas);
+        writer.WritePropertyName("cityResolverOverrides");
+        writer.WriteStartObject();
+        writer.WritePropertyName("defaultProfile");
+        if (request.CityResolverOverrides.DefaultProfile is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            WriteCoordinateLookupCityProfile(writer, request.CityResolverOverrides.DefaultProfile);
+        }
+
+        writer.WritePropertyName("countryProfiles");
+        writer.WriteStartArray();
+        foreach (CoordinateLookupCountryProfile countryProfile in request.CityResolverOverrides.CountryProfiles)
+        {
+            writer.WriteStartObject();
+            writer.WriteString("countryCode", countryProfile.CountryCode);
+            writer.WritePropertyName("profile");
+            WriteCoordinateLookupCityProfile(writer, countryProfile.Profile);
+            writer.WriteEndObject();
+        }
+
+        writer.WriteEndArray();
+        writer.WriteEndObject();
+    }
+
+    private static void WriteCoordinateLookupCityProfile(
+        Utf8JsonWriter writer,
+        CoordinateLookupCityProfile profile)
+    {
+        writer.WriteStartObject();
+        writer.WritePropertyName("preferredSubtypes");
+        writer.WriteStartArray();
+        foreach (string subtype in profile.PreferredSubtypes)
+        {
+            writer.WriteStringValue(subtype);
+        }
+
+        writer.WriteEndArray();
+        if (profile.TieBreak is null)
+        {
+            writer.WriteNull("tieBreak");
+        }
+        else
+        {
+            writer.WriteString("tieBreak", FormatCoordinateLookupTieBreak(profile.TieBreak.Value));
+        }
+
+        writer.WriteEndObject();
+    }
+
+    private static bool TryCoordinateLookupRequest(
+        JsonElement payload,
+        out CoordinateLookupRequest? request)
+    {
+        request = null;
+        if (!HasExactProperties(
+                payload,
+                "latitude",
+                "longitude",
+                "includeAirportInfrastructure",
+                "includeLiveOverturePlaces",
+                "preferGadmAdministrativeAreas",
+                "cityResolverOverrides")
+            || !TryCanonicalDouble(payload, "latitude", out double latitude)
+            || !TryCanonicalDouble(payload, "longitude", out double longitude)
+            || !TryBoolean(payload, "includeAirportInfrastructure", out bool includeAirport)
+            || !TryBoolean(payload, "includeLiveOverturePlaces", out bool includePlaces)
+            || !TryBoolean(payload, "preferGadmAdministrativeAreas", out bool preferGadm)
+            || !payload.TryGetProperty("cityResolverOverrides", out JsonElement overridesElement)
+            || !TryCoordinateLookupOverrides(overridesElement, out CoordinateLookupCityResolverOverrides? overrides))
+        {
+            return false;
+        }
+
+        request = new CoordinateLookupRequest(
+            latitude,
+            longitude,
+            includeAirport,
+            includePlaces,
+            preferGadm,
+            overrides!);
+        return true;
+    }
+
+    private static bool TryCoordinateLookupOverrides(
+        JsonElement element,
+        out CoordinateLookupCityResolverOverrides? overrides)
+    {
+        overrides = null;
+        if (!HasExactProperties(element, "defaultProfile", "countryProfiles")
+            || !element.TryGetProperty("defaultProfile", out JsonElement defaultElement)
+            || !element.TryGetProperty("countryProfiles", out JsonElement countriesElement)
+            || countriesElement.ValueKind != JsonValueKind.Array
+            || countriesElement.GetArrayLength() > CoordinateLookupProtocolBounds.MaxCountryProfiles)
+        {
+            return false;
+        }
+
+        CoordinateLookupCityProfile? defaultProfile = null;
+        if (defaultElement.ValueKind != JsonValueKind.Null
+            && !TryCoordinateLookupCityProfile(defaultElement, allowInheritedTieBreak: true, out defaultProfile))
+        {
+            return false;
+        }
+
+        var countries = new List<CoordinateLookupCountryProfile>();
+        foreach (JsonElement countryElement in countriesElement.EnumerateArray())
+        {
+            if (!HasExactProperties(countryElement, "countryCode", "profile")
+                || !TryString(countryElement, "countryCode", out string countryCode)
+                || !countryElement.TryGetProperty("profile", out JsonElement profileElement)
+                || !TryCoordinateLookupCityProfile(profileElement, allowInheritedTieBreak: true, out CoordinateLookupCityProfile? profile))
+            {
+                return false;
+            }
+
+            countries.Add(new CoordinateLookupCountryProfile(countryCode, profile!));
+        }
+
+        overrides = new CoordinateLookupCityResolverOverrides(defaultProfile, countries);
+        return true;
+    }
+
+    private static bool TryCoordinateLookupCityProfile(
+        JsonElement element,
+        bool allowInheritedTieBreak,
+        out CoordinateLookupCityProfile? profile)
+    {
+        profile = null;
+        if (!HasExactProperties(element, "preferredSubtypes", "tieBreak")
+            || !element.TryGetProperty("preferredSubtypes", out JsonElement subtypesElement)
+            || subtypesElement.ValueKind != JsonValueKind.Array
+            || subtypesElement.GetArrayLength() > CoordinateLookupProtocolBounds.MaxPreferredSubtypes
+            || !element.TryGetProperty("tieBreak", out JsonElement tieBreakElement))
+        {
+            return false;
+        }
+
+        var subtypes = new List<string>();
+        foreach (JsonElement subtypeElement in subtypesElement.EnumerateArray())
+        {
+            if (subtypeElement.ValueKind != JsonValueKind.String)
+            {
+                return false;
+            }
+
+            subtypes.Add(subtypeElement.GetString()!);
+        }
+
+        CoordinateLookupTieBreak? tieBreak = null;
+        if (tieBreakElement.ValueKind == JsonValueKind.String)
+        {
+            if (!TryCoordinateLookupTieBreak(tieBreakElement.GetString()!, out CoordinateLookupTieBreak parsedTieBreak))
+            {
+                return false;
+            }
+
+            tieBreak = parsedTieBreak;
+        }
+        else if (!allowInheritedTieBreak || tieBreakElement.ValueKind != JsonValueKind.Null)
+        {
+            return false;
+        }
+
+        profile = new CoordinateLookupCityProfile(subtypes, tieBreak);
+        return true;
+    }
+
+    private static void WriteCoordinateLookupResult(
+        Utf8JsonWriter writer,
+        CoordinateLookupResult result)
+    {
+        JsonSerializer.Serialize(writer, result, CoordinateJson);
+    }
+
+    private static bool TryCoordinateLookupResult(
+        JsonElement element,
+        out CoordinateLookupResult? result)
+    {
+        result = null;
+        if (element.ValueKind != JsonValueKind.Object
+            || !CoordinateLookupResultCollectionsWithinBounds(element))
+        {
+            return false;
+        }
+
+        try
+        {
+            result = element.Deserialize<CoordinateLookupResult>(CoordinateJson);
+            return result is not null;
+        }
+        catch (JsonException)
+        {
+            return false;
+        }
+        catch (NotSupportedException)
+        {
+            return false;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool CoordinateLookupResultCollectionsWithinBounds(JsonElement result)
+    {
+        if (!result.TryGetProperty("trace", out JsonElement trace)
+            || trace.ValueKind != JsonValueKind.Array
+            || trace.GetArrayLength() > CoordinateLookupProtocolBounds.MaxTraceEntries
+            || !result.TryGetProperty("omittedTraceCount", out _)
+            || !result.TryGetProperty("truncatedTextCount", out _))
+        {
+            return false;
+        }
+
+        string[] sourceNames =
+        [
+            "overtureDivisions",
+            "gadmDivisions",
+            "airportInfrastructure",
+            "liveOverturePlaces"
+        ];
+        foreach (string sourceName in sourceNames)
+        {
+            if (!result.TryGetProperty(sourceName, out JsonElement source)
+                || source.ValueKind != JsonValueKind.Object
+                || !source.TryGetProperty("candidates", out JsonElement candidates)
+                || candidates.ValueKind != JsonValueKind.Array
+                || candidates.GetArrayLength() > CoordinateLookupProtocolBounds.MaxCandidatesPerSource
+                || !source.TryGetProperty("caches", out JsonElement caches)
+                || caches.ValueKind != JsonValueKind.Array
+                || caches.GetArrayLength() > CoordinateLookupProtocolBounds.MaxCacheStatuses
+                || !source.TryGetProperty("omittedCandidateCount", out _)
+                || !source.TryGetProperty("omittedCacheCount", out _)
+                || !source.TryGetProperty("truncatedTextCount", out _))
+            {
+                return false;
+            }
+
+            foreach (JsonElement candidate in candidates.EnumerateArray())
+            {
+                if (!CoordinateLookupCandidateCollectionsWithinBounds(candidate))
+                {
+                    return false;
+                }
+            }
+
+            if (source.TryGetProperty("bestMatch", out JsonElement bestMatch)
+                && bestMatch.ValueKind != JsonValueKind.Null
+                && !CoordinateLookupCandidateCollectionsWithinBounds(bestMatch))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static bool CoordinateLookupCandidateCollectionsWithinBounds(JsonElement candidate) =>
+        candidate.ValueKind == JsonValueKind.Object
+        && candidate.TryGetProperty("recordSources", out JsonElement sources)
+        && sources.ValueKind == JsonValueKind.Array
+        && sources.GetArrayLength() <= CoordinateLookupProtocolBounds.MaxRecordSourcesPerCandidate
+        && candidate.TryGetProperty("omittedRecordSourceCount", out _)
+        && candidate.TryGetProperty("truncatedTextCount", out _);
+
+    private static string FormatCoordinateLookupTieBreak(CoordinateLookupTieBreak tieBreak) =>
+        tieBreak switch
+        {
+            CoordinateLookupTieBreak.SmallestArea => "smallest-area",
+            CoordinateLookupTieBreak.LargestArea => "largest-area",
+            _ => throw new ArgumentOutOfRangeException(nameof(tieBreak))
+        };
+
+    private static bool TryCoordinateLookupTieBreak(
+        string value,
+        out CoordinateLookupTieBreak tieBreak)
+    {
+        tieBreak = value switch
+        {
+            "smallest-area" => CoordinateLookupTieBreak.SmallestArea,
+            "largest-area" => CoordinateLookupTieBreak.LargestArea,
+            _ => default
+        };
+        return value is "smallest-area" or "largest-area";
+    }
+
+    private static string FormatCoordinateLookupProgressStep(CoordinateLookupProgressStep step) =>
+        step switch
+        {
+            CoordinateLookupProgressStep.Country => "country",
+            CoordinateLookupProgressStep.OvertureCache => "overture-cache",
+            CoordinateLookupProgressStep.OvertureAdministrative => "overture-administrative",
+            CoordinateLookupProgressStep.GadmCache => "gadm-cache",
+            CoordinateLookupProgressStep.GadmAdministrative => "gadm-administrative",
+            CoordinateLookupProgressStep.Airport => "airport",
+            CoordinateLookupProgressStep.LivePlaces => "live-places",
+            CoordinateLookupProgressStep.FinalSelection => "final-selection",
+            _ => throw new ArgumentOutOfRangeException(nameof(step))
+        };
+
+    private static bool TryCoordinateLookupProgressStep(
+        string value,
+        out CoordinateLookupProgressStep step)
+    {
+        step = value switch
+        {
+            "country" => CoordinateLookupProgressStep.Country,
+            "overture-cache" => CoordinateLookupProgressStep.OvertureCache,
+            "overture-administrative" => CoordinateLookupProgressStep.OvertureAdministrative,
+            "gadm-cache" => CoordinateLookupProgressStep.GadmCache,
+            "gadm-administrative" => CoordinateLookupProgressStep.GadmAdministrative,
+            "airport" => CoordinateLookupProgressStep.Airport,
+            "live-places" => CoordinateLookupProgressStep.LivePlaces,
+            "final-selection" => CoordinateLookupProgressStep.FinalSelection,
+            _ => default
+        };
+        return value is
+            "country" or
+            "overture-cache" or
+            "overture-administrative" or
+            "gadm-cache" or
+            "gadm-administrative" or
+            "airport" or
+            "live-places" or
+            "final-selection";
+    }
+
+    private static string FormatCoordinateLookupSourceState(CoordinateLookupSourceState state) =>
+        state switch
+        {
+            CoordinateLookupSourceState.Disabled => "disabled",
+            CoordinateLookupSourceState.Skipped => "skipped",
+            CoordinateLookupSourceState.Ready => "ready",
+            CoordinateLookupSourceState.NoMatch => "no-match",
+            CoordinateLookupSourceState.Unavailable => "unavailable",
+            CoordinateLookupSourceState.Failed => "failed",
+            _ => throw new ArgumentOutOfRangeException(nameof(state))
+        };
+
+    private static bool TryCoordinateLookupSourceState(
+        string value,
+        out CoordinateLookupSourceState state)
+    {
+        state = value switch
+        {
+            "disabled" => CoordinateLookupSourceState.Disabled,
+            "skipped" => CoordinateLookupSourceState.Skipped,
+            "ready" => CoordinateLookupSourceState.Ready,
+            "no-match" => CoordinateLookupSourceState.NoMatch,
+            "unavailable" => CoordinateLookupSourceState.Unavailable,
+            "failed" => CoordinateLookupSourceState.Failed,
+            _ => default
+        };
+        return value is "disabled" or "skipped" or "ready" or "no-match" or "unavailable" or "failed";
+    }
+
+    private static bool TryCanonicalDouble(JsonElement element, string name, out double value)
+    {
+        value = default;
+        if (!element.TryGetProperty(name, out JsonElement property)
+            || property.ValueKind != JsonValueKind.Number
+            || !property.TryGetDouble(out value)
+            || !double.IsFinite(value))
+        {
+            return false;
+        }
+
+        string canonical = JsonSerializer.Serialize(value);
+        return property.GetRawText() == canonical;
+    }
+
+    private static bool TryBoolean(JsonElement element, string name, out bool value)
+    {
+        value = default;
+        if (!element.TryGetProperty(name, out JsonElement property)
+            || property.ValueKind is not JsonValueKind.True and not JsonValueKind.False)
+        {
+            return false;
+        }
+
+        value = property.GetBoolean();
+        return true;
+    }
+
+    private static bool TryOptionalString(JsonElement element, string name, out string? value)
+    {
+        value = null;
+        if (!element.TryGetProperty(name, out JsonElement property))
+        {
+            return false;
+        }
+
+        if (property.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = property.GetString();
+        return value is not null;
+    }
+
+    private static void WriteOptionalString(Utf8JsonWriter writer, string name, string? value)
+    {
+        if (value is null)
+        {
+            writer.WriteNull(name);
+        }
+        else
+        {
+            writer.WriteString(name, value);
+        }
     }
 
     private static void WriteEnvelopeStart(
@@ -567,6 +1058,12 @@ public static class WorkerJobProtocolCodec
             case ProcessAssetsProgressPayload progress:
                 WriteCounts(writer, progress.ProcessedCount, progress.UpdatedCount, progress.SkippedCount, progress.FailedCount);
                 break;
+            case CoordinateLookupProgressPayload progress:
+                writer.WriteString("step", FormatCoordinateLookupProgressStep(progress.Step));
+                writer.WriteString("state", FormatCoordinateLookupSourceState(progress.State));
+                WriteOptionalString(writer, "countryCode", progress.CountryCode);
+                writer.WriteString("message", progress.Message);
+                break;
             case WorkerJobActivityStartedPayload activityStarted:
                 writer.WriteString("activityId", activityStarted.ActivityId.ToString("D"));
                 writer.WriteString("label", activityStarted.Label);
@@ -594,19 +1091,25 @@ public static class WorkerJobProtocolCodec
         writer.WriteString("startedAtUtc", WorkerJobProtocolV2.FormatTimestamp(terminal.StartedAtUtc));
         writer.WriteString("endedAtUtc", WorkerJobProtocolV2.FormatTimestamp(terminal.EndedAtUtc));
         writer.WritePropertyName("result");
-        if (terminal.ProcessAssetsResult is null)
+        if (terminal.ProcessAssetsResult is null && terminal.CoordinateLookupResult is null)
         {
             writer.WriteNullValue();
         }
         else
         {
-            ProcessAssetsResult result = terminal.ProcessAssetsResult;
-            writer.WriteStartObject();
-            writer.WriteString("trigger", result.Trigger);
-            writer.WriteString("startedAtUtc", WorkerJobProtocolV2.FormatTimestamp(result.StartedAtUtc));
-            writer.WriteString("endedAtUtc", WorkerJobProtocolV2.FormatTimestamp(result.EndedAtUtc));
-            WriteCounts(writer, result.ProcessedCount, result.UpdatedCount, result.SkippedCount, result.FailedCount);
-            writer.WriteEndObject();
+            if (terminal.ProcessAssetsResult is { } result)
+            {
+                writer.WriteStartObject();
+                writer.WriteString("trigger", result.Trigger);
+                writer.WriteString("startedAtUtc", WorkerJobProtocolV2.FormatTimestamp(result.StartedAtUtc));
+                writer.WriteString("endedAtUtc", WorkerJobProtocolV2.FormatTimestamp(result.EndedAtUtc));
+                WriteCounts(writer, result.ProcessedCount, result.UpdatedCount, result.SkippedCount, result.FailedCount);
+                writer.WriteEndObject();
+            }
+            else
+            {
+                WriteCoordinateLookupResult(writer, terminal.CoordinateLookupResult!);
+            }
         }
 
         writer.WritePropertyName("error");
@@ -969,5 +1472,47 @@ public static class WorkerJobProtocolCodec
             && TryInteger(payload, "updatedCount", out counts.Updated)
             && TryInteger(payload, "skippedCount", out counts.Skipped)
             && TryInteger(payload, "failedCount", out counts.Failed);
+    }
+
+    private sealed class CanonicalKebabCaseEnumConverter<TEnum> : JsonConverter<TEnum>
+        where TEnum : struct, Enum
+    {
+        private static readonly IReadOnlyDictionary<string, TEnum> ValuesByToken =
+            Enum.GetValues<TEnum>().ToDictionary(
+                static value => JsonNamingPolicy.KebabCaseLower.ConvertName(value.ToString()),
+                static value => value,
+                StringComparer.Ordinal);
+        private static readonly IReadOnlyDictionary<TEnum, string> TokensByValue =
+            ValuesByToken.ToDictionary(
+                static pair => pair.Value,
+                static pair => pair.Key);
+
+        public override TEnum Read(
+            ref Utf8JsonReader reader,
+            Type typeToConvert,
+            JsonSerializerOptions options)
+        {
+            if (reader.TokenType != JsonTokenType.String
+                || reader.GetString() is not { } token
+                || !ValuesByToken.TryGetValue(token, out TEnum value))
+            {
+                throw new JsonException("The enum token is not canonical.");
+            }
+
+            return value;
+        }
+
+        public override void Write(
+            Utf8JsonWriter writer,
+            TEnum value,
+            JsonSerializerOptions options)
+        {
+            if (!TokensByValue.TryGetValue(value, out string? token))
+            {
+                throw new JsonException("The enum value is not defined.");
+            }
+
+            writer.WriteStringValue(token);
+        }
     }
 }

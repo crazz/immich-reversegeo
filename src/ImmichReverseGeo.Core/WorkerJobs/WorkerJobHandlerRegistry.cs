@@ -192,7 +192,10 @@ public sealed class WorkerJobHandlerRegistry
             WorkerJobKind.ProcessAssets =>
                 descriptor.RequestType == typeof(ProcessAssetsRequest)
                 && descriptor.ResultType == typeof(ProcessAssetsResult),
-            WorkerJobKind.CoordinateLookup or WorkerJobKind.CacheMutation => false,
+            WorkerJobKind.CoordinateLookup =>
+                descriptor.RequestType == typeof(CoordinateLookupRequest)
+                && descriptor.ResultType == typeof(CoordinateLookupResult),
+            WorkerJobKind.CacheMutation => false,
             _ => false
         };
 }

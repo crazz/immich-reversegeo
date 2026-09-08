@@ -710,8 +710,9 @@ public sealed class WorkerStdinControlsAndFinalityTests
             root,
             "src/ImmichReverseGeo.Web/WorkerHost/TransitionalWorkerTransport.cs"));
 
-        Assert.AreEqual(1, Count(activeSource, "Console.OpenStandardInput()"), "stdin-structure-one-standard-input-open");
-        Assert.AreEqual(1, Count(requestSource, "Console.OpenStandardInput()"), "stdin-structure-open-owned-by-change22-factory");
+        Assert.AreEqual(0, Count(activeSource, "Console.OpenStandardInput()"), "stdin-structure-no-uncancellable-console-input");
+        Assert.AreEqual(1, Count(requestSource, "new AnonymousPipeClientStream("), "stdin-structure-one-cancellable-pipe-input");
+        Assert.AreEqual(1, Count(requestSource, "new SafePipeHandle(handle, ownsHandle: true)"), "stdin-structure-owned-inherited-handle");
         Assert.AreEqual(0, Count(composition, "Console.OpenStandardInput()"), "stdin-structure-composition-does-not-open");
         Assert.IsFalse(availability.Contains("IWorkerStandardInputStreamFactory", StringComparison.Ordinal), "stdin-structure-availability-no-factory-dependency");
         foreach (var forbidden in new[]

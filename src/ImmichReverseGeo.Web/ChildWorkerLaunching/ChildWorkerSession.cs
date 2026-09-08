@@ -71,11 +71,12 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private readonly Stream _standardOutputStream;
     private readonly Stream _standardErrorStream;
     private readonly IWorkerJobEventSink _eventSink;
+    private readonly WorkerJobDispatch _dispatch;
     private readonly ProcessingRunRequest _request;
     private readonly bool _isCancellable;
     private readonly InternalWorkerProtocolVersion _protocolVersion;
     private readonly WorkerJobOutputStreamValidator? _jobOutputValidator;
-    private readonly ProcessAssetsWorkerJobProjection _jobProjection;
+    private readonly ProcessAssetsWorkerJobProjection? _jobProjection;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _readyTimeout;
     private readonly TaskCompletionSource<ChildWorkerStartupObservation> _startup = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -115,10 +116,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     {
         _process = process ?? throw new ArgumentNullException(nameof(process));
         ArgumentNullException.ThrowIfNull(dispatch);
-        var processAssets = dispatch as ProcessAssetsWorkerJobDispatch
-            ?? throw new NotSupportedException(
-                "Only the registered ProcessAssets job dispatch is supported.");
-        _request = processAssets.Request.ProcessingRequest;
+        _dispatch = dispatch;
+        _request = dispatch is ProcessAssetsWorkerJobDispatch processAssets
+            ? processAssets.Request.ProcessingRequest
+            : new ProcessingRunRequest(dispatch.Context.JobId, ProcessingRunTrigger.Manual);
         _eventSink = eventSink ?? throw new ArgumentNullException(nameof(eventSink));
         _isCancellable = dispatch.IsCancellable;
         ArgumentNullException.ThrowIfNull(options);
@@ -135,7 +136,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                 dispatch.Context.JobId,
                 dispatch.Context.JobKind);
         }
-        _jobProjection = new ProcessAssetsWorkerJobProjection(_request);
+        _jobProjection = dispatch is ProcessAssetsWorkerJobDispatch
+            ? new ProcessAssetsWorkerJobProjection(_request)
+            : null;
 
         _timeProvider = options.TimeProvider;
         _readyTimeout = options.ReadyTimeout;
@@ -525,7 +528,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                     continue;
                 }
 
-                if (WorkerProtocolV1.IsTerminal(@event!.Type))
+                bool isTerminal = _protocolVersion == InternalWorkerProtocolVersion.V1
+                    ? WorkerProtocolV1.IsTerminal(@event!.Type)
+                    : jobEvent!.Type == WorkerJobProtocolV2.TerminalType;
+                if (isTerminal)
                 {
                     lock (_observationGate)
                     {
@@ -546,7 +552,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                     continue;
                 }
 
-                if (@event.Type == WorkerProtocolV1.RunStartedType)
+                if (jobEvent!.Type == WorkerJobProtocolV2.JobStartedType)
                 {
                     lock (_observationGate)
                     {
@@ -554,7 +560,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                     }
                 }
 
-                if (@event.Type == WorkerProtocolV1.ReadyType && TryReserveReady())
+                if (jobEvent.Type == WorkerJobProtocolV2.ReadyType && TryReserveReady())
                 {
                     await ExecuteOnceAsync().ConfigureAwait(false);
                 }
@@ -591,8 +597,15 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                         _timeProvider.GetUtcNow(),
                         JobId,
                         JobKind,
-                        new ProcessAssetsExecutePayload(
-                            new ProcessAssetsRequest(_request))));
+                        _dispatch switch
+                        {
+                            ProcessAssetsWorkerJobDispatch processAssets =>
+                                new ProcessAssetsExecutePayload(processAssets.Request),
+                            CoordinateLookupWorkerJobDispatch coordinateLookup =>
+                                new CoordinateLookupExecutePayload(coordinateLookup.Request),
+                            _ => throw new NotSupportedException(
+                                "The worker-job dispatch kind is not registered for serialization.")
+                        }));
         }
         catch
         {
@@ -662,7 +675,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
 
     private async Task<bool> DeliverAdmittedEventAsync(
         WorkerJobOutputMessage jobEvent,
-        WorkerProtocolEvent compatibilityEvent)
+        WorkerProtocolEvent? compatibilityEvent)
     {
         try
         {
@@ -670,7 +683,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             {
                 await processAssetsSink.AcceptProcessAssetsAsync(
                     jobEvent,
-                    compatibilityEvent,
+                    compatibilityEvent
+                        ?? throw new InvalidOperationException(
+                            "ProcessAssets output requires a compatibility projection."),
                     CancellationToken.None).ConfigureAwait(false);
             }
             else
@@ -681,7 +696,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
         catch
         {
-            RecordSinkFailure(compatibilityEvent);
+            RecordSinkFailure(jobEvent.Type == WorkerJobProtocolV2.ReadyType);
             return false;
         }
         finally
@@ -804,7 +819,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             new ChildWorkerFaultContainmentReason.ProtocolFailure(failure));
     }
 
-    private void RecordSinkFailure(WorkerProtocolEvent @event)
+    private void RecordSinkFailure(bool isReady)
     {
         lock (_observationGate)
         {
@@ -815,7 +830,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
 
         TryCommitPreReady(ChildWorkerStartupObservation.SinkFailed.Instance);
         PublishTerminalPreventingObservation(
-            @event.Type == WorkerProtocolV1.ReadyType
+            isReady
                 ? ChildWorkerFaultContainmentReason.ReadyRejected.Instance
                 : ChildWorkerFaultContainmentReason.SinkFailure.Instance);
     }
@@ -902,7 +917,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         try
         {
             jobEvent = jobValidated.Message;
-            projectedEvent = _jobProjection.Map(jobValidated.Message!);
+            projectedEvent = _jobProjection?.Map(jobValidated.Message!);
             return true;
         }
         catch

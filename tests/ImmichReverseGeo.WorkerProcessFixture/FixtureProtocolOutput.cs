@@ -49,6 +49,33 @@ internal sealed class FixtureProtocolOutput
         await WriteFrameAsync(WorkerJobProtocolCodec.Serialize(mapped)).ConfigureAwait(false);
     }
 
+    internal Task WriteReadyAsync()
+    {
+        if (_protocolVersion == InternalWorkerProtocolVersion.V1)
+        {
+            return WriteValidAsync(WorkerProtocolMapper.Ready(1, FixtureRunner.ReadyAtUtc));
+        }
+
+        return WriteValidAsync(WorkerJobProtocolMapper.Ready(
+            1,
+            FixtureRunner.ReadyAtUtc,
+            new WorkerJobReadyPayload([
+                WorkerJobKind.ProcessAssets,
+                WorkerJobKind.CoordinateLookup
+            ])));
+    }
+
+    internal async Task WriteValidAsync(WorkerJobOutputMessage message)
+    {
+        if (_protocolVersion != InternalWorkerProtocolVersion.V2)
+        {
+            throw new InvalidOperationException("Typed worker-job output requires protocol v2.");
+        }
+
+        ValidateV2(message);
+        await WriteFrameAsync(WorkerJobProtocolCodec.Serialize(message)).ConfigureAwait(false);
+    }
+
     internal async Task WriteFrameAsync(ReadOnlyMemory<byte> frame)
     {
         await _output.WriteAsync(frame).ConfigureAwait(false);
@@ -151,14 +178,14 @@ internal sealed class FixtureProtocolOutput
             return;
         }
 
-        if (message.JobId is not { } jobId || message.JobKind != WorkerJobKind.ProcessAssets)
+        if (message.JobId is not { } jobId || message.JobKind is not { } jobKind)
         {
             throw new InvalidOperationException("Fixture generated uncorrelated v2 output.");
         }
 
         if (_v2Validator is null)
         {
-            _v2Validator = new WorkerJobOutputStreamValidator(jobId, WorkerJobKind.ProcessAssets);
+            _v2Validator = new WorkerJobOutputStreamValidator(jobId, jobKind);
             var ready = _v2Ready
                 ?? throw new InvalidOperationException("Fixture generated v2 job output before ready.");
             var readyAccepted = _v2Validator.Validate(ready);
@@ -182,7 +209,10 @@ internal sealed class FixtureProtocolOutput
             return WorkerJobProtocolMapper.Ready(
                 source.Sequence,
                 source.TimestampUtc,
-                new WorkerJobReadyPayload([WorkerJobKind.ProcessAssets]));
+                new WorkerJobReadyPayload([
+                    WorkerJobKind.ProcessAssets,
+                    WorkerJobKind.CoordinateLookup
+                ]));
         }
 
         var jobId = source.RunId

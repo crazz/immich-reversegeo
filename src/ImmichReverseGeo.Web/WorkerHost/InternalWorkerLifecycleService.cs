@@ -160,7 +160,9 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                     {
                         await ExecuteAcceptedProcessingAsync(
                             services,
-                            accepted.Lease,
+                            accepted.Lease as IProcessingRunLease
+                                ?? throw new InvalidOperationException(
+                                    "Protocol v1 accepted a non-processing worker lease."),
                             stoppingToken);
                     }
                     else
@@ -341,20 +343,11 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
 
     private async Task ExecuteAcceptedJobAsync(
         IServiceProvider services,
-        IProcessingRunLease lease,
+        IWorkerRunLease lease,
         CancellationToken stoppingToken)
     {
-        ProcessingRunRequest request = lease.Request;
-        var context = new WorkerJobContext(
-            request.RunId,
-            WorkerJobKind.ProcessAssets,
-            request.Trigger switch
-            {
-                ProcessingRunTrigger.Manual => WorkerJobRequestOrigin.Manual,
-                ProcessingRunTrigger.Scheduled => WorkerJobRequestOrigin.Scheduled,
-                ProcessingRunTrigger.RunOnce => WorkerJobRequestOrigin.RunOnce,
-                _ => throw new ArgumentOutOfRangeException(nameof(request))
-            });
+        WorkerJobContext context = lease.Context;
+        IWorkerJobRequest request = lease.JobRequest;
         WorkerNdjsonEmitter emitter = services.GetRequiredService<WorkerNdjsonEmitter>();
         var reporter = new WorkerJobNdjsonEventReporter(emitter, context);
         WorkerInputPumpFinality? inputFinality = null;
@@ -374,7 +367,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                 WorkerJobHandlerRegistry registry =
                     services.GetRequiredService<WorkerJobHandlerRegistry>();
                 if (!registry.TryResolve(
-                        WorkerJobKind.ProcessAssets,
+                        context.JobKind,
                         services,
                         out IWorkerJobHandlerAdapter? handler)
                     || handler is null)
@@ -385,18 +378,29 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
 
                 IWorkerJobResult result = await handler.ExecuteAsync(
                     context,
-                    new ProcessAssetsRequest(request),
+                    request,
                     reporter,
                     linkedCancellation.Token).ConfigureAwait(false);
-                var processAssetsResult = result as ProcessAssetsResult
-                    ?? throw new InvalidOperationException(
-                        "The processing handler returned an incompatible result.");
-                terminal = new WorkerJobTerminalPayload(
-                    WorkerJobTerminalOutcome.Completed,
-                    processAssetsResult.StartedAtUtc,
-                    processAssetsResult.EndedAtUtc,
-                    processAssetsResult,
-                    null);
+                terminal = result switch
+                {
+                    ProcessAssetsResult processAssetsResult =>
+                        new WorkerJobTerminalPayload(
+                            WorkerJobTerminalOutcome.Completed,
+                            processAssetsResult.StartedAtUtc,
+                            processAssetsResult.EndedAtUtc,
+                            processAssetsResult,
+                            null),
+                    CoordinateLookupResult coordinateLookupResult =>
+                        new WorkerJobTerminalPayload(
+                            WorkerJobTerminalOutcome.Completed,
+                            coordinateLookupResult.StartedAtUtc,
+                            coordinateLookupResult.EndedAtUtc,
+                            null,
+                            coordinateLookupResult,
+                            null),
+                    _ => throw new InvalidOperationException(
+                        "The worker-job handler returned an incompatible result.")
+                };
                 exitFact = WorkerProcessExitFact.Completed();
             }
             catch (ProcessAssetsWorkerJobCancelledException cancelled)
@@ -429,7 +433,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                 if (reporter.StartedAtUtc is null)
                 {
                     await reporter.ReportStartedAsync(
-                        request,
+                        Trigger(context),
                         startedAtUtc,
                         CancellationToken.None).ConfigureAwait(false);
                 }
@@ -453,7 +457,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                 if (reporter.StartedAtUtc is null)
                 {
                     await reporter.ReportStartedAsync(
-                        request,
+                        Trigger(context),
                         startedAtUtc,
                         CancellationToken.None).ConfigureAwait(false);
                 }
@@ -464,10 +468,16 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                     now,
                     null,
                     new WorkerJobSafeError(
-                        "worker-job-infrastructure-failed",
-                        WorkerJobFailureCategory.Internal,
+                        context.JobKind == WorkerJobKind.CoordinateLookup
+                            ? "coordinate-lookup-failed"
+                            : "worker-job-infrastructure-failed",
+                        context.JobKind == WorkerJobKind.CoordinateLookup
+                            ? WorkerJobFailureCategory.Domain
+                            : WorkerJobFailureCategory.Internal,
                         "The worker job could not be completed."));
-                exitFact = WorkerProcessExitFact.ExecutionInfrastructure();
+                exitFact = context.JobKind == WorkerJobKind.CoordinateLookup
+                    ? WorkerProcessExitFact.ExecutionFailure()
+                    : WorkerProcessExitFact.ExecutionInfrastructure();
             }
 
             await emitter.SubmitJobTerminalAsync(
@@ -475,7 +485,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                 terminal,
                 CancellationToken.None).ConfigureAwait(false);
             await services.GetRequiredService<WorkerStdinRequestLoop.WorkerStdinRequestSource>()
-                .NotifyTerminalAsync(request, CancellationToken.None).ConfigureAwait(false);
+                .NotifyTerminalAsync(lease, CancellationToken.None).ConfigureAwait(false);
             _outcomes.Add(exitFact);
         }
         catch (OutOfMemoryException exception)
@@ -563,8 +573,20 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
 
     private static CancellationTokenSource CreateExecutionCancellation(
         CancellationToken stoppingToken,
-        IProcessingRunLease lease) =>
+        IWorkerRunLease lease) =>
         CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lease.CancellationToken);
+
+    private static string Trigger(WorkerJobContext context) =>
+        context.Origin switch
+        {
+            WorkerJobRequestOrigin.Manual => ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolConversions.Trigger(
+                ProcessingRunTrigger.Manual),
+            WorkerJobRequestOrigin.Scheduled => ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolConversions.Trigger(
+                ProcessingRunTrigger.Scheduled),
+            WorkerJobRequestOrigin.RunOnce => ImmichReverseGeo.Core.WorkerProtocol.WorkerProtocolConversions.Trigger(
+                ProcessingRunTrigger.RunOnce),
+            _ => throw new ArgumentOutOfRangeException(nameof(context))
+        };
 
     private static WorkerProcessExitFact MapProcessingResult(ProcessingRunResult result)
     {

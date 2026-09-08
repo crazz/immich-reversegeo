@@ -98,7 +98,7 @@ public sealed class WorkerJobProtocolV2Tests
         {
             ("wrong-version", baseline.Replace("\"version\":2", "\"version\":1", StringComparison.Ordinal), WorkerProtocolFailureCode.UnsupportedVersion),
             ("unknown-kind", baseline.Replace("ProcessAssets", "Other", StringComparison.Ordinal), WorkerProtocolFailureCode.InvalidEnvelope),
-            ("reserved-kind-no-schema", baseline.Replace("ProcessAssets", "CoordinateLookup", StringComparison.Ordinal), WorkerProtocolFailureCode.InvalidPayload),
+            ("reserved-kind-no-schema", baseline.Replace("ProcessAssets", "CacheMutation", StringComparison.Ordinal), WorkerProtocolFailureCode.InvalidPayload),
             ("unknown-payload-field", baseline.Replace("\"trigger\":\"manual\"", "\"trigger\":\"manual\",\"extra\":1", StringComparison.Ordinal), WorkerProtocolFailureCode.InvalidPayload),
             ("duplicate-payload-field", baseline.Replace("\"trigger\":\"manual\"", "\"trigger\":\"manual\",\"trigger\":\"manual\"", StringComparison.Ordinal), WorkerProtocolFailureCode.InvalidEnvelope)
         };

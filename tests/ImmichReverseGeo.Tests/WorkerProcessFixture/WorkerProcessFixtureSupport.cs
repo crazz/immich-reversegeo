@@ -37,6 +37,8 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     private bool _recordingDisposed;
     private bool _rootDeleted;
     private bool _resourcesReleased;
+    private Guid? _expectedJobId;
+    private WorkerJobKind _expectedJobKind = WorkerJobKind.ProcessAssets;
 
     private int _treeKillCalls;
     private readonly TaskCompletionSource<ChildProcessKillOutcome> _treeKillObserved = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -67,6 +69,9 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     internal bool IsRegistered => Registry.ContainsKey(_registration);
     internal bool HasExited => _exitTask?.IsCompletedSuccessfully == true;
     internal Stream StandardInput => _process!.StandardInput;
+
+    internal ValueTask BreakStandardOutputReaderForTestAsync() =>
+        _process!.StandardOutput.DisposeAsync();
 
     internal static string FixtureDirectory => Path.Combine(AppContext.BaseDirectory, "worker-process-fixture");
     internal static string FixtureExecutable => Path.Combine(FixtureDirectory,
@@ -135,6 +140,8 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         params string[] options)
     {
         ProtocolVersion = protocolVersion;
+        _expectedJobId = Request.RunId;
+        _expectedJobKind = WorkerJobKind.ProcessAssets;
         var descriptor = Descriptor(Arguments(scenario, capture, options), protocolVersion);
         var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
         var result = await launcher.LaunchDescriptorAsync(descriptor, Request, sink,
@@ -152,9 +159,19 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         bool capture = true,
         params string[] options)
     {
-        var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
-        Assert.AreEqual(Request, processAssets.Request.ProcessingRequest);
+        Assert.IsNotNull(dispatch);
+        if (dispatch is ProcessAssetsWorkerJobDispatch processAssets)
+        {
+            Assert.AreEqual(Request, processAssets.Request.ProcessingRequest);
+        }
+        else
+        {
+            Assert.AreEqual(Request.RunId, dispatch.Context.JobId);
+        }
+
         ProtocolVersion = protocolVersion;
+        _expectedJobId = dispatch.Context.JobId;
+        _expectedJobKind = dispatch.Context.JobKind;
         var descriptor = Descriptor(Arguments(scenario, capture, options), protocolVersion);
         var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
         var result = await launcher.LaunchDescriptorAsync(
@@ -185,9 +202,9 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         Assert.IsTrue(result.ExitObserved, "Real OS exit must be observed.");
         Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(result.StandardOutputFinality);
         Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(result.StandardErrorFinality);
-        Assert.AreEqual(Request.RunId, result.RunId);
-        Assert.AreEqual(Request.RunId, result.JobId);
-        Assert.AreEqual(WorkerJobKind.ProcessAssets, result.JobKind);
+        Assert.AreEqual(_expectedJobId ?? Request.RunId, result.RunId);
+        Assert.AreEqual(_expectedJobId ?? Request.RunId, result.JobId);
+        Assert.AreEqual(_expectedJobKind, result.JobKind);
         Assert.AreEqual(ProtocolVersion, result.ProtocolVersion);
         return result;
     }
@@ -206,10 +223,17 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         {
             var decoded = WorkerJobProtocolCodec.ParseControllerInput(File.ReadAllBytes(CapturePath));
             Assert.IsTrue(decoded.IsSuccess);
-            var execute = Assert.IsInstanceOfType<ProcessAssetsExecutePayload>(decoded.Message!.Payload);
-            Assert.AreEqual(Request, execute.Request.ProcessingRequest);
-            Assert.AreEqual(Request.RunId, decoded.Message.JobId);
-            Assert.AreEqual(WorkerJobKind.ProcessAssets, decoded.Message.JobKind);
+            Assert.AreEqual(_expectedJobId ?? Request.RunId, decoded.Message!.JobId);
+            Assert.AreEqual(_expectedJobKind, decoded.Message.JobKind);
+            if (_expectedJobKind == WorkerJobKind.ProcessAssets)
+            {
+                var execute = Assert.IsInstanceOfType<ProcessAssetsExecutePayload>(decoded.Message.Payload);
+                Assert.AreEqual(Request, execute.Request.ProcessingRequest);
+            }
+            else
+            {
+                Assert.IsInstanceOfType<CoordinateLookupExecutePayload>(decoded.Message.Payload);
+            }
         }
     }
 

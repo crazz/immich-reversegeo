@@ -19,6 +19,7 @@ public class OvertureDivisionCacheService
     private readonly Func<string, string, CancellationToken, long> _exportOperation;
     private readonly Func<string, CancellationToken, Task> _sourceOperation;
     private readonly Func<CancellationToken, Task> _beforePublication;
+    private readonly Func<CancellationToken, Task> _afterPublication;
     private readonly Func<string, OvertureDivisionStatus> _statusReader;
     private readonly Func<string, string, bool> _hasRowsOperation;
     private readonly Func<string, bool> _validationOperation;
@@ -39,6 +40,7 @@ public class OvertureDivisionCacheService
         _exportOperation = ExportOvertureDivisions;
         _sourceOperation = DownloadDataInternalAsync;
         _beforePublication = _ => Task.CompletedTask;
+        _afterPublication = _ => Task.CompletedTask;
         _statusReader = ReadStatus;
         _hasRowsOperation = HasRows;
         _validationOperation = IsValidDb;
@@ -55,6 +57,7 @@ public class OvertureDivisionCacheService
         _exportOperation = ExportOvertureDivisions;
         _sourceOperation = DownloadDataInternalAsync;
         _beforePublication = _ => Task.CompletedTask;
+        _afterPublication = _ => Task.CompletedTask;
         _statusReader = ReadStatus;
         _hasRowsOperation = HasRows;
         _validationOperation = IsValidDb;
@@ -110,6 +113,7 @@ public class OvertureDivisionCacheService
 
         _sourceOperation = hooks.SourceOperation ?? _sourceOperation;
         _beforePublication = hooks.BeforePublication ?? _beforePublication;
+        _afterPublication = hooks.AfterPublication ?? _afterPublication;
         _statusReader = hooks.StatusReader ?? _statusReader;
         _hasRowsOperation = hooks.HasRowsOperation ?? _hasRowsOperation;
         _validationOperation = hooks.ValidationOperation ?? _validationOperation;
@@ -292,6 +296,7 @@ public class OvertureDivisionCacheService
             await _beforePublication(ct);
             ct.ThrowIfCancellationRequested();
             File.Move(tmpPath, dbPath, overwrite: true);
+            await _afterPublication(ct);
             ct.ThrowIfCancellationRequested();
             _readyCaches[iso3] = 0;
             _logger.LogInformation("Overture division download complete for {ISO3}: {Rows} areas", iso3, rowCount);
@@ -696,6 +701,7 @@ internal sealed class OvertureDivisionCacheTestHooks
     public Func<string, string, CancellationToken, long>? ExportOperation { get; init; }
     public Func<string, CancellationToken, Task>? SourceOperation { get; init; }
     public Func<CancellationToken, Task>? BeforePublication { get; init; }
+    public Func<CancellationToken, Task>? AfterPublication { get; init; }
     public Func<string, OvertureDivisionStatus>? StatusReader { get; init; }
     public Func<string, string, bool>? HasRowsOperation { get; init; }
     public Func<string, bool>? ValidationOperation { get; init; }

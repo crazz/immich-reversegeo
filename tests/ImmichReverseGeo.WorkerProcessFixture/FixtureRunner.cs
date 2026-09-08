@@ -12,7 +12,7 @@ internal sealed class FixtureRunner
     internal const string StandardErrorPrefix = "fixture-stderr-prefix\n";
     internal const string StandardErrorSuffix = "\nfixture-stderr-suffix\n";
 
-    private static readonly DateTimeOffset ReadyAtUtc = new(2000, 1, 2, 3, 4, 4, TimeSpan.Zero);
+    internal static readonly DateTimeOffset ReadyAtUtc = new(2000, 1, 2, 3, 4, 4, TimeSpan.Zero);
     private static readonly DateTimeOffset StartedAtUtc = new(2000, 1, 2, 3, 4, 5, TimeSpan.Zero);
     private static readonly DateTimeOffset EndedAtUtc = new(2000, 1, 2, 3, 4, 6, TimeSpan.Zero);
     private static readonly byte[] PreReadyCrashDiagnostic = Encoding.UTF8.GetBytes("fixture:pre-ready-crash\n");
@@ -57,15 +57,22 @@ internal sealed class FixtureRunner
             return _options.ExitCode!.Value;
         }
 
-        await _output.WriteValidAsync(WorkerProtocolMapper.Ready(1, ReadyAtUtc)).ConfigureAwait(false);
+        await _output.WriteReadyAsync().ConfigureAwait(false);
         var executeFrame = await _input.ReadExecuteAsync().ConfigureAwait(false);
         await CaptureExecuteAsync(executeFrame.Bytes).ConfigureAwait(false);
+        if (executeFrame.Dispatch is CoordinateLookupWorkerJobDispatch coordinateLookup)
+        {
+            return await RunCoordinateAsync(coordinateLookup).ConfigureAwait(false);
+        }
+
         var request = executeFrame.Request;
 
         return _options.Scenario switch
         {
             FixtureScenario.Ready => await RunNoWorkAsync(request).ConfigureAwait(false),
             FixtureScenario.Success => await RunSuccessAsync(request, "success").ConfigureAwait(false),
+            FixtureScenario.SourceDegraded => await RunSuccessAsync(request, "source-degraded").ConfigureAwait(false),
+            FixtureScenario.DomainFailure => await RunDomainFailureAsync(request).ConfigureAwait(false),
             FixtureScenario.NoWork => await RunNoWorkAsync(request).ConfigureAwait(false),
             FixtureScenario.PostReadyCrash => await RunPostReadyCrashAsync(request).ConfigureAwait(false),
             FixtureScenario.Malformed => await RunMalformedAsync().ConfigureAwait(false),
@@ -78,6 +85,404 @@ internal sealed class FixtureRunner
             FixtureScenario.Unresponsive => await RunUnresponsiveAsync(request).ConfigureAwait(false),
             _ => throw new InvalidOperationException("The selected fixture scenario is not executable.")
         };
+    }
+
+    private Task<int> RunCoordinateAsync(CoordinateLookupWorkerJobDispatch dispatch)
+    {
+        return _options.Scenario switch
+        {
+            FixtureScenario.Ready => RunCoordinateNoCountryAsync(dispatch),
+            FixtureScenario.Success => RunCoordinateSuccessAsync(dispatch, sourceDegraded: false),
+            FixtureScenario.SourceDegraded => RunCoordinateSuccessAsync(dispatch, sourceDegraded: true),
+            FixtureScenario.NoWork => RunCoordinateNoCountryAsync(dispatch),
+            FixtureScenario.DomainFailure => RunCoordinateDomainFailureAsync(dispatch),
+            FixtureScenario.PostReadyCrash => RunCoordinatePostReadyCrashAsync(dispatch),
+            FixtureScenario.Malformed => RunMalformedAsync(),
+            FixtureScenario.Oversize => RunOversizeAsync(),
+            FixtureScenario.CooperativeCancel => RunCoordinateCooperativeCancelAsync(dispatch),
+            _ => throw new FixtureInputException("The selected scenario does not support CoordinateLookup.")
+        };
+    }
+
+    private async Task<int> RunCoordinateNoCountryAsync(
+        CoordinateLookupWorkerJobDispatch dispatch)
+    {
+        await EmitCoordinateStartedAsync(dispatch).ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            3,
+            CoordinateLookupProgressStep.Country,
+            CoordinateLookupSourceState.NoMatch,
+            null,
+            "No bundled country matched.").ConfigureAwait(false);
+        var result = CreateCoordinateResult(
+            dispatch.Request,
+            new CoordinateLookupCountryResult(
+                CoordinateLookupCountryStatus.NoMatch,
+                null,
+                null,
+                null,
+                null,
+                null),
+            CoordinateLookupSourceState.Skipped,
+            sourceDegraded: false);
+        await EmitCoordinateTerminalAsync(
+            dispatch,
+            4,
+            WorkerJobTerminalOutcome.Completed,
+            result,
+            null).ConfigureAwait(false);
+        _output.AssertComplete();
+        return WorkerProcessExitCodes.Completed;
+    }
+
+    private async Task<int> RunCoordinateSuccessAsync(
+        CoordinateLookupWorkerJobDispatch dispatch,
+        bool sourceDegraded)
+    {
+        await EmitCoordinateStartedAsync(dispatch).ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            3,
+            CoordinateLookupProgressStep.Country,
+            CoordinateLookupSourceState.Ready,
+            "USA",
+            "Bundled country matched.").ConfigureAwait(false);
+
+        Guid activityId = dispatch.Context.JobId;
+        await EmitCoordinateAsync(
+            dispatch,
+            4,
+            new WorkerJobActivityStartedPayload(activityId, "Download Overture divisions for USA"),
+            StartedAtUtc.AddTicks(2)).ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            5,
+            CoordinateLookupProgressStep.OvertureCache,
+            sourceDegraded ? CoordinateLookupSourceState.Unavailable : CoordinateLookupSourceState.Ready,
+            "USA",
+            sourceDegraded ? "Overture cache was unavailable." : "Overture cache is ready.").ConfigureAwait(false);
+        await EmitCoordinateAsync(
+            dispatch,
+            6,
+            new WorkerJobActivityEndedPayload(activityId),
+            StartedAtUtc.AddTicks(4)).ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            7,
+            CoordinateLookupProgressStep.OvertureAdministrative,
+            sourceDegraded ? CoordinateLookupSourceState.Unavailable : CoordinateLookupSourceState.Ready,
+            "USA",
+            sourceDegraded ? "Overture administrative data was unavailable." : "Overture administrative data matched.").ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            8,
+            CoordinateLookupProgressStep.GadmAdministrative,
+            dispatch.Request.PreferGadmAdministrativeAreas
+                ? CoordinateLookupSourceState.Ready
+                : CoordinateLookupSourceState.Disabled,
+            "USA",
+            dispatch.Request.PreferGadmAdministrativeAreas ? "GADM matched." : "GADM was disabled.").ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            9,
+            CoordinateLookupProgressStep.Airport,
+            dispatch.Request.IncludeAirportInfrastructure
+                ? CoordinateLookupSourceState.NoMatch
+                : CoordinateLookupSourceState.Disabled,
+            "USA",
+            dispatch.Request.IncludeAirportInfrastructure ? "No airport matched." : "Airport lookup was disabled.").ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            10,
+            CoordinateLookupProgressStep.LivePlaces,
+            dispatch.Request.IncludeLiveOverturePlaces
+                ? CoordinateLookupSourceState.Ready
+                : CoordinateLookupSourceState.Disabled,
+            "USA",
+            dispatch.Request.IncludeLiveOverturePlaces ? "Places diagnostics matched." : "Live Places was disabled.").ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            11,
+            CoordinateLookupProgressStep.FinalSelection,
+            CoordinateLookupSourceState.Ready,
+            "USA",
+            "Final location selected.").ConfigureAwait(false);
+
+        var result = CreateCoordinateResult(
+            dispatch.Request,
+            new CoordinateLookupCountryResult(
+                CoordinateLookupCountryStatus.Matched,
+                "USA",
+                "US",
+                "United States",
+                "fixture-country",
+                null),
+            sourceDegraded ? CoordinateLookupSourceState.Unavailable : CoordinateLookupSourceState.Ready,
+            sourceDegraded);
+        await EmitCoordinateTerminalAsync(
+            dispatch,
+            12,
+            WorkerJobTerminalOutcome.Completed,
+            result,
+            null).ConfigureAwait(false);
+        _output.AssertComplete();
+        return WorkerProcessExitCodes.Completed;
+    }
+
+    private async Task<int> RunCoordinateDomainFailureAsync(
+        CoordinateLookupWorkerJobDispatch dispatch)
+    {
+        await EmitCoordinateStartedAsync(dispatch).ConfigureAwait(false);
+        await EmitCoordinateTerminalAsync(
+            dispatch,
+            3,
+            WorkerJobTerminalOutcome.Failed,
+            null,
+            new WorkerJobSafeError(
+                "fixture-domain-failure",
+                WorkerJobFailureCategory.Internal,
+                "The fixture lookup failed.")).ConfigureAwait(false);
+        _output.AssertComplete();
+        return WorkerProcessExitCodes.ExecutorFailure;
+    }
+
+    private async Task<int> RunCoordinatePostReadyCrashAsync(
+        CoordinateLookupWorkerJobDispatch dispatch)
+    {
+        await EmitCoordinateStartedAsync(dispatch).ConfigureAwait(false);
+        await EmitCoordinateAsync(
+            dispatch,
+            3,
+            new WorkerJobLogPayload(
+                "information",
+                Marker("post-ready-crash", dispatch.Context.JobId)),
+            StartedAtUtc.AddTicks(1)).ConfigureAwait(false);
+        await WriteStandardErrorAsync(PostReadyCrashDiagnostic).ConfigureAwait(false);
+        return _options.ExitCode!.Value;
+    }
+
+    private async Task<int> RunCoordinateCooperativeCancelAsync(
+        CoordinateLookupWorkerJobDispatch dispatch)
+    {
+        await EmitCoordinateStartedAsync(dispatch).ConfigureAwait(false);
+        await EmitCoordinateProgressAsync(
+            dispatch,
+            3,
+            CoordinateLookupProgressStep.Country,
+            CoordinateLookupSourceState.Ready,
+            "USA",
+            "Bundled country matched.").ConfigureAwait(false);
+        Guid activityId = dispatch.Context.JobId;
+        await EmitCoordinateAsync(
+            dispatch,
+            4,
+            new WorkerJobActivityStartedPayload(activityId, "Download Overture divisions for USA"),
+            StartedAtUtc.AddTicks(2)).ConfigureAwait(false);
+        await EmitCoordinateAsync(
+            dispatch,
+            5,
+            new WorkerJobLogPayload(
+                "information",
+                Marker("cooperative-cancel", dispatch.Context.JobId)),
+            StartedAtUtc.AddTicks(3)).ConfigureAwait(false);
+
+        var cancel = await _input.ReadCancelOrEndAsync().ConfigureAwait(false);
+        if (cancel is null)
+        {
+            throw new FixtureInputException("Controller input ended before cooperative cancel.");
+        }
+
+        await EmitCoordinateAsync(
+            dispatch,
+            6,
+            new WorkerJobActivityEndedPayload(activityId),
+            StartedAtUtc.AddTicks(4)).ConfigureAwait(false);
+        await EmitCoordinateTerminalAsync(
+            dispatch,
+            7,
+            WorkerJobTerminalOutcome.Cancelled,
+            null,
+            null).ConfigureAwait(false);
+        _output.AssertComplete();
+        return WorkerProcessExitCodes.Cancelled;
+    }
+
+    private async Task EmitCoordinateStartedAsync(CoordinateLookupWorkerJobDispatch dispatch)
+    {
+        await _output.WriteValidAsync(WorkerJobProtocolMapper.JobStarted(
+            dispatch.Context,
+            "manual",
+            StartedAtUtc,
+            2)).ConfigureAwait(false);
+    }
+
+    private Task EmitCoordinateProgressAsync(
+        CoordinateLookupWorkerJobDispatch dispatch,
+        long sequence,
+        CoordinateLookupProgressStep step,
+        CoordinateLookupSourceState state,
+        string? countryCode,
+        string message) =>
+        EmitCoordinateAsync(
+            dispatch,
+            sequence,
+            new CoordinateLookupProgressPayload(step, state, countryCode, message),
+            StartedAtUtc.AddTicks(sequence - 2));
+
+    private Task EmitCoordinateAsync(
+        CoordinateLookupWorkerJobDispatch dispatch,
+        long sequence,
+        WorkerJobOutputPayload payload,
+        DateTimeOffset timestampUtc) =>
+        _output.WriteValidAsync(WorkerJobProtocolMapper.Map(
+            dispatch.Context,
+            new WorkerJobHandlerEvent(timestampUtc, payload),
+            sequence));
+
+    private Task EmitCoordinateTerminalAsync(
+        CoordinateLookupWorkerJobDispatch dispatch,
+        long sequence,
+        WorkerJobTerminalOutcome outcome,
+        CoordinateLookupResult? result,
+        WorkerJobSafeError? error) =>
+        _output.WriteValidAsync(WorkerJobProtocolMapper.Terminal(
+            dispatch.Context,
+            new WorkerJobTerminalPayload(
+                outcome,
+                StartedAtUtc,
+                EndedAtUtc,
+                null,
+                result,
+                error),
+            sequence));
+
+    private static CoordinateLookupResult CreateCoordinateResult(
+        CoordinateLookupRequest request,
+        CoordinateLookupCountryResult country,
+        CoordinateLookupSourceState overtureState,
+        bool sourceDegraded)
+    {
+        string? iso3 = country.Iso3;
+        var candidate = new CoordinateLookupCandidate(
+            "fixture-division",
+            "Fixture City",
+            true,
+            "selected by fixture profile",
+            true,
+            true,
+            "division_area",
+            "locality",
+            null,
+            null,
+            "fixture-class",
+            2,
+            true,
+            false,
+            country.Name,
+            null,
+            null,
+            null,
+            null,
+            null,
+            42,
+            ["fixture-source"]);
+        WorkerJobSafeError? overtureError = sourceDegraded
+            ? new WorkerJobSafeError(
+                "fixture-source-unavailable",
+                WorkerJobFailureCategory.Dependency,
+                "The fixture source was unavailable.")
+            : null;
+        var overture = new CoordinateLookupSourceResult(
+            overtureState,
+            "fixture-release",
+            null,
+            sourceDegraded || iso3 is null ? null : candidate,
+            sourceDegraded || iso3 is null ? [] : [candidate],
+            iso3 is null ? [] : [new CoordinateLookupCacheStatus(iso3, overtureState, overtureError)],
+            overtureError,
+            "Overture Maps",
+            null,
+            null);
+        var gadm = new CoordinateLookupSourceResult(
+            request.PreferGadmAdministrativeAreas && iso3 is not null
+                ? CoordinateLookupSourceState.Ready
+                : request.PreferGadmAdministrativeAreas
+                    ? CoordinateLookupSourceState.Skipped
+                    : CoordinateLookupSourceState.Disabled,
+            null,
+            request.PreferGadmAdministrativeAreas && iso3 is not null ? "fixture-gadm-version" : null,
+            null,
+            [],
+            [],
+            null,
+            CoordinateLookupGadmAttribution.DatasetName,
+            CoordinateLookupGadmAttribution.LicenseUrl,
+            CoordinateLookupGadmAttribution.UsageNotice);
+        var airport = EmptyCoordinateSource(
+            request.IncludeAirportInfrastructure && iso3 is not null
+                ? CoordinateLookupSourceState.NoMatch
+                : request.IncludeAirportInfrastructure
+                    ? CoordinateLookupSourceState.Skipped
+                    : CoordinateLookupSourceState.Disabled);
+        var places = EmptyCoordinateSource(
+            request.IncludeLiveOverturePlaces && iso3 is not null
+                ? CoordinateLookupSourceState.Ready
+                : request.IncludeLiveOverturePlaces
+                    ? CoordinateLookupSourceState.Skipped
+                    : CoordinateLookupSourceState.Disabled);
+        var admin = new CoordinateLookupAdministrativeResult(
+            sourceDegraded || iso3 is null ? null : "Fixture State",
+            sourceDegraded || iso3 is null ? null : "Fixture City");
+        var finalLocation = new CoordinateLookupFinalLocation(
+            country.Name is null
+                ? null
+                : new CoordinateLookupAttributedValue(country.Name, CoordinateLookupFinalSource.BundledCountryDivisions),
+            admin.State is null
+                ? null
+                : new CoordinateLookupAttributedValue(admin.State, CoordinateLookupFinalSource.CachedOvertureDivisions),
+            admin.City is null
+                ? null
+                : new CoordinateLookupAttributedValue(admin.City, CoordinateLookupFinalSource.CachedOvertureDivisions));
+        return new CoordinateLookupResult(
+            request,
+            StartedAtUtc,
+            EndedAtUtc,
+            country,
+            overture,
+            gadm,
+            airport,
+            places,
+            admin,
+            new CoordinateLookupAdministrativeResult(null, null),
+            new CoordinateLookupProfileSummary(
+                iso3,
+                ["locality"],
+                CoordinateLookupTieBreak.SmallestArea),
+            sourceDegraded ? ["Overture degraded; independent country retained."] : ["Fixture selection completed."],
+            finalLocation);
+    }
+
+    private static CoordinateLookupSourceResult EmptyCoordinateSource(
+        CoordinateLookupSourceState state) =>
+        new(
+            state,
+            null,
+            null,
+            null,
+            [],
+            [],
+            null,
+            null,
+            null,
+            null);
+
+    private async Task<int> RunDomainFailureAsync(ProcessingRunRequest request)
+    {
+        await EmitStartedAndEligibilityAsync(request, 0).ConfigureAwait(false);
+        await EmitTerminalAsync(request, ProcessingRunOutcome.Failed, 4, 0, 0, 0, 1).ConfigureAwait(false);
+        _output.AssertComplete();
+        return WorkerProcessExitCodes.ExecutorFailure;
     }
 
     private async Task<int> RunNoWorkAsync(ProcessingRunRequest request)

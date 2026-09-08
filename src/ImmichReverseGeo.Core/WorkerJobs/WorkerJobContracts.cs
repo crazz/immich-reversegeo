@@ -66,7 +66,8 @@ public sealed record WorkerJobArbitrationMetadata(
     WorkerJobCapabilityFamily CapabilityFamily,
     WorkerJobResourceClass ResourceClass,
     bool IsHeavy,
-    bool IsCancellable);
+    bool IsCancellable,
+    bool IsGeodataBearing);
 
 public interface IWorkerJobRequest;
 
@@ -169,9 +170,19 @@ public static class WorkerJobDescriptors
             WorkerJobCapabilityFamily.Processing,
             WorkerJobResourceClass.ExclusiveHeavyWorker,
             IsHeavy: true,
-            IsCancellable: true));
+            IsCancellable: true,
+            IsGeodataBearing: true));
 
-    public static WorkerJobKind CoordinateLookup => WorkerJobKind.CoordinateLookup;
+    public static WorkerJobDescriptor CoordinateLookup { get; } = new(
+        WorkerJobKind.CoordinateLookup,
+        typeof(CoordinateLookupRequest),
+        typeof(CoordinateLookupResult),
+        new WorkerJobArbitrationMetadata(
+            WorkerJobCapabilityFamily.Lookup,
+            WorkerJobResourceClass.ExclusiveHeavyWorker,
+            IsHeavy: true,
+            IsCancellable: true,
+            IsGeodataBearing: true));
 
     public static WorkerJobKind CacheMutation => WorkerJobKind.CacheMutation;
 }
@@ -270,6 +281,43 @@ public sealed record ProcessAssetsWorkerJobDispatch : WorkerJobDispatch
         ProcessingRunTrigger.RunOnce => WorkerJobRequestOrigin.RunOnce,
         _ => throw new ArgumentOutOfRangeException(nameof(trigger))
     };
+}
+
+public sealed record CoordinateLookupWorkerJobDispatch : WorkerJobDispatch
+{
+    public CoordinateLookupRequest Request { get; }
+
+    public CoordinateLookupWorkerJobDispatch(Guid jobId, CoordinateLookupRequest request)
+        : this(jobId, request, WorkerJobDescriptors.CoordinateLookup)
+    {
+    }
+
+    internal CoordinateLookupWorkerJobDispatch(
+        Guid jobId,
+        CoordinateLookupRequest request,
+        WorkerJobDescriptor descriptor)
+        : base(
+            new WorkerJobContext(jobId, WorkerJobKind.CoordinateLookup, WorkerJobRequestOrigin.Manual),
+            RequireCoordinateLookupDescriptor(descriptor))
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        Request = request;
+    }
+
+    private static WorkerJobDescriptor RequireCoordinateLookupDescriptor(WorkerJobDescriptor descriptor)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        if (descriptor.Kind != WorkerJobKind.CoordinateLookup
+            || descriptor.RequestType != typeof(CoordinateLookupRequest)
+            || descriptor.ResultType != typeof(CoordinateLookupResult))
+        {
+            throw new ArgumentException(
+                "The dispatch descriptor must use the CoordinateLookup schema.",
+                nameof(descriptor));
+        }
+
+        return descriptor;
+    }
 }
 
 public interface IWorkerJobEventReporter

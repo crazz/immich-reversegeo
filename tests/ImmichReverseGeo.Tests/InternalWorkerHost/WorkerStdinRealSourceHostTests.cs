@@ -202,7 +202,7 @@ public sealed partial class WorkerStdinRealSourceHostTests
 
             var ready = Assert.IsInstanceOfType<WorkerJobReadyPayload>(messages[0].Payload);
             CollectionAssert.AreEqual(
-                new[] { WorkerJobKind.ProcessAssets },
+                new[] { WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup },
                 ready.SupportedJobKinds.ToArray(),
                 "v2-host-advertises-registered-kind-only");
             foreach (WorkerJobOutputMessage message in messages.Skip(1))
@@ -260,7 +260,7 @@ public sealed partial class WorkerStdinRealSourceHostTests
     public async Task V2RealSource_RejectsReservedKindBeforeHeavyResolutionAndEmitsNoTerminal()
     {
         string inputText =
-            $"{{\"protocol\":\"immich-reversegeo.worker\",\"version\":2,\"direction\":\"controller-to-worker\",\"category\":\"request\",\"type\":\"execute\",\"sequence\":1,\"timestampUtc\":\"{Timestamp}\",\"jobId\":\"{RunIdText}\",\"jobKind\":\"CoordinateLookup\",\"payload\":{{}}}}\n";
+            $"{{\"protocol\":\"immich-reversegeo.worker\",\"version\":2,\"direction\":\"controller-to-worker\",\"category\":\"request\",\"type\":\"execute\",\"sequence\":1,\"timestampUtc\":\"{Timestamp}\",\"jobId\":\"{RunIdText}\",\"jobKind\":\"CacheMutation\",\"payload\":{{}}}}\n";
         var inputFactory = new HostInputFactory(
             new HostInputStream(Encoding.UTF8.GetBytes(inputText)));
         var outputFactory = new FixedOutputFactory();
@@ -300,7 +300,7 @@ public sealed partial class WorkerStdinRealSourceHostTests
                 Encoding.UTF8.GetBytes(frames[0]));
             Assert.IsTrue(ready.IsSuccess, "reserved-kind-ready-valid");
             CollectionAssert.AreEqual(
-                new[] { WorkerJobKind.ProcessAssets },
+                new[] { WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup },
                 Assert.IsInstanceOfType<WorkerJobReadyPayload>(ready.Message!.Payload)
                     .SupportedJobKinds.ToArray(),
                 "reserved-kind-not-advertised");

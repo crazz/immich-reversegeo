@@ -30,8 +30,15 @@ internal static class Program
 
         try
         {
+            if (options!.UsesProductionCoordinateHost)
+            {
+                return await ProductionCoordinateHostFixture.RunAsync(
+                    options,
+                    selected.Version).ConfigureAwait(false);
+            }
+
             var runner = new FixtureRunner(
-                options!,
+                options,
                 selected.Version,
                 Console.OpenStandardInput(),
                 Console.OpenStandardOutput(),
