@@ -912,7 +912,7 @@ Assert the landed startup validators/initializers run in the owning roots before
 
 **Dependencies and sequencing** — Requires finalized and applied blocks 40–44 and their landed seams; stop rather than invent replacements when a prerequisite is absent. Block 45 must complete before block 46 Docker smoke.
 
-**OpenSpec** — [45-add-mode-composition-tests](openspec/changes/45-add-mode-composition-tests/)
+**OpenSpec** — [45-add-mode-composition-tests](openspec/changes/archive/2026-09-08-45-add-mode-composition-tests/)
 
 ### 46. `build: add Docker mode smoke tests`
 
