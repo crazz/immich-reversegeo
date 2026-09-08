@@ -887,7 +887,7 @@ Document an optional ephemeral Docker Compose Run-once service/job using the sam
 
 **Dependencies and sequencing** — Requires the applied blocks 13, 24–30, and 40–43 for the coordinator/session, launcher/bridge/finality, immutable mode, and Standard/Web-only/Run-once composition contracts. Consume their landed names and stop rather than create a parallel resolver, coordinator, failure classifier, or lifecycle owner. Block 45 separately locks the cross-mode composition matrix and remains untouched; block 46 retains image/process smoke, block 47 retains generalized worker protocol/jobs, block 50 retains generic coordinator diagnostics/arbitration, non-ProcessAssets pages retain capability state, and blocks 70–72 retain comprehensive mode guidance and release migration ownership.
 
-**OpenSpec** — [44-expose-mode-worker-status](openspec/changes/44-expose-mode-worker-status/)
+**OpenSpec** — [44-expose-mode-worker-status](openspec/changes/archive/2026-09-08-44-expose-mode-worker-status/)
 
 ### 45. `test: add mode composition tests`
 
