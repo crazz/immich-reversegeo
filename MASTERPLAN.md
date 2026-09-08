@@ -976,7 +976,7 @@ Processing isolation alone is not enough: Lookup and some Data operations can st
 
 **Dependencies and sequencing:** Requires finalized/applied 47 and worker composition; stop if those APIs differ rather than creating a parallel protocol. This block extracts and registers worker behavior but leaves `Lookup.razor` routing/presentation entirely to parallel-owned 49 and shared admission policy to 50. Standalone cache mutations and delete/reset coordination remain 51–54; 55 later removes heavy Web registrations. No project implementation is changed during planning.
 
-**OpenSpec:** [`48-add-coordinate-lookup-worker-job`](openspec/changes/48-add-coordinate-lookup-worker-job/).
+**OpenSpec:** [`48-add-coordinate-lookup-worker-job`](openspec/changes/archive/2026-09-09-48-add-coordinate-lookup-worker-job/).
 
 ### 49. `feat: route WebUI Lookup through worker`
 
