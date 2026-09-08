@@ -938,7 +938,7 @@ Assert the landed startup validators/initializers run in the owning roots before
 
 **Dependencies and block 69 boundary** — Requires the actually landed blocks 40–45 and Phase 5 private-worker behavior. Block 46 owns the bounded reusable image smoke command in the existing CI job; it does not restructure `docker-publish.yml`, add a dedicated/scheduled integration or performance job, multi-platform buildx/QEMU, cgroup/RSS thresholds, repeated-worker soak, or final publication gating. Block 69 may reuse and promote this harness after process hardening to own that dedicated Docker integration/release orchestration.
 
-**OpenSpec** — [46-add-docker-mode-smoke-tests](openspec/changes/46-add-docker-mode-smoke-tests/)
+**OpenSpec** — [46-add-docker-mode-smoke-tests](openspec/changes/archive/2026-09-08-46-add-docker-mode-smoke-tests/)
 
 ### Checkpoint F
 
