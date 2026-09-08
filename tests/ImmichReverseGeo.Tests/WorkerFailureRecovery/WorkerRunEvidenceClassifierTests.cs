@@ -1,4 +1,5 @@
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -15,6 +16,40 @@ public class WorkerRunEvidenceClassifierTests
     private static readonly DateTimeOffset StartedAt = new(2026, 9, 5, 10, 0, 0, TimeSpan.Zero);
     private static readonly DateTimeOffset EndedAt = StartedAt.AddSeconds(1);
     private static readonly ProcessingRunRequest Request = new(Guid.Parse("10101010-1010-1010-1010-101010101010"), ProcessingRunTrigger.Manual);
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    public void Classify_V2JobMetadataRetainsCommittedTerminalOverContradictoryExit()
+    {
+        ProcessingRunResult result = Result(Request, ProcessingRunOutcome.Completed);
+        ChildWorkerCompletionObservation completion = Completion(
+            Request,
+            19,
+            protocolVersion: InternalWorkerProtocolVersion.V2);
+        WorkerRunEvidence evidence = Evidence(Request, completion) with
+        {
+            Receipt = new ProcessingRunFinalizationReceipt(
+                Request,
+                result,
+                ProcessingRunFinalizationOrigin.WorkerTerminal),
+            IntendedProtocolVersion = InternalWorkerProtocolVersion.V2
+        };
+
+        WorkerRunDecision decision = WorkerRunEvidenceClassifier.Classify(evidence);
+
+        Assert.AreEqual(Request.RunId, evidence.JobId, "v2-evidence-job-id");
+        Assert.AreEqual(WorkerJobKind.ProcessAssets, evidence.JobKind, "v2-evidence-job-kind");
+        Assert.AreEqual(InternalWorkerProtocolVersion.V2, evidence.ProtocolVersion, "v2-evidence-version");
+        AssertDecision(
+            decision,
+            ProcessingRunOutcome.Completed,
+            WorkerRunAuthority.CommittedReceipt,
+            WorkerRunFailureCategory.Terminal,
+            result);
+        Assert.IsTrue(
+            decision.Anomalies.HasFlag(WorkerRunAnomaly.TerminalExitMismatch),
+            "v2-committed-terminal-authoritative-with-contradictory-exit");
+    }
 
     [TestMethod]
     public void Classify_CommittedReceiptWinsEveryLateAnomaly()
@@ -560,7 +595,9 @@ public class WorkerRunEvidenceClassifierTests
         int exitCode,
         ChildWorkerStartupObservation? startup = null,
         WorkerProtocolEvent? terminal = null,
-        ChildWorkerProtocolObservation? firstProtocol = null) => new(
+        ChildWorkerProtocolObservation? firstProtocol = null,
+        WorkerJobOutputMessage? jobTerminal = null,
+        InternalWorkerProtocolVersion protocolVersion = InternalWorkerProtocolVersion.V1) => new(
         42,
         request.RunId,
         startup ?? ChildWorkerStartupObservation.ReadyAccepted.Instance,
@@ -569,8 +606,11 @@ public class WorkerRunEvidenceClassifierTests
         ChildWorkerStreamFinality.EndOfStream.Instance,
         ChildWorkerStreamFinality.EndOfStream.Instance,
         terminal,
+        jobTerminal,
         firstProtocol,
-        new ChildWorkerStandardErrorTail([], 0, false, false));
+        new ChildWorkerStandardErrorTail([], 0, false, false),
+        WorkerJobKind.ProcessAssets,
+        protocolVersion);
 
     private static ChildWorkerCancellationFacts Cancellation(
         ChildWorkerTerminationIntent intent,

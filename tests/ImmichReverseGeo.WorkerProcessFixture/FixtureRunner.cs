@@ -1,6 +1,7 @@
 using System.Text;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
@@ -25,7 +26,12 @@ internal sealed class FixtureRunner
     private readonly FixtureProtocolOutput _output;
     private readonly Stream _standardError;
 
-    internal FixtureRunner(FixtureOptions options, Stream standardInput, Stream standardOutput, Stream standardError)
+    internal FixtureRunner(
+        FixtureOptions options,
+        InternalWorkerProtocolVersion protocolVersion,
+        Stream standardInput,
+        Stream standardOutput,
+        Stream standardError)
     {
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(standardInput);
@@ -33,8 +39,8 @@ internal sealed class FixtureRunner
         ArgumentNullException.ThrowIfNull(standardError);
 
         _options = options;
-        _input = new ControllerInputReader(standardInput);
-        _output = new FixtureProtocolOutput(standardOutput);
+        _input = new ControllerInputReader(standardInput, protocolVersion);
+        _output = new FixtureProtocolOutput(standardOutput, protocolVersion);
         _standardError = standardError;
     }
 
@@ -54,7 +60,7 @@ internal sealed class FixtureRunner
         await _output.WriteValidAsync(WorkerProtocolMapper.Ready(1, ReadyAtUtc)).ConfigureAwait(false);
         var executeFrame = await _input.ReadExecuteAsync().ConfigureAwait(false);
         await CaptureExecuteAsync(executeFrame.Bytes).ConfigureAwait(false);
-        var request = ((ExecuteRequestPayload)executeFrame.Message.Payload).Request;
+        var request = executeFrame.Request;
 
         return _options.Scenario switch
         {
@@ -137,7 +143,7 @@ internal sealed class FixtureRunner
     private async Task<int> RunUnknownAsync(ProcessingRunRequest request)
     {
         var valid = WorkerProtocolMapper.Map(new RunStarted(request, StartedAtUtc), 2);
-        var unknown = FixtureProtocolOutput.MutateUnknown(valid, _options.SelectedUnknownKind!.Value);
+        var unknown = _output.MutateUnknown(valid, _options.SelectedUnknownKind!.Value);
         await _output.WriteFrameAsync(unknown).ConfigureAwait(false);
         return WorkerProcessExitCodes.Completed;
     }
@@ -146,7 +152,7 @@ internal sealed class FixtureRunner
     {
         var invalidSequence = _options.SelectedSequenceFault == SequenceFault.Gap ? 3 : 1;
         var invalid = WorkerProtocolMapper.Map(new RunStarted(request, StartedAtUtc), invalidSequence);
-        await _output.WriteFrameAsync(WorkerProtocolCodec.Serialize(invalid)).ConfigureAwait(false);
+        await _output.WriteFrameAsync(_output.SerializeMapped(invalid)).ConfigureAwait(false);
         return WorkerProcessExitCodes.Completed;
     }
 

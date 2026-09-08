@@ -1,6 +1,7 @@
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
@@ -220,10 +221,16 @@ public sealed class WebOnlyDeploymentModeTests
         Task activeState = ObserveStateAsync(
             state,
             () => state.LastRunStarted is not null && state.TotalUnprocessed == 3);
-        first.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new RunStarted(firstRequest, SessionTestSupport.Start), 2, SessionTestSupport.Start)));
-        first.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new EligibilityDetermined(firstRequest, 3), 3, SessionTestSupport.Start)));
+        first.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                first.Descriptor,
+                new RunStarted(firstRequest, SessionTestSupport.Start),
+                2));
+        first.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                first.Descriptor,
+                new EligibilityDetermined(firstRequest, 3),
+                3));
         await activeState.WaitAsync(Bound);
         Assert.IsTrue(state.IsRunning, "manual-active-visible");
         Assert.AreEqual(3L, state.TotalUnprocessed, "manual-active-progress-visible");
@@ -237,14 +244,26 @@ public sealed class WebOnlyDeploymentModeTests
             0,
             ProcessingRunOutcome.Completed,
             null);
-        first.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new ProgressChanged(firstRequest, new ProcessingProgress(1, 1, 0, 0)), 4, SessionTestSupport.Start)));
-        first.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new ProgressChanged(firstRequest, new ProcessingProgress(2, 2, 0, 0)), 5, SessionTestSupport.Start)));
-        first.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new ProgressChanged(firstRequest, new ProcessingProgress(3, 3, 0, 0)), 6, SessionTestSupport.Start)));
-        first.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new RunFinished(firstRequest, completed), 7, SessionTestSupport.Start)));
+        first.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                first.Descriptor,
+                new ProgressChanged(firstRequest, new ProcessingProgress(1, 1, 0, 0)),
+                4));
+        first.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                first.Descriptor,
+                new ProgressChanged(firstRequest, new ProcessingProgress(2, 2, 0, 0)),
+                5));
+        first.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                first.Descriptor,
+                new ProgressChanged(firstRequest, new ProcessingProgress(3, 3, 0, 0)),
+                6));
+        first.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                first.Descriptor,
+                new RunFinished(firstRequest, completed),
+                7));
         first.Process.Exit(0);
         await coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
         Assert.IsFalse(state.IsRunning, "manual-terminal-visible");
@@ -357,12 +376,21 @@ public sealed class WebOnlyDeploymentModeTests
             0,
             outcome,
             null);
-        child.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new RunStarted(request, SessionTestSupport.Start), 2, SessionTestSupport.Start)));
-        child.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new EligibilityDetermined(request, 0), 3, SessionTestSupport.Start)));
-        child.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new RunFinished(request, result), 4, SessionTestSupport.Start)));
+        child.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                child.Descriptor,
+                new RunStarted(request, SessionTestSupport.Start),
+                2));
+        child.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                child.Descriptor,
+                new EligibilityDetermined(request, 0),
+                3));
+        child.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                child.Descriptor,
+                new RunFinished(request, result),
+                4));
         child.Process.Exit(exitCode);
     }
 
@@ -374,7 +402,7 @@ public sealed class WebOnlyDeploymentModeTests
         }
 
         child.Process.StandardOutputSource.Enqueue(
-            SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
+            ApplicationCompositionWorkerProtocol.ReadyFrame(child.Descriptor));
         await child.Input.FirstWrite.WaitAsync(Bound);
     }
 
@@ -405,12 +433,40 @@ public sealed class WebOnlyDeploymentModeTests
         Assert.AreEqual(runtimeSource.AssemblyPath, descriptor.Arguments[0]);
         Assert.IsTrue(descriptor.Arguments.Contains(ApplicationRoleSelector.InternalWorkerSelector));
         Assert.IsFalse(descriptor.Arguments.Any(argument => argument is "standard" or "web-only" or "run-once"));
+        Assert.AreEqual(
+            InternalWorkerProtocolVersion.V2,
+            ApplicationCompositionWorkerProtocol.SelectedVersion(descriptor),
+            "production-child-selects-v2");
     }
 
     private static void AssertExecuteAndCancel(SimulatedChild child, ProcessingRunRequest ownedRequest)
     {
         IReadOnlyList<byte[]> frames = child.Input.Frames;
         Assert.HasCount(2, frames, "one-execute-and-one-cancel-frame");
+
+        if (ApplicationCompositionWorkerProtocol.SelectedVersion(child.Descriptor)
+            == InternalWorkerProtocolVersion.V2)
+        {
+            WorkerJobControllerParseResult executeV2 =
+                WorkerJobProtocolCodec.ParseControllerInput(frames[0]);
+            Assert.IsTrue(executeV2.IsSuccess, executeV2.Failure?.Diagnostic);
+            Assert.AreEqual(WorkerJobProtocolV2.ExecuteType, executeV2.Message!.Type);
+            Assert.AreEqual(ownedRequest.RunId, executeV2.Message.JobId);
+            Assert.AreEqual(WorkerJobKind.ProcessAssets, executeV2.Message.JobKind);
+            Assert.AreEqual(
+                ownedRequest,
+                Assert.IsInstanceOfType<ProcessAssetsExecutePayload>(
+                    executeV2.Message.Payload).Request.ProcessingRequest);
+
+            WorkerJobControllerParseResult cancelV2 =
+                WorkerJobProtocolCodec.ParseControllerInput(frames[1]);
+            Assert.IsTrue(cancelV2.IsSuccess, cancelV2.Failure?.Diagnostic);
+            Assert.AreEqual(WorkerJobProtocolV2.CancelType, cancelV2.Message!.Type);
+            Assert.AreEqual(ownedRequest.RunId, cancelV2.Message.JobId);
+            Assert.AreEqual(WorkerJobKind.ProcessAssets, cancelV2.Message.JobKind);
+            Assert.IsInstanceOfType<WorkerJobCancelPayload>(cancelV2.Message.Payload);
+            return;
+        }
 
         WorkerProtocolControllerParseResult execute = WorkerProtocolCodec.ParseControllerInput(frames[0]);
         Assert.IsTrue(execute.IsSuccess, execute.Failure?.Diagnostic);

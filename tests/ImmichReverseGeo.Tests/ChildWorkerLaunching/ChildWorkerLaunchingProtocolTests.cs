@@ -3,13 +3,354 @@ using System.Linq;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerEventStateBridge;
 
 namespace ImmichReverseGeo.Tests.ChildWorkerLaunching;
 
 public sealed partial class ChildWorkerLaunchingTests
 {
+    [TestMethod]
+    [TestCategory("Change47")]
+    public async Task ProtocolV2_SharedSessionWritesTypedExecuteAndProjectsTypedLifecycle()
+    {
+        ProcessingRunRequest request = CreateRequest();
+        var process = new ByteProcess(919);
+        var sink = new RecordingSink();
+        ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
+            process,
+            request,
+            sink,
+            TestOptions(),
+            new ChildWorkerObserverArmingAcknowledgements(),
+            InternalWorkerProtocolVersion.V2);
+        var context = new WorkerJobContext(
+            request.RunId,
+            WorkerJobKind.ProcessAssets,
+            WorkerJobRequestOrigin.Manual);
+        var startedAtUtc = new DateTimeOffset(2026, 8, 29, 12, 0, 1, TimeSpan.Zero);
+        var endedAtUtc = new DateTimeOffset(2026, 8, 29, 12, 0, 3, TimeSpan.Zero);
+
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Ready(
+            1,
+            new DateTimeOffset(2026, 8, 29, 12, 0, 0, TimeSpan.Zero),
+            new WorkerJobReadyPayload([WorkerJobKind.ProcessAssets]))));
+        Assert.IsInstanceOfType<ChildWorkerStartupObservation.ReadyAccepted>(
+            await session.Startup,
+            "v2-session-ready-accepted");
+
+        WorkerJobControllerParseResult execute = WorkerJobProtocolCodec.ParseControllerInput(
+            process.StandardInput.ToArray().AsSpan(0, process.StandardInput.ToArray().Length - 1));
+        Assert.IsTrue(execute.IsSuccess, "v2-session-controller-execute-parses");
+        Assert.AreEqual(WorkerJobProtocolV2.ExecuteType, execute.Message!.Type, "v2-session-execute-type");
+        Assert.AreEqual(request.RunId, execute.Message.JobId, "v2-session-execute-job-id");
+        Assert.AreEqual(WorkerJobKind.ProcessAssets, execute.Message.JobKind, "v2-session-execute-kind");
+        Assert.AreEqual(InternalWorkerProtocolVersion.V2, session.ProtocolVersion, "v2-session-version");
+        Assert.AreEqual(request.RunId, session.JobId, "v2-session-job-id-alias");
+        Assert.AreEqual(session.JobId, session.RunId, "v2-session-identical-run-id-compatibility");
+
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.JobStarted(
+            context,
+            "manual",
+            startedAtUtc,
+            2)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                new DateTimeOffset(2026, 8, 29, 12, 0, 2, TimeSpan.Zero),
+                new ProcessAssetsEligibilityPayload(2)),
+            3)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                new DateTimeOffset(2026, 8, 29, 12, 0, 2, TimeSpan.Zero),
+                new ProcessAssetsProgressPayload(2, 1, 0, 1)),
+            4)));
+        var typedResult = new ProcessAssetsResult(
+            "manual",
+            startedAtUtc,
+            endedAtUtc,
+            2,
+            1,
+            0,
+            1);
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Terminal(
+            context,
+            new WorkerJobTerminalPayload(
+                WorkerJobTerminalOutcome.Completed,
+                startedAtUtc,
+                endedAtUtc,
+                typedResult,
+                null),
+            5)));
+        process.StandardOutput.Complete();
+        process.StandardError.Complete();
+        process.Exit(19);
+
+        ChildWorkerCompletionObservation completion = await session.Completion;
+        CollectionAssert.AreEqual(
+            new[]
+            {
+                WorkerProtocolV1.ReadyType,
+                WorkerProtocolV1.RunStartedType,
+                WorkerProtocolV1.EligibilityDeterminedType,
+                WorkerProtocolV1.ProgressChangedType,
+                WorkerProtocolV1.CompletedType
+            },
+            sink.Events.Select(@event => @event.Type).ToArray(),
+            "v2-session-projected-lifecycle");
+        var progress = Assert.IsInstanceOfType<ProgressChangedPayload>(sink.Events[3].Payload);
+        Assert.AreEqual(1, progress.UpdatedCount, "v2-session-projected-updated");
+        Assert.AreEqual(1, progress.FailedCount, "v2-session-projected-handled-failed");
+        var terminal = Assert.IsInstanceOfType<CompletedPayload>(sink.Events[^1].Payload);
+        Assert.AreEqual(1, terminal.UpdatedCount, "v2-session-terminal-updated");
+        Assert.AreEqual(1, terminal.FailedCount, "v2-session-terminal-handled-failed");
+        Assert.AreSame(sink.Events[^1], completion.Terminal, "v2-session-committed-projected-terminal");
+        Assert.AreEqual(19, completion.ExitCode, "v2-session-contradictory-exit-retained");
+        Assert.AreEqual(request.RunId, completion.JobId, "v2-session-completion-job-id");
+        Assert.AreEqual(WorkerJobKind.ProcessAssets, completion.JobKind, "v2-session-completion-kind");
+        Assert.AreEqual(InternalWorkerProtocolVersion.V2, completion.ProtocolVersion, "v2-session-completion-version");
+        Assert.IsNull(completion.FirstProtocolObservation, "v2-session-no-protocol-failure");
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    public async Task ProtocolV2_SharedStopWritesOneTypedCancelForExactJobIdentity()
+    {
+        ProcessingRunRequest request = CreateRequest();
+        var process = new ByteProcess(918);
+        var sink = new RecordingSink();
+        ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
+            process,
+            request,
+            sink,
+            TestOptions(),
+            new ChildWorkerObserverArmingAcknowledgements(),
+            InternalWorkerProtocolVersion.V2);
+
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Ready(
+            1,
+            DateTimeOffset.UnixEpoch,
+            new WorkerJobReadyPayload([WorkerJobKind.ProcessAssets]))));
+        await session.Startup;
+        Task<ChildWorkerCancellationResult> stop = session.RequestStop();
+        await session.WaitForCancellationDeliveryAsync();
+
+        byte[][] inputs = Encoding.UTF8.GetString(process.StandardInput.ToArray())
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries)
+            .Select(Encoding.UTF8.GetBytes)
+            .ToArray();
+        Assert.AreEqual(2, inputs.Length, "v2-session-execute-and-one-cancel");
+        WorkerJobControllerMessage cancel =
+            WorkerJobProtocolCodec.ParseControllerInput(inputs[1]).Message!;
+        Assert.AreEqual(WorkerJobProtocolV2.CancelType, cancel.Type, "v2-session-cancel-type");
+        Assert.AreEqual(request.RunId, cancel.JobId, "v2-session-cancel-job-id");
+        Assert.AreEqual(WorkerJobKind.ProcessAssets, cancel.JobKind, "v2-session-cancel-kind");
+        Assert.AreEqual(2L, cancel.Sequence, "v2-session-cancel-sequence");
+
+        process.StandardOutput.Complete();
+        process.StandardError.Complete();
+        process.Exit(130);
+        await stop;
+        Assert.AreEqual(1, process.StandardInput.FlushCalls - 1, "v2-session-one-cancel-flush-after-execute");
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    [DataRow("cancelled")]
+    [DataRow("failed")]
+    public async Task ProtocolV2_NonSuccessTerminalPreservesLastProgressCounts(string outcome)
+    {
+        ProcessingRunRequest request = CreateRequest();
+        var process = new ByteProcess(outcome == "cancelled" ? 917 : 916);
+        var sink = new RecordingSink();
+        ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
+            process,
+            request,
+            sink,
+            TestOptions(),
+            new ChildWorkerObserverArmingAcknowledgements(),
+            InternalWorkerProtocolVersion.V2);
+        var context = new WorkerJobContext(
+            request.RunId,
+            WorkerJobKind.ProcessAssets,
+            WorkerJobRequestOrigin.Manual);
+        var startedAtUtc = new DateTimeOffset(2026, 8, 29, 12, 0, 1, TimeSpan.Zero);
+        var endedAtUtc = new DateTimeOffset(2026, 8, 29, 12, 0, 3, TimeSpan.Zero);
+
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Ready(
+            1,
+            DateTimeOffset.UnixEpoch,
+            new WorkerJobReadyPayload([WorkerJobKind.ProcessAssets]))));
+        await session.Startup;
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.JobStarted(
+            context,
+            "manual",
+            startedAtUtc,
+            2)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(startedAtUtc, new ProcessAssetsEligibilityPayload(2)),
+            3)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                endedAtUtc,
+                new ProcessAssetsProgressPayload(2, 1, 0, 1)),
+            4)));
+        WorkerJobTerminalOutcome terminalOutcome = outcome == "cancelled"
+            ? WorkerJobTerminalOutcome.Cancelled
+            : WorkerJobTerminalOutcome.Failed;
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Terminal(
+            context,
+            new WorkerJobTerminalPayload(
+                terminalOutcome,
+                startedAtUtc,
+                endedAtUtc,
+                null,
+                terminalOutcome == WorkerJobTerminalOutcome.Failed
+                    ? new WorkerJobSafeError(
+                        "process-assets-failed",
+                        WorkerJobFailureCategory.Domain,
+                        "The processing job failed.")
+                    : null),
+            5)));
+        process.StandardOutput.Complete();
+        process.StandardError.Complete();
+        process.Exit(outcome == "cancelled" ? 130 : 4);
+
+        ChildWorkerCompletionObservation completion = await session.Completion;
+        TerminalPayload projected = Assert.IsInstanceOfType<TerminalPayload>(
+            completion.Terminal!.Payload);
+        Assert.AreEqual(2, projected.ProcessedCount, outcome + ":projected-processed");
+        Assert.AreEqual(1, projected.UpdatedCount, outcome + ":projected-updated");
+        Assert.AreEqual(1, projected.FailedCount, outcome + ":projected-handled-failed");
+        Assert.AreEqual(
+            outcome == "cancelled" ? WorkerProtocolV1.CancelledType : WorkerProtocolV1.FailedType,
+            completion.Terminal.Type,
+            outcome + ":projected-terminal-type");
+        Assert.IsNull(completion.FirstProtocolObservation, outcome + ":valid-v2-stream");
+        await session.DisposeAsync();
+    }
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    public async Task ProtocolV2_SharedSessionProjectsThroughExistingProcessingStateBridge()
+    {
+        ProcessingRunRequest request = CreateRequest();
+        var state = new ProcessingState();
+        state.MarkPending();
+        var reporter = new ProcessingStateEventReporter(state);
+        Assert.IsTrue(reporter.Arm(request), "v2-bridge-reporter-armed");
+        var bridge = new WorkerEventStateBridgeFactory(reporter).Create(request);
+        var process = new ByteProcess(915);
+        ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
+            process,
+            request,
+            bridge,
+            TestOptions(),
+            new ChildWorkerObserverArmingAcknowledgements(),
+            InternalWorkerProtocolVersion.V2);
+        var context = new WorkerJobContext(
+            request.RunId,
+            WorkerJobKind.ProcessAssets,
+            WorkerJobRequestOrigin.Manual);
+        DateTimeOffset startedAtUtc = DateTimeOffset.UnixEpoch.AddSeconds(1);
+        DateTimeOffset endedAtUtc = DateTimeOffset.UnixEpoch.AddSeconds(3);
+        Guid activityId = Guid.Parse("34343434-3434-3434-3434-343434343434");
+
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Ready(
+            1,
+            DateTimeOffset.UnixEpoch,
+            new WorkerJobReadyPayload([WorkerJobKind.ProcessAssets]))));
+        await session.Startup;
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.JobStarted(
+            context,
+            "manual",
+            startedAtUtc,
+            2)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(startedAtUtc, new ProcessAssetsEligibilityPayload(2)),
+            3)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                startedAtUtc,
+                new WorkerJobActivityStartedPayload(activityId, "processing-assets")),
+            4)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                startedAtUtc,
+                new WorkerJobLogPayload("information", "processing")),
+            5)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                startedAtUtc,
+                new WorkerJobActivityEndedPayload(activityId)),
+            6)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                endedAtUtc,
+                new ProcessAssetsProgressPayload(1, 1, 0, 0)),
+            7)));
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Map(
+            context,
+            new WorkerJobHandlerEvent(
+                endedAtUtc,
+                new ProcessAssetsProgressPayload(2, 1, 0, 1)),
+            8)));
+        var result = new ProcessAssetsResult(
+            "manual",
+            startedAtUtc,
+            endedAtUtc,
+            2,
+            1,
+            0,
+            1);
+        process.StandardOutput.Write(Frame(WorkerJobProtocolMapper.Terminal(
+            context,
+            new WorkerJobTerminalPayload(
+                WorkerJobTerminalOutcome.Completed,
+                startedAtUtc,
+                endedAtUtc,
+                result,
+                null),
+            9)));
+        process.StandardOutput.Complete();
+        process.StandardError.Complete();
+        process.Exit(0);
+
+        ChildWorkerCompletionObservation completion = await session.Completion;
+        Assert.IsNull(completion.FirstProtocolObservation, "v2-bridge-valid-stream");
+        Assert.IsTrue(bridge.IsTerminal, "v2-bridge-terminal-committed");
+        Assert.AreEqual(1, state.ProcessedThisRun, "v2-bridge-updated-count");
+        Assert.AreEqual(1, state.ErrorsThisRun, "v2-bridge-handled-failed-count");
+        Assert.IsNull(state.CurrentActivity, "v2-bridge-activity-closed");
+        Assert.IsTrue(
+            state.GetRecentLog().Any(line => line.Contains("processing", StringComparison.Ordinal)),
+            "v2-bridge-log-projected");
+        Assert.IsNotNull(state.LastRunStarted, "v2-bridge-start-projected");
+        Assert.IsNotNull(state.LastRunCompleted, "v2-bridge-terminal-projected");
+        Assert.AreEqual(request.RunId, reporter.GetFinalizationReceipt(request)?.Request.RunId, "v2-bridge-receipt-identity");
+        await session.DisposeAsync();
+        await bridge.DisposeAsync();
+    }
+
+    private static byte[] Frame(WorkerJobOutputMessage message) =>
+        WorkerJobProtocolCodec.Serialize(message)
+            .Concat("\n"u8.ToArray())
+            .ToArray();
+
     [TestMethod]
     public async Task Protocol_ReadySequenceOneWithNullRunId_IsAcceptedAndDelivered()
     {

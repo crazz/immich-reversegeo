@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
 using ImmichReverseGeo.Core.ApplicationRole;
+using ImmichReverseGeo.Core.WorkerJobs;
 
 namespace ImmichReverseGeo.Web.WorkerCommandInvocation;
 
@@ -61,16 +62,23 @@ internal sealed class ChildProcessStartDescriptor
 internal enum ChildProcessEnvironmentPolicy
 {
     InheritCurrent,
-    InheritCurrentAndRemoveReservedProtocolVersion
+    InheritCurrentAndRemoveReservedProtocolVersion,
+    InheritCurrentAndSetReservedProtocolVersionV2
 }
 
 internal static class ChildProcessEnvironmentPolicyDetails
 {
-    internal const string ReservedProtocolVersionVariable = "IMMICH_REVERSEGEO_INTERNAL_WORKER_PROTOCOL_VERSION";
+    internal const string ReservedProtocolVersionVariable =
+        InternalWorkerProtocolVersionSelector.EnvironmentVariableName;
 
     internal static bool RemovesReservedProtocolVersion(ChildProcessEnvironmentPolicy policy)
     {
         return policy == ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion;
+    }
+
+    internal static bool SetsReservedProtocolVersionV2(ChildProcessEnvironmentPolicy policy)
+    {
+        return policy == ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2;
     }
 }
 
@@ -84,15 +92,19 @@ internal sealed class WorkerCommandInvocation
 
     private WorkerCommandInvocation(
         ChildProcessStartDescriptor descriptor,
-        string applicationAssemblyPath)
+        string applicationAssemblyPath,
+        InternalWorkerProtocolVersion protocolVersion)
     {
         Descriptor = descriptor;
         ApplicationAssemblyPath = applicationAssemblyPath;
+        ProtocolVersion = protocolVersion;
     }
 
     internal ChildProcessStartDescriptor Descriptor { get; }
 
     internal string ApplicationAssemblyPath { get; }
+
+    internal InternalWorkerProtocolVersion ProtocolVersion { get; }
 
     public override string ToString()
     {
@@ -195,6 +207,35 @@ internal sealed class WorkerCommandInvocation
         return WorkerCommandInvocationResolution.Fail(WorkerCommandInvocationFailureCategory.UnsupportedLayout);
     }
 
+    internal static WorkerCommandInvocationResolution Resolve(
+        WorkerCommandRuntimeFacts? facts,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
+        WorkerCommandInvocationResolution resolution = Resolve(facts);
+        if (protocolVersion == InternalWorkerProtocolVersion.V1
+            || resolution is not WorkerCommandInvocationResolution.Success success)
+        {
+            return resolution;
+        }
+
+        ChildProcessStartDescriptor descriptor = success.Invocation.Descriptor;
+        var selectedDescriptor = new ChildProcessStartDescriptor(
+            descriptor.ExecutablePath,
+            descriptor.Arguments,
+            descriptor.WorkingDirectory,
+            ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2);
+        return WorkerCommandInvocationResolution.Succeed(
+            new WorkerCommandInvocation(
+                selectedDescriptor,
+                success.Invocation.ApplicationAssemblyPath,
+                protocolVersion));
+    }
+
     private static WorkerCommandInvocationResolution.Success Succeed(WorkerCommandRuntimeFacts facts, IReadOnlyList<string> arguments)
     {
         var descriptor = new ChildProcessStartDescriptor(
@@ -204,7 +245,8 @@ internal sealed class WorkerCommandInvocation
             ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion);
         return WorkerCommandInvocationResolution.Succeed(new WorkerCommandInvocation(
             descriptor,
-            facts.EntryAssemblyLocation!));
+            facts.EntryAssemblyLocation!,
+            InternalWorkerProtocolVersion.V1));
     }
 }
 

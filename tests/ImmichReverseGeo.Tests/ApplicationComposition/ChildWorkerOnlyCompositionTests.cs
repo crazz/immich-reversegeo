@@ -142,11 +142,13 @@ public sealed class ChildWorkerOnlyCompositionTests
 
         var allowedExecutorSources = new HashSet<string>(StringComparer.Ordinal)
         {
+            Path.Combine("Composition", "InternalWorkerServiceCollectionExtensions.cs"),
             Path.Combine("Composition", "WorkerExecutionServiceCollectionExtensions.cs"),
             Path.Combine("RunOnce", "RunOnceApplication.cs"),
             Path.Combine("Services", "ProcessingRunContracts.cs"),
             Path.Combine("Services", "ProcessingRunExecutor.cs"),
-            Path.Combine("WorkerHost", "InternalWorkerLifecycleService.cs")
+            Path.Combine("WorkerHost", "InternalWorkerLifecycleService.cs"),
+            Path.Combine("WorkerHost", "ProcessAssetsWorkerJobHandler.cs")
         };
         var unexpectedExecutorSources = sources
             .Where(source => Regex.IsMatch(source.Value, @"\bI?ProcessingRunExecutor\b", RegexOptions.CultureInvariant))

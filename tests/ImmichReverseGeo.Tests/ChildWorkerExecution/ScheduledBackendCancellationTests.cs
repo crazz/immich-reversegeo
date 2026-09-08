@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.ChildWorkerCancellation;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -413,12 +414,14 @@ public sealed class ScheduledBackendCancellationTests
 
         public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerInvocation invocation,
-            ProcessingRunRequest request,
-            IWorkerProtocolEventSink eventSink,
+            WorkerJobDispatch dispatch,
+            IWorkerJobEventSink eventSink,
             ChildWorkerLauncherOptions options,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(invocation);
+            var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
+            ProcessingRunRequest request = processAssets.Request.ProcessingRequest;
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _callCount);
             var input = new SessionInputStream();
@@ -444,10 +447,11 @@ public sealed class ScheduledBackendCancellationTests
             ObserverArming = observerArming;
             ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
                 process,
-                request,
+                dispatch,
                 eventSink,
                 options,
-                observerArming);
+                observerArming,
+                invocation.ProtocolVersion);
             var launch = new ScheduledChildLaunch(
                 request,
                 input,

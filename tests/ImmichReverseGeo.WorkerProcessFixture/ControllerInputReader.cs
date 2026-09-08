@@ -1,8 +1,10 @@
+using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.WorkerProcessFixture;
 
-internal sealed record ControllerInputFrame(byte[] Bytes, WorkerProtocolControllerMessage Message);
+internal sealed record ControllerInputFrame(byte[] Bytes, ProcessingRunRequest Request);
 
 internal sealed class FixtureInputException(string message) : Exception(message);
 
@@ -10,17 +12,31 @@ internal sealed class ControllerInputReader
 {
     private const int ReadBufferBytes = 4096;
     private readonly Stream _input;
-    private readonly WorkerProtocolControllerInputValidator _validator = new();
+    private readonly InternalWorkerProtocolVersion _protocolVersion;
+    private readonly WorkerProtocolControllerInputValidator? _v1Validator;
+    private readonly WorkerJobControllerInputValidator? _v2Validator;
     private readonly byte[] _readBuffer = new byte[ReadBufferBytes];
     private readonly byte[] _frameBuffer = new byte[WorkerProtocolV1.MaxMessageBytes + 2];
     private int _readOffset;
     private int _readCount;
     private int _frameCount;
 
-    internal ControllerInputReader(Stream input)
+    internal ControllerInputReader(Stream input, InternalWorkerProtocolVersion protocolVersion)
     {
         ArgumentNullException.ThrowIfNull(input);
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
         _input = input;
+        _protocolVersion = protocolVersion;
+        _v1Validator = protocolVersion == InternalWorkerProtocolVersion.V1
+            ? new WorkerProtocolControllerInputValidator()
+            : null;
+        _v2Validator = protocolVersion == InternalWorkerProtocolVersion.V2
+            ? new WorkerJobControllerInputValidator([WorkerJobDescriptors.ProcessAssets])
+            : null;
     }
 
     internal async Task<ControllerInputFrame> ReadExecuteAsync()
@@ -33,11 +49,6 @@ internal sealed class ControllerInputReader
         }
 
         var accepted = ParseAndValidate(rawFrame, WorkerProtocolExecutionPhase.BeforeInvocation);
-        if (accepted.Message.Type != WorkerProtocolV1.ExecuteType || accepted.Message.Payload is not ExecuteRequestPayload)
-        {
-            throw new FixtureInputException("The first controller frame was not execute.");
-        }
-
         return accepted;
     }
 
@@ -51,15 +62,22 @@ internal sealed class ControllerInputReader
         }
 
         var accepted = ParseAndValidate(rawFrame, WorkerProtocolExecutionPhase.Executing);
-        if (accepted.Message.Type != WorkerProtocolV1.CancelType || accepted.Message.Payload is not CancelControlPayload)
-        {
-            throw new FixtureInputException("The controller frame was not cancel.");
-        }
-
         return accepted;
     }
 
     private ControllerInputFrame ParseAndValidate(byte[] rawFrame, WorkerProtocolExecutionPhase phase)
+    {
+        return _protocolVersion switch
+        {
+            InternalWorkerProtocolVersion.V1 => ParseAndValidateV1(rawFrame, phase),
+            InternalWorkerProtocolVersion.V2 => ParseAndValidateV2(rawFrame, phase),
+            _ => throw new InvalidOperationException("The selected protocol version is not supported.")
+        };
+    }
+
+    private ControllerInputFrame ParseAndValidateV1(
+        byte[] rawFrame,
+        WorkerProtocolExecutionPhase phase)
     {
         var parsed = WorkerProtocolCodec.ParseControllerInput(rawFrame);
         if (!parsed.IsSuccess)
@@ -67,13 +85,53 @@ internal sealed class ControllerInputReader
             throw new FixtureInputException($"Controller frame was rejected: {parsed.Failure!.Code}.");
         }
 
-        var validated = _validator.Validate(parsed.Message!, isReady: true, phase);
+        var validated = _v1Validator!.Validate(parsed.Message!, isReady: true, phase);
         if (!validated.IsSuccess)
         {
             throw new FixtureInputException($"Controller sequence was rejected: {validated.Failure!.Code}.");
         }
 
-        return new ControllerInputFrame(rawFrame, validated.Message!);
+        ProcessingRunRequest request = validated.Message!.Payload switch
+        {
+            ExecuteRequestPayload execute => execute.Request,
+            CancelControlPayload => _v1Validator.Snapshot.Request
+                ?? throw new FixtureInputException("Cancel was accepted without execute identity."),
+            _ => throw new FixtureInputException("The controller frame type was not supported.")
+        };
+        return new ControllerInputFrame(rawFrame, request);
+    }
+
+    private ControllerInputFrame ParseAndValidateV2(
+        byte[] rawFrame,
+        WorkerProtocolExecutionPhase phase)
+    {
+        var parsed = WorkerJobProtocolCodec.ParseControllerInput(rawFrame);
+        if (!parsed.IsSuccess)
+        {
+            throw new FixtureInputException($"Controller frame was rejected: {parsed.Failure!.Code}.");
+        }
+
+        WorkerJobExecutionPhase jobPhase = phase switch
+        {
+            WorkerProtocolExecutionPhase.BeforeInvocation => WorkerJobExecutionPhase.BeforeInvocation,
+            WorkerProtocolExecutionPhase.Executing => WorkerJobExecutionPhase.Executing,
+            WorkerProtocolExecutionPhase.Terminal => WorkerJobExecutionPhase.Terminal,
+            _ => throw new ArgumentOutOfRangeException(nameof(phase))
+        };
+        var validated = _v2Validator!.Validate(parsed.Message!, isReady: true, jobPhase);
+        if (!validated.IsSuccess)
+        {
+            throw new FixtureInputException($"Controller sequence was rejected: {validated.Failure!.Code}.");
+        }
+
+        ProcessingRunRequest request = validated.Message!.Payload switch
+        {
+            ProcessAssetsExecutePayload execute => execute.Request.ProcessingRequest,
+            WorkerJobCancelPayload => _v2Validator.Snapshot.Request?.ProcessingRequest
+                ?? throw new FixtureInputException("Cancel was accepted without execute identity."),
+            _ => throw new FixtureInputException("The controller frame type was not supported.")
+        };
+        return new ControllerInputFrame(rawFrame, request);
     }
 
     private async Task<byte[]?> ReadFrameAsync()
@@ -138,10 +196,18 @@ internal sealed class ControllerInputReader
 
     private void FinalizeInput(bool hasPartialFrame)
     {
-        var finalized = _validator.FinalizeInput(hasPartialFrame);
-        if (!finalized.IsSuccess)
+        WorkerProtocolFailure? failure = _protocolVersion switch
         {
-            throw new FixtureInputException($"Controller input finalization failed: {finalized.Failure!.Code}.");
+            InternalWorkerProtocolVersion.V1 => _v1Validator!.FinalizeInput(hasPartialFrame).Failure,
+            InternalWorkerProtocolVersion.V2 when hasPartialFrame => new WorkerProtocolFailure(
+                WorkerProtocolFailureCode.InvalidFraming,
+                "Controller input ended during a frame."),
+            InternalWorkerProtocolVersion.V2 => null,
+            _ => throw new InvalidOperationException("The selected protocol version is not supported.")
+        };
+        if (failure is not null)
+        {
+            throw new FixtureInputException($"Controller input finalization failed: {failure.Code}.");
         }
     }
 }

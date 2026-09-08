@@ -1,6 +1,7 @@
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
@@ -334,12 +335,21 @@ public sealed class StandardDeploymentModeTests
             0,
             outcome,
             null);
-        child.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new RunStarted(request, SessionTestSupport.Start), 2, SessionTestSupport.Start)));
-        child.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new EligibilityDetermined(request, 0), 3, SessionTestSupport.Start)));
-        child.Process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Map(
-            new RunFinished(request, result), 4, SessionTestSupport.Start)));
+        child.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                child.Descriptor,
+                new RunStarted(request, SessionTestSupport.Start),
+                2));
+        child.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                child.Descriptor,
+                new EligibilityDetermined(request, 0),
+                3));
+        child.Process.StandardOutputSource.Enqueue(
+            ApplicationCompositionWorkerProtocol.ProcessingFrame(
+                child.Descriptor,
+                new RunFinished(request, result),
+                4));
         child.Process.Exit(exitCode);
     }
 
@@ -351,7 +361,7 @@ public sealed class StandardDeploymentModeTests
         }
 
         child.Process.StandardOutputSource.Enqueue(
-            SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
+            ApplicationCompositionWorkerProtocol.ReadyFrame(child.Descriptor));
         await child.Input.FirstWrite.WaitAsync(Bound);
     }
 
@@ -367,6 +377,10 @@ public sealed class StandardDeploymentModeTests
         Assert.IsFalse(
             descriptor.Arguments.Any(argument => argument is "standard" or "web-only" or "run-once"),
             "child-command-does-not-select-a-public-mode");
+        Assert.AreEqual(
+            InternalWorkerProtocolVersion.V2,
+            ApplicationCompositionWorkerProtocol.SelectedVersion(descriptor),
+            "production-child-selects-v2");
     }
 
     private static void AssertStandardDescriptor(

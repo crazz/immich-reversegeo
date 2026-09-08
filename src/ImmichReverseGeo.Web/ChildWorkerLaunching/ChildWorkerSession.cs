@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -69,8 +70,12 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private readonly Stream _standardInputStream;
     private readonly Stream _standardOutputStream;
     private readonly Stream _standardErrorStream;
-    private readonly IWorkerProtocolEventSink _eventSink;
+    private readonly IWorkerJobEventSink _eventSink;
     private readonly ProcessingRunRequest _request;
+    private readonly bool _isCancellable;
+    private readonly InternalWorkerProtocolVersion _protocolVersion;
+    private readonly WorkerJobOutputStreamValidator? _jobOutputValidator;
+    private readonly ProcessAssetsWorkerJobProjection _jobProjection;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _readyTimeout;
     private readonly TaskCompletionSource<ChildWorkerStartupObservation> _startup = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -93,6 +98,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private readonly ChildWorkerEvidenceFinalityGate? _evidenceFinalityGate;
     private ChildWorkerProtocolObservation? _firstProtocolObservation;
     private WorkerProtocolEvent? _terminal;
+    private WorkerJobOutputMessage? _jobTerminal;
     private bool _acceptedRunStarted;
     private int _startupAuthority;
     private bool _sinkCallbackAdmitted;
@@ -100,17 +106,37 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
 
     private ChildWorkerSession(
         IChildProcess process,
-        ProcessingRunRequest request,
-        IWorkerProtocolEventSink eventSink,
+        WorkerJobDispatch dispatch,
+        IWorkerJobEventSink eventSink,
         ChildWorkerLauncherOptions options,
         Task observerActivation,
-        ChildWorkerObserverArmingAcknowledgements observerArming)
+        ChildWorkerObserverArmingAcknowledgements observerArming,
+        InternalWorkerProtocolVersion protocolVersion)
     {
         _process = process ?? throw new ArgumentNullException(nameof(process));
-        _request = request ?? throw new ArgumentNullException(nameof(request));
+        ArgumentNullException.ThrowIfNull(dispatch);
+        var processAssets = dispatch as ProcessAssetsWorkerJobDispatch
+            ?? throw new NotSupportedException(
+                "Only the registered ProcessAssets job dispatch is supported.");
+        _request = processAssets.Request.ProcessingRequest;
         _eventSink = eventSink ?? throw new ArgumentNullException(nameof(eventSink));
+        _isCancellable = dispatch.IsCancellable;
         ArgumentNullException.ThrowIfNull(options);
         options.Validate();
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
+        _protocolVersion = protocolVersion;
+        if (protocolVersion == InternalWorkerProtocolVersion.V2)
+        {
+            _jobOutputValidator = new WorkerJobOutputStreamValidator(
+                dispatch.Context.JobId,
+                dispatch.Context.JobKind);
+        }
+        _jobProjection = new ProcessAssetsWorkerJobProjection(_request);
+
         _timeProvider = options.TimeProvider;
         _readyTimeout = options.ReadyTimeout;
         _evidenceFinalityGate = options.EvidenceFinalityGate;
@@ -120,7 +146,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         _standardInputStream = resources.StandardInput;
         _standardOutputStream = resources.StandardOutput;
         _standardErrorStream = resources.StandardError;
-        RunId = request.RunId;
+        JobId = dispatch.Context.JobId;
+        JobKind = dispatch.Context.JobKind;
 
         if (resources.SetupFailed)
         {
@@ -263,15 +290,54 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         ChildWorkerLauncherOptions options,
         ChildWorkerObserverArmingAcknowledgements observerArming)
     {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(eventSink);
+        return await CreateAsync(
+            process,
+            new ProcessAssetsWorkerJobDispatch(request),
+            new ProcessAssetsWorkerJobEventSink(request, eventSink),
+            options,
+            observerArming,
+            InternalWorkerProtocolVersion.V1).ConfigureAwait(false);
+    }
+
+    internal static async ValueTask<ChildWorkerSession> CreateAsync(
+        IChildProcess process,
+        ProcessingRunRequest request,
+        IWorkerProtocolEventSink eventSink,
+        ChildWorkerLauncherOptions options,
+        ChildWorkerObserverArmingAcknowledgements observerArming,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        ArgumentNullException.ThrowIfNull(eventSink);
+        return await CreateAsync(
+            process,
+            new ProcessAssetsWorkerJobDispatch(request),
+            new ProcessAssetsWorkerJobEventSink(request, eventSink),
+            options,
+            observerArming,
+            protocolVersion).ConfigureAwait(false);
+    }
+
+    internal static async ValueTask<ChildWorkerSession> CreateAsync(
+        IChildProcess process,
+        WorkerJobDispatch dispatch,
+        IWorkerJobEventSink eventSink,
+        ChildWorkerLauncherOptions options,
+        ChildWorkerObserverArmingAcknowledgements observerArming,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
         ArgumentNullException.ThrowIfNull(observerArming);
         var observerActivation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var session = new ChildWorkerSession(
             process,
-            request,
+            dispatch,
             eventSink,
             options,
             observerActivation.Task,
-            observerArming);
+            observerArming,
+            protocolVersion);
 
         observerActivation.SetResult();
         await observerArming.All.ConfigureAwait(false);
@@ -279,7 +345,11 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     }
 
     internal int ProcessId { get; }
-    internal Guid RunId { get; }
+    internal Guid JobId { get; }
+    internal Guid RunId => JobId;
+    internal WorkerJobKind JobKind { get; }
+    internal bool IsCancellable => _isCancellable;
+    internal InternalWorkerProtocolVersion ProtocolVersion => _protocolVersion;
     internal Task<ChildWorkerStartupObservation> Startup => _startup.Task;
     internal Task<ChildWorkerCompletionObservation> Completion => _completion;
     internal Task<ChildWorkerCompletionObservation> EvidenceFinality => _evidenceFinality;
@@ -373,7 +443,20 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         var startup = await _startup.Task.ConfigureAwait(false);
         lock (_observationGate)
         {
-            return new ChildWorkerCompletionObservation(ProcessId, RunId, startup, exit.Observed, exit.Code, standardOutputFinality, standardErrorFinality, _terminal, _firstProtocolObservation, _standardError.Snapshot())
+            return new ChildWorkerCompletionObservation(
+                ProcessId,
+                JobId,
+                startup,
+                exit.Observed,
+                exit.Code,
+                standardOutputFinality,
+                standardErrorFinality,
+                _terminal,
+                _jobTerminal,
+                _firstProtocolObservation,
+                _standardError.Snapshot(),
+                JobKind,
+                ProtocolVersion)
             {
                 AcceptedRunStarted = _acceptedRunStarted
             };
@@ -405,11 +488,11 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                         ChildWorkerStartupObservation.PreReadyEndOfStream.Instance);
                     if (!reader.Failed)
                     {
-                        WorkerProtocolStreamFinalizationResult finalization =
-                            validator.FinalizeStream();
-                        if (!finalization.IsComplete)
+                        WorkerProtocolFailure? finalizationFailure =
+                            FinalizeOutputProtocol(validator);
+                        if (finalizationFailure is not null)
                         {
-                            RecordProtocolFailure(finalization.Failure!);
+                            RecordProtocolFailure(finalizationFailure);
                         }
                     }
 
@@ -430,38 +513,24 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                     continue;
                 }
 
-                var parsed = WorkerProtocolCodec.Parse(result.Frame.Span);
-                if (!parsed.IsSuccess)
+                if (!TryParseAndValidateOutput(
+                        result.Frame.Span,
+                        validator,
+                        out WorkerJobOutputMessage? jobEvent,
+                        out WorkerProtocolEvent? @event,
+                        out WorkerProtocolFailure? failure))
                 {
-                    RecordProtocolFailure(parsed.Failure!);
+                    RecordProtocolFailure(failure!);
                     reader.StopParsing();
                     continue;
                 }
 
-                var @event = parsed.Event!;
-                if ((@event.Type == WorkerProtocolV1.ReadyType && @event.RunId is not null)
-                    || (@event.Type != WorkerProtocolV1.ReadyType && @event.RunId != _request.RunId))
-                {
-                    RecordProtocolFailure(new WorkerProtocolFailure(
-                        WorkerProtocolFailureCode.InvalidCorrelation,
-                        "Event correlation did not match this session."));
-                    reader.StopParsing();
-                    continue;
-                }
-
-                var validated = validator.Validate(@event);
-                if (!validated.IsSuccess)
-                {
-                    RecordProtocolFailure(validated.Failure!);
-                    reader.StopParsing();
-                    continue;
-                }
-
-                if (WorkerProtocolV1.IsTerminal(@event.Type))
+                if (WorkerProtocolV1.IsTerminal(@event!.Type))
                 {
                     lock (_observationGate)
                     {
                         _terminal = @event;
+                        _jobTerminal = jobEvent;
                     }
 
                     StartTerminalInputClose();
@@ -472,7 +541,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                     continue;
                 }
 
-                if (!await DeliverAdmittedEventAsync(@event).ConfigureAwait(false))
+                if (!await DeliverAdmittedEventAsync(jobEvent!, @event).ConfigureAwait(false))
                 {
                     continue;
                 }
@@ -505,14 +574,25 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         byte[] objectBytes;
         try
         {
-            var message = new WorkerProtocolControllerMessage(
-                WorkerProtocolV1.RequestCategory,
-                WorkerProtocolV1.ExecuteType,
-                1,
-                _timeProvider.GetUtcNow(),
-                _request.RunId,
-                new ExecuteRequestPayload(_request));
-            objectBytes = WorkerProtocolCodec.SerializeControllerInput(message);
+            objectBytes = _protocolVersion == InternalWorkerProtocolVersion.V1
+                ? WorkerProtocolCodec.SerializeControllerInput(
+                    new WorkerProtocolControllerMessage(
+                        WorkerProtocolV1.RequestCategory,
+                        WorkerProtocolV1.ExecuteType,
+                        1,
+                        _timeProvider.GetUtcNow(),
+                        RunId,
+                        new ExecuteRequestPayload(_request)))
+                : WorkerJobProtocolCodec.SerializeControllerInput(
+                    new WorkerJobControllerMessage(
+                        WorkerJobProtocolV2.RequestCategory,
+                        WorkerJobProtocolV2.ExecuteType,
+                        1,
+                        _timeProvider.GetUtcNow(),
+                        JobId,
+                        JobKind,
+                        new ProcessAssetsExecutePayload(
+                            new ProcessAssetsRequest(_request))));
         }
         catch
         {
@@ -580,16 +660,28 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
     }
 
-    private async Task<bool> DeliverAdmittedEventAsync(WorkerProtocolEvent @event)
+    private async Task<bool> DeliverAdmittedEventAsync(
+        WorkerJobOutputMessage jobEvent,
+        WorkerProtocolEvent compatibilityEvent)
     {
         try
         {
-            await _eventSink.AcceptAsync(@event, CancellationToken.None).ConfigureAwait(false);
+            if (_eventSink is IProcessAssetsWorkerJobEventSink processAssetsSink)
+            {
+                await processAssetsSink.AcceptProcessAssetsAsync(
+                    jobEvent,
+                    compatibilityEvent,
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            else
+            {
+                await _eventSink.AcceptAsync(jobEvent, CancellationToken.None).ConfigureAwait(false);
+            }
             return true;
         }
         catch
         {
-            RecordSinkFailure(@event);
+            RecordSinkFailure(compatibilityEvent);
             return false;
         }
         finally
@@ -726,6 +818,100 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             @event.Type == WorkerProtocolV1.ReadyType
                 ? ChildWorkerFaultContainmentReason.ReadyRejected.Instance
                 : ChildWorkerFaultContainmentReason.SinkFailure.Instance);
+    }
+
+    private WorkerProtocolFailure? FinalizeOutputProtocol(
+        WorkerProtocolEventStreamValidator validator)
+    {
+        if (_protocolVersion == InternalWorkerProtocolVersion.V1)
+        {
+            WorkerProtocolStreamFinalizationResult finalization =
+                validator.FinalizeStream();
+            return finalization.IsComplete ? null : finalization.Failure;
+        }
+
+        return _jobOutputValidator!.FinalizeOutput(hasPartialFrame: false);
+    }
+
+    private bool TryParseAndValidateOutput(
+        ReadOnlySpan<byte> frame,
+        WorkerProtocolEventStreamValidator validator,
+        out WorkerJobOutputMessage? jobEvent,
+        out WorkerProtocolEvent? projectedEvent,
+        out WorkerProtocolFailure? failure)
+    {
+        jobEvent = null;
+        projectedEvent = null;
+        failure = null;
+        if (_protocolVersion == InternalWorkerProtocolVersion.V1)
+        {
+            WorkerProtocolParseResult parsed = WorkerProtocolCodec.Parse(frame);
+            if (!parsed.IsSuccess)
+            {
+                failure = parsed.Failure;
+                return false;
+            }
+
+            WorkerProtocolEvent @event = parsed.Event!;
+            if ((@event.Type == WorkerProtocolV1.ReadyType && @event.RunId is not null)
+                || (@event.Type != WorkerProtocolV1.ReadyType && @event.RunId != RunId))
+            {
+                failure = new WorkerProtocolFailure(
+                    WorkerProtocolFailureCode.InvalidCorrelation,
+                    "Event correlation did not match this session.");
+                return false;
+            }
+
+            var validated = validator.Validate(@event);
+            if (!validated.IsSuccess)
+            {
+                failure = validated.Failure;
+                return false;
+            }
+
+            try
+            {
+                jobEvent = ProcessAssetsWorkerJobProjection.MapV1(_request, @event);
+                projectedEvent = @event;
+                return true;
+            }
+            catch
+            {
+                failure = new WorkerProtocolFailure(
+                    WorkerProtocolFailureCode.InvalidPayload,
+                    "The v1 processing output could not be adapted to a typed worker job.");
+                return false;
+            }
+        }
+
+        WorkerJobProtocolParseResult jobParsed = WorkerJobProtocolCodec.Parse(frame);
+        if (!jobParsed.IsSuccess)
+        {
+            failure = jobParsed.Failure;
+            return false;
+        }
+
+        WorkerJobOutputValidationResult jobValidated =
+            _jobOutputValidator!.Validate(jobParsed.Message!);
+        if (!jobValidated.IsSuccess)
+        {
+            failure = jobValidated.Failure;
+            return false;
+        }
+
+        try
+        {
+            jobEvent = jobValidated.Message;
+            projectedEvent = _jobProjection.Map(jobValidated.Message!);
+            return true;
+        }
+        catch
+        {
+            failure = new WorkerProtocolFailure(
+                WorkerProtocolFailureCode.InvalidPayload,
+                "The typed worker-job output could not be projected.");
+            return false;
+        }
     }
 
 

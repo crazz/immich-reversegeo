@@ -52,6 +52,10 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
         {
             environment.Remove(ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable);
         }
+        else if (ChildProcessEnvironmentPolicyDetails.SetsReservedProtocolVersionV2(environmentPolicy))
+        {
+            environment[ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable] = "2";
+        }
     }
 
     internal static ProcessStartInfo CreateStartInfo(ChildProcessStartDescriptor descriptor)

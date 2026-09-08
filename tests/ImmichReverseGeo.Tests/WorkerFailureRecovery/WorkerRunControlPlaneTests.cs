@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
@@ -79,6 +80,30 @@ public class WorkerRunControlPlaneTests
     }
 
     [TestMethod]
+    [TestCategory("Change47")]
+    public async Task ExecuteAsync_ProductionSelectionLaunchesTypedProcessAssetsOverV2()
+    {
+        var builder = new VersionAwareBuilder();
+        var launcher = new RecordingLauncher();
+        var fixture = new Fixture(builder, launcher, Guid.NewGuid());
+
+        Assert.AreEqual(
+            ProcessingRunAdmissionResult.Accepted,
+            await fixture.Coordinator.TriggerManualAsync());
+        await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
+
+        Assert.AreEqual(InternalWorkerProtocolVersion.V2, builder.RequestedVersion);
+        Assert.AreEqual(InternalWorkerProtocolVersion.V2, launcher.Invocation?.ProtocolVersion);
+        Assert.AreEqual(
+            ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2,
+            launcher.Invocation?.Descriptor.EnvironmentPolicy);
+        var dispatch = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(launcher.Dispatch);
+        Assert.AreSame(fixture.Executor.LastRequest, dispatch.Request.ProcessingRequest);
+        Assert.AreEqual(fixture.Executor.LastRequest!.RunId, dispatch.Context.JobId);
+        Assert.IsInstanceOfType<ProcessAssetsWorkerJobEventSink>(launcher.EventSink);
+    }
+
+    [TestMethod]
     public async Task ExecuteAsync_DuplicateOrStaleCallsAreRejectedBeforeBuildingOrLaunching()
     {
         var builder = new GatedFailureBuilder();
@@ -111,7 +136,13 @@ public class WorkerRunControlPlaneTests
 
     private static WorkerCommandInvocationResolution ValidResolution()
     {
-        var facts = new WorkerCommandRuntimeFacts(
+        WorkerCommandInvocationResolution resolution =
+            WorkerCommandInvocationType.Resolve(ValidFacts());
+        Assert.IsInstanceOfType<WorkerCommandInvocationResolution.Success>(resolution, "valid-resolver-fixture");
+        return resolution;
+    }
+
+    private static WorkerCommandRuntimeFacts ValidFacts() => new(
             WorkerCommandInvocationType.TrustedWebAssemblyIdentity,
             "/fixture/dotnet",
             WorkerTargetObservation.File,
@@ -121,10 +152,6 @@ public class WorkerRunControlPlaneTests
             "/fixture",
             WorkerTargetObservation.Directory,
             WorkerPathSemantics.Unix);
-        var resolution = WorkerCommandInvocationType.Resolve(facts);
-        Assert.IsInstanceOfType<WorkerCommandInvocationResolution.Success>(resolution, "valid-resolver-fixture");
-        return resolution;
-    }
 
     private sealed class Fixture
     {
@@ -162,6 +189,7 @@ public class WorkerRunControlPlaneTests
             FixedBuilder fixedBuilder => fixedBuilder.CallCount,
             ThrowingBuilder throwingBuilder => throwingBuilder.CallCount,
             GatedFailureBuilder gatedBuilder => gatedBuilder.CallCount,
+            VersionAwareBuilder versionBuilder => versionBuilder.CallCount,
             _ => throw new InvalidOperationException("The test builder must expose its count.")
         };
         internal RecordingLauncher Launcher { get; }
@@ -231,19 +259,42 @@ public class WorkerRunControlPlaneTests
         }
     }
 
+    private sealed class VersionAwareBuilder : IWorkerCommandInvocationBuilder
+    {
+        internal int CallCount { get; private set; }
+        internal InternalWorkerProtocolVersion? RequestedVersion { get; private set; }
+
+        public WorkerCommandInvocationResolution Build() =>
+            throw new AssertFailedException("The production selection must call the versioned builder seam.");
+
+        public WorkerCommandInvocationResolution Build(
+            InternalWorkerProtocolVersion protocolVersion)
+        {
+            CallCount++;
+            RequestedVersion = protocolVersion;
+            return WorkerCommandInvocationType.Resolve(ValidFacts(), protocolVersion);
+        }
+    }
+
     private sealed class RecordingLauncher : IChildWorkerLauncher
     {
         internal int CallCount { get; private set; }
         internal int StartedSessionCount { get; private set; }
+        internal WorkerCommandInvocationType? Invocation { get; private set; }
+        internal WorkerJobDispatch? Dispatch { get; private set; }
+        internal IWorkerJobEventSink? EventSink { get; private set; }
 
         public ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerCommandInvocationType invocation,
-            ProcessingRunRequest request,
-            IWorkerProtocolEventSink eventSink,
+            WorkerJobDispatch dispatch,
+            IWorkerJobEventSink eventSink,
             ChildWorkerLauncherOptions options,
             CancellationToken cancellationToken)
         {
             CallCount++;
+            Invocation = invocation;
+            Dispatch = dispatch;
+            EventSink = eventSink;
             return ValueTask.FromResult<ChildWorkerLaunchResult>(new ChildWorkerLaunchResult.StartFailed(ChildWorkerStartFailureCategory.ProcessStartFailed));
         }
     }

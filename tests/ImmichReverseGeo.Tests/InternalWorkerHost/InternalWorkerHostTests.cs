@@ -3641,6 +3641,79 @@ public sealed class InternalWorkerHostTests
     }
 
     [TestMethod]
+    [TestCategory("Change47")]
+    public void ProcessBoundary_SelectsAbsentV1AndExactV2BeforeWorkerDelegate()
+    {
+        foreach ((string Label, string? Value, ImmichReverseGeo.Core.WorkerJobs.InternalWorkerProtocolVersion Expected) row in
+            new[]
+            {
+                ("absent", (string?)null, ImmichReverseGeo.Core.WorkerJobs.InternalWorkerProtocolVersion.V1),
+                ("exact-v2", "2", ImmichReverseGeo.Core.WorkerJobs.InternalWorkerProtocolVersion.V2)
+            })
+        {
+            using var errorWriter = new StringWriter();
+            ImmichReverseGeo.Core.WorkerJobs.InternalWorkerProtocolVersion? selected = null;
+            var exitCode = InternalWorkerProcess.Run(
+                [],
+                errorWriter,
+                _ => row.Value,
+                (version, outcomes) =>
+                {
+                    selected = version;
+                    outcomes.Add(ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitFact.Completed());
+                    return Task.FromResult(0);
+                });
+
+            Assert.AreEqual(0, exitCode, row.Label + ":completed");
+            Assert.AreEqual(row.Expected, selected, row.Label + ":selected-before-delegate");
+            Assert.AreEqual(string.Empty, errorWriter.ToString(), row.Label + ":no-error");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    [DataRow("")]
+    [DataRow(" ")]
+    [DataRow("1")]
+    [DataRow("02")]
+    [DataRow("+2")]
+    [DataRow("2 ")]
+    [DataRow("invalid-canary")]
+    public void ProcessBoundary_InvalidPresentSelectorRejectsBeforeHostConstruction(string value)
+    {
+        var calls = 0;
+        using var errorWriter = new StringWriter();
+
+        var exitCode = InternalWorkerProcess.Run(
+            [],
+            errorWriter,
+            _ => value,
+            (_, _) =>
+            {
+                calls++;
+                throw new AssertFailedException("invalid-selector-must-not-build-host");
+            });
+
+        Assert.AreEqual(2, exitCode, "invalid-selector-exit");
+        Assert.AreEqual(0, calls, "invalid-selector-zero-host-construction");
+        Assert.AreEqual(
+            "worker-exit-summary outcome=invalid-input phase=input message=worker invocation or input is invalid" + Environment.NewLine,
+            errorWriter.ToString(),
+            "invalid-selector-safe-exact-summary");
+        Assert.IsFalse(
+            errorWriter.ToString().Contains(
+                ImmichReverseGeo.Core.WorkerJobs.InternalWorkerProtocolVersionSelector.EnvironmentVariableName,
+                StringComparison.Ordinal),
+            "invalid-selector-does-not-name-private-entry");
+        if (!string.IsNullOrWhiteSpace(value))
+        {
+            Assert.IsFalse(
+                errorWriter.ToString().Contains(value, StringComparison.Ordinal),
+                "invalid-selector-does-not-echo-value");
+        }
+    }
+
+    [TestMethod]
     [TestCategory("Change23")]
     public void ProcessBoundary_ResidualArgumentsRejectBeforeRunDelegateWithoutSummary()
     {

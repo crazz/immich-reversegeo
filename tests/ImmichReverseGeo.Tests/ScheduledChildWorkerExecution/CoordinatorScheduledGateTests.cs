@@ -1,4 +1,5 @@
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.WorkerProcessFixture;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -662,13 +663,14 @@ public sealed class CoordinatorScheduledGateTests
 
         public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerInvocation invocation,
-            ProcessingRunRequest request,
-            IWorkerProtocolEventSink eventSink,
+            WorkerJobDispatch dispatch,
+            IWorkerJobEventSink eventSink,
             ChildWorkerLauncherOptions options,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(invocation);
-            ArgumentNullException.ThrowIfNull(request);
+            var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
+            ProcessingRunRequest request = processAssets.Request.ProcessingRequest;
             ArgumentNullException.ThrowIfNull(eventSink);
             if (_plans.Count == 0)
             {
@@ -681,8 +683,16 @@ public sealed class CoordinatorScheduledGateTests
             CallCount++;
             try
             {
-                var forwardingSink = new ForwardingEventSink(eventSink, lease.Sink);
-                ChildWorkerSession session = await lease.LaunchAsync(plan.Scenario, forwardingSink, plan.Capture, plan.Options);
+                var forwardingSink = new ForwardingEventSink(
+                    eventSink,
+                    new ProcessAssetsWorkerJobEventSink(request, lease.Sink));
+                ChildWorkerSession session = await lease.LaunchAsync(
+                    plan.Scenario,
+                    dispatch,
+                    forwardingSink,
+                    invocation.ProtocolVersion,
+                    plan.Capture,
+                    plan.Options);
                 SignalLaunchCompleted();
                 return new ChildWorkerLaunchResult.Started(session);
             }
@@ -752,12 +762,12 @@ public sealed class CoordinatorScheduledGateTests
             return new ValueTask(WorkerProcessFixtureLease.ReapAsync(_leases));
         }
 
-        private sealed class ForwardingEventSink(IWorkerProtocolEventSink inner, IWorkerProtocolEventSink recording) : IWorkerProtocolEventSink
+        private sealed class ForwardingEventSink(IWorkerJobEventSink inner, IWorkerJobEventSink recording) : IWorkerJobEventSink
         {
-            public async ValueTask AcceptAsync(WorkerProtocolEvent @event, CancellationToken cancellationToken)
+            public async ValueTask AcceptAsync(WorkerJobOutputMessage message, CancellationToken cancellationToken)
             {
-                await inner.AcceptAsync(@event, cancellationToken);
-                await recording.AcceptAsync(@event, cancellationToken);
+                await inner.AcceptAsync(message, cancellationToken);
+                await recording.AcceptAsync(message, cancellationToken);
             }
         }
     }

@@ -1,5 +1,7 @@
 using System.Collections.Generic;
 using System.IO;
+using ImmichReverseGeo.Core.WorkerJobs;
+using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using Invocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
@@ -126,6 +128,80 @@ public sealed class WorkerCommandInvocationBuilderTests
         var exactReservedName = new string(ExpectedReservedProtocolVariable.ToCharArray());
         Assert.AreEqual(ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable, exactReservedName, "exact-fixed-removal");
         CollectionAssert.AreEqual(new[] { "/app/ImmichReverseGeo.Web.dll", "--internal-worker" }, workerDescriptor.Arguments.ToArray(), "worker-arguments-contain-no-environment-data");
+    }
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    public void ExplicitProtocolChoice_ProducesV1RemovalOrV2ExactReplacementWithoutChangingArguments()
+    {
+        var v1 = Assert.IsInstanceOfType<WorkerCommandInvocationResolution.Success>(
+            new WorkerCommandInvocationBuilder(
+                new WorkerCommandRuntimeFactsCapture(CountingSource.ValidUnix()))
+                .Build(InternalWorkerProtocolVersion.V1)).Invocation.Descriptor;
+        var v2 = Assert.IsInstanceOfType<WorkerCommandInvocationResolution.Success>(
+            new WorkerCommandInvocationBuilder(
+                new WorkerCommandRuntimeFactsCapture(CountingSource.ValidUnix()))
+                .Build(InternalWorkerProtocolVersion.V2)).Invocation.Descriptor;
+
+        Assert.AreEqual(
+            ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion,
+            v1.EnvironmentPolicy);
+        Assert.AreEqual(
+            ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2,
+            v2.EnvironmentPolicy);
+        CollectionAssert.AreEqual(v1.Arguments.ToArray(), v2.Arguments.ToArray());
+        CollectionAssert.AreEqual(
+            new[] { "/app/ImmichReverseGeo.Web.dll", "--internal-worker" },
+            v2.Arguments.ToArray(),
+            "protocol-choice-does-not-add-an-argument");
+    }
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    public void EnvironmentPolicy_PreservesDictionaryComparerOtherEntriesAndParentSnapshot()
+    {
+        const string reserved = ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable;
+        string lowerReserved = reserved.ToLowerInvariant();
+        var unixParent = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [reserved] = "invalid-canary",
+            [lowerReserved] = "unix-distinct",
+            ["KEEP"] = "same"
+        };
+        var unixV1 = new Dictionary<string, string?>(unixParent, unixParent.Comparer);
+        var unixV2 = new Dictionary<string, string?>(unixParent, unixParent.Comparer);
+
+        SystemChildProcessFactory.ApplyEnvironmentPolicy(
+            unixV1,
+            ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion);
+        SystemChildProcessFactory.ApplyEnvironmentPolicy(
+            unixV2,
+            ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2);
+
+        Assert.IsFalse(unixV1.ContainsKey(reserved), "unix-v1-removes-exact-reserved-key");
+        Assert.AreEqual("unix-distinct", unixV1[lowerReserved], "unix-v1-preserves-case-distinct-key");
+        Assert.AreEqual("2", unixV2[reserved], "unix-v2-replaces-exact-reserved-key");
+        Assert.AreEqual("unix-distinct", unixV2[lowerReserved], "unix-v2-preserves-case-distinct-key");
+        Assert.AreEqual("same", unixV1["KEEP"]);
+        Assert.AreEqual("same", unixV2["KEEP"]);
+        Assert.AreEqual("invalid-canary", unixParent[reserved], "parent-is-unmutated");
+
+        var windowsV1 = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
+        {
+            [lowerReserved] = "invalid-canary",
+            ["KEEP"] = "same"
+        };
+        var windowsV2 = new Dictionary<string, string?>(windowsV1, windowsV1.Comparer);
+        SystemChildProcessFactory.ApplyEnvironmentPolicy(
+            windowsV1,
+            ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion);
+        SystemChildProcessFactory.ApplyEnvironmentPolicy(
+            windowsV2,
+            ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2);
+        Assert.IsFalse(windowsV1.ContainsKey(reserved), "windows-v1-removes-comparer-equivalent-key");
+        Assert.AreEqual("same", windowsV1["KEEP"]);
+        Assert.AreEqual("2", windowsV2[reserved], "windows-v2-replaces-comparer-equivalent-key");
+        Assert.AreEqual("same", windowsV2["KEEP"]);
     }
 
     [TestMethod]

@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
@@ -33,8 +34,16 @@ internal sealed class WorkerRunControlPlane
 
     internal async Task<ProcessingRunResult> ExecuteAsync(ProcessingRunCoordinator coordinator, ProcessingRunRequest request)
     {
+        const InternalWorkerProtocolVersion protocolVersion =
+            InternalWorkerProtocolVersion.V2;
         var evidenceGate = new ChildWorkerEvidenceFinalityGate();
-        var finalizer = new WorkerRunFinalizer(request, _reporter, _clock, evidenceGate, _statusSink);
+        var finalizer = new WorkerRunFinalizer(
+            request,
+            _reporter,
+            _clock,
+            evidenceGate,
+            _statusSink,
+            protocolVersion);
         if (!coordinator.TryClaimChildExecution(request, finalizer))
         {
             throw new InvalidOperationException("The exact admitted request cannot claim child execution.");
@@ -45,7 +54,7 @@ internal sealed class WorkerRunControlPlane
         WorkerCommandInvocationResolution resolution;
         try
         {
-            resolution = _builder.Build();
+            resolution = _builder.Build(protocolVersion);
         }
         catch
         {
@@ -60,8 +69,14 @@ internal sealed class WorkerRunControlPlane
         }
 
         finalizer.State.AdvanceTransport(WorkerRunTransportPhase.Starting);
-        var launch = await _launcher.LaunchAsync(resolved.Invocation, request, new TrackingSink(bridge, finalizer),
-            new ChildWorkerLauncherOptions { TimeProvider = _clock, EvidenceFinalityGate = evidenceGate }, CancellationToken.None).ConfigureAwait(false);
+        var dispatch = new ProcessAssetsWorkerJobDispatch(request);
+        var processingSink = new TrackingSink(bridge, finalizer);
+        var launch = await _launcher.LaunchAsync(
+            resolved.Invocation,
+            dispatch,
+            new ProcessAssetsWorkerJobEventSink(request, processingSink),
+            new ChildWorkerLauncherOptions { TimeProvider = _clock, EvidenceFinalityGate = evidenceGate },
+            CancellationToken.None).ConfigureAwait(false);
         if (launch is not ChildWorkerLaunchResult.Started started)
         {
             var result = finalizer.FinalizeNoProcess(WorkerRunFailureCategory.ProcessStart);

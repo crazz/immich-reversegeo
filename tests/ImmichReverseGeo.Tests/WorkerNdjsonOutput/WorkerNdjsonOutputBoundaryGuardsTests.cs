@@ -67,10 +67,14 @@ public sealed class WorkerNdjsonOutputBoundaryGuardsTests
         Assert.AreEqual(1, Count(admissionLockBody, "candidate.CancelAdmission()"), "worker-ndjson:cancellation:one-cancel-inside-lock");
         Assert.AreEqual(1, Count(admissionLockBody, "candidate.TransferToWriter();"), "worker-ndjson:cancellation:one-transfer-inside-lock");
         Assert.AreEqual(1, Count(emitter, "_nextSequence + 1"), "worker-ndjson:order:sequence-owned-by-writer");
-        AssertOrder(emitter,
+        var v1Encoding = Slice(emitter, "private byte[] CreateAndValidateV1(", "private byte[] CreateAndValidateV2(");
+        AssertOrder(v1Encoding,
             "WorkerProtocolMapper.Map(",
             "WorkerProtocolCodec.Serialize(",
-            "_validator.Validate(",
+            "_validator.Validate(");
+        var emit = Slice(emitter, "private async Task EmitAsync(", "private byte[] CreateAndValidateV1(");
+        AssertOrder(emit,
+            "CreateAndValidateV1(candidate, sequence)",
             "_stdout.WriteAsync(",
             "_stdout.FlushAsync(");
         Assert.AreEqual(1, Count(source, "Console.OpenStandardOutput()"), "worker-ndjson:stdout:single-owner");

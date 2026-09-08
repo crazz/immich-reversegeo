@@ -3,8 +3,10 @@ using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -17,17 +19,25 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
     private readonly IHostApplicationLifetime _applicationLifetime;
     private readonly ILogger<InternalWorkerLifecycleService> _logger;
     private readonly WorkerProcessExitOutcomeAccumulator _outcomes;
+    private readonly InternalWorkerProtocolVersion _protocolVersion;
 
     public InternalWorkerLifecycleService(
         IServiceScopeFactory scopeFactory,
         IHostApplicationLifetime applicationLifetime,
         ILogger<InternalWorkerLifecycleService> logger,
-        WorkerProcessExitOutcomeAccumulator outcomes)
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion = InternalWorkerProtocolVersion.V1)
     {
         _scopeFactory = scopeFactory;
         _applicationLifetime = applicationLifetime;
         _logger = logger;
         _outcomes = outcomes;
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
+        _protocolVersion = protocolVersion;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -115,10 +125,13 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         try
         {
             preRequestFinality = services.GetRequiredService<IWorkerPreRequestFinality>();
-            var initializer = services.GetRequiredService<IWorkerStartupInitializer>();
             var availability = services.GetRequiredService<IWorkerTransportAvailability>();
 
-            await initializer.InitialiseAsync(stoppingToken);
+            if (_protocolVersion == InternalWorkerProtocolVersion.V1)
+            {
+                var initializer = services.GetRequiredService<IWorkerStartupInitializer>();
+                await initializer.InitialiseAsync(stoppingToken);
+            }
 
             if (!availability.IsConfigured)
             {
@@ -143,7 +156,20 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             {
                 case InitialProcessingRunAcquisition.Accepted accepted:
                     requestAccepted = true;
-                    await ExecuteAcceptedAsync(services, accepted.Lease, stoppingToken);
+                    if (_protocolVersion == InternalWorkerProtocolVersion.V1)
+                    {
+                        await ExecuteAcceptedProcessingAsync(
+                            services,
+                            accepted.Lease,
+                            stoppingToken);
+                    }
+                    else
+                    {
+                        await ExecuteAcceptedJobAsync(
+                            services,
+                            accepted.Lease,
+                            stoppingToken);
+                    }
                     break;
                 case InitialProcessingRunAcquisition.PreRequestEof:
                     _outcomes.Add(WorkerProcessExitFact.InputInvalid());
@@ -184,7 +210,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         }
     }
 
-    private async Task ExecuteAcceptedAsync(
+    private async Task ExecuteAcceptedProcessingAsync(
         IServiceProvider services,
         IProcessingRunLease lease,
         CancellationToken stoppingToken)
@@ -200,7 +226,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
 
         try
         {
-            linkedCancellation = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lease.CancellationToken);
+            linkedCancellation = CreateExecutionCancellation(stoppingToken, lease);
             finality = services.GetRequiredService<IWorkerAcceptedRunFinality>();
             var executor = services.GetRequiredService<IProcessingRunExecutor>();
             var reporter = services.GetRequiredService<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
@@ -313,6 +339,215 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         }
     }
 
+    private async Task ExecuteAcceptedJobAsync(
+        IServiceProvider services,
+        IProcessingRunLease lease,
+        CancellationToken stoppingToken)
+    {
+        ProcessingRunRequest request = lease.Request;
+        var context = new WorkerJobContext(
+            request.RunId,
+            WorkerJobKind.ProcessAssets,
+            request.Trigger switch
+            {
+                ProcessingRunTrigger.Manual => WorkerJobRequestOrigin.Manual,
+                ProcessingRunTrigger.Scheduled => WorkerJobRequestOrigin.Scheduled,
+                ProcessingRunTrigger.RunOnce => WorkerJobRequestOrigin.RunOnce,
+                _ => throw new ArgumentOutOfRangeException(nameof(request))
+            });
+        WorkerNdjsonEmitter emitter = services.GetRequiredService<WorkerNdjsonEmitter>();
+        var reporter = new WorkerJobNdjsonEventReporter(emitter, context);
+        WorkerInputPumpFinality? inputFinality = null;
+        CancellationTokenSource? linkedCancellation = null;
+        Exception? primaryFailure = null;
+        OutOfMemoryException? firstFatal = null;
+
+        try
+        {
+            linkedCancellation = CreateExecutionCancellation(stoppingToken, lease);
+            lease.NotifyExecutionStarting();
+
+            WorkerJobTerminalPayload terminal;
+            WorkerProcessExitFact exitFact;
+            try
+            {
+                WorkerJobHandlerRegistry registry =
+                    services.GetRequiredService<WorkerJobHandlerRegistry>();
+                if (!registry.TryResolve(
+                        WorkerJobKind.ProcessAssets,
+                        services,
+                        out IWorkerJobHandlerAdapter? handler)
+                    || handler is null)
+                {
+                    throw new InvalidOperationException(
+                        "The accepted worker-job kind has no registered handler.");
+                }
+
+                IWorkerJobResult result = await handler.ExecuteAsync(
+                    context,
+                    new ProcessAssetsRequest(request),
+                    reporter,
+                    linkedCancellation.Token).ConfigureAwait(false);
+                var processAssetsResult = result as ProcessAssetsResult
+                    ?? throw new InvalidOperationException(
+                        "The processing handler returned an incompatible result.");
+                terminal = new WorkerJobTerminalPayload(
+                    WorkerJobTerminalOutcome.Completed,
+                    processAssetsResult.StartedAtUtc,
+                    processAssetsResult.EndedAtUtc,
+                    processAssetsResult,
+                    null);
+                exitFact = WorkerProcessExitFact.Completed();
+            }
+            catch (ProcessAssetsWorkerJobCancelledException cancelled)
+            {
+                terminal = new WorkerJobTerminalPayload(
+                    WorkerJobTerminalOutcome.Cancelled,
+                    cancelled.TypedResult.StartedAtUtc,
+                    cancelled.TypedResult.EndedAtUtc,
+                    null,
+                    null);
+                exitFact = MapProcessingResult(cancelled.ProcessingResult);
+            }
+            catch (ProcessAssetsWorkerJobFailedException failed)
+            {
+                terminal = new WorkerJobTerminalPayload(
+                    WorkerJobTerminalOutcome.Failed,
+                    failed.TypedResult.StartedAtUtc,
+                    failed.TypedResult.EndedAtUtc,
+                    null,
+                    new WorkerJobSafeError(
+                        "process-assets-failed",
+                        WorkerJobFailureCategory.Domain,
+                        "The processing job failed."));
+                exitFact = MapProcessingResult(failed.ProcessingResult);
+            }
+            catch (OperationCanceledException) when (linkedCancellation.IsCancellationRequested)
+            {
+                DateTimeOffset now = services.GetRequiredService<TimeProvider>().GetUtcNow();
+                DateTimeOffset startedAtUtc = reporter.StartedAtUtc ?? now;
+                if (reporter.StartedAtUtc is null)
+                {
+                    await reporter.ReportStartedAsync(
+                        request,
+                        startedAtUtc,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+
+                terminal = new WorkerJobTerminalPayload(
+                    WorkerJobTerminalOutcome.Cancelled,
+                    startedAtUtc,
+                    now,
+                    null,
+                    null);
+                exitFact = WorkerProcessExitFact.ShutdownCancelled();
+            }
+            catch (OutOfMemoryException)
+            {
+                throw;
+            }
+            catch
+            {
+                DateTimeOffset now = services.GetRequiredService<TimeProvider>().GetUtcNow();
+                DateTimeOffset startedAtUtc = reporter.StartedAtUtc ?? now;
+                if (reporter.StartedAtUtc is null)
+                {
+                    await reporter.ReportStartedAsync(
+                        request,
+                        startedAtUtc,
+                        CancellationToken.None).ConfigureAwait(false);
+                }
+
+                terminal = new WorkerJobTerminalPayload(
+                    WorkerJobTerminalOutcome.Failed,
+                    startedAtUtc,
+                    now,
+                    null,
+                    new WorkerJobSafeError(
+                        "worker-job-infrastructure-failed",
+                        WorkerJobFailureCategory.Internal,
+                        "The worker job could not be completed."));
+                exitFact = WorkerProcessExitFact.ExecutionInfrastructure();
+            }
+
+            await emitter.SubmitJobTerminalAsync(
+                context,
+                terminal,
+                CancellationToken.None).ConfigureAwait(false);
+            await services.GetRequiredService<WorkerStdinRequestLoop.WorkerStdinRequestSource>()
+                .NotifyTerminalAsync(request, CancellationToken.None).ConfigureAwait(false);
+            _outcomes.Add(exitFact);
+        }
+        catch (OutOfMemoryException exception)
+        {
+            firstFatal ??= exception;
+        }
+        catch (Exception exception)
+        {
+            primaryFailure = exception;
+            _outcomes.Add(WorkerProcessExitFact.ExecutionInfrastructure());
+        }
+        finally
+        {
+            try
+            {
+                inputFinality = await lease.SettleAsync(CancellationToken.None);
+            }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatal ??= exception;
+            }
+            catch
+            {
+                primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
+                LogSafely("worker-cleanup-failed");
+            }
+
+            try
+            {
+                linkedCancellation?.Dispose();
+            }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatal ??= exception;
+            }
+            catch
+            {
+                primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
+                LogSafely("worker-cleanup-failed");
+            }
+
+            try
+            {
+                await lease.DisposeAsync();
+            }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatal ??= exception;
+            }
+            catch
+            {
+                primaryFailure ??= new InvalidOperationException(WorkerSafeFailure.Cleanup().Category);
+                _outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
+                LogSafely("worker-cleanup-failed");
+            }
+        }
+
+        AddInputFinality(inputFinality);
+
+        if (firstFatal is not null)
+        {
+            ExceptionDispatchInfo.Capture(firstFatal).Throw();
+        }
+
+        if (primaryFailure is not null)
+        {
+            ExceptionDispatchInfo.Capture(primaryFailure).Throw();
+        }
+    }
+
     private void AddInputFinality(WorkerInputPumpFinality? finality)
     {
         switch (finality)
@@ -325,6 +560,11 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                 break;
         }
     }
+
+    private static CancellationTokenSource CreateExecutionCancellation(
+        CancellationToken stoppingToken,
+        IProcessingRunLease lease) =>
+        CancellationTokenSource.CreateLinkedTokenSource(stoppingToken, lease.CancellationToken);
 
     private static WorkerProcessExitFact MapProcessingResult(ProcessingRunResult result)
     {

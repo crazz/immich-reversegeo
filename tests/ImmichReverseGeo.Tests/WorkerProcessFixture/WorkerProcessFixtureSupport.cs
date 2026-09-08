@@ -3,6 +3,7 @@ using System.Diagnostics;
 using System.Text;
 using System.Threading.Channels;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
@@ -55,6 +56,8 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     internal string Root { get; }
     internal string CapturePath => Path.Combine(Root, "request.ndjson");
     internal ProcessingRunRequest Request { get; init; } = new(Guid.NewGuid(), ProcessingRunTrigger.Manual);
+    internal InternalWorkerProtocolVersion ProtocolVersion { get; private set; } =
+        InternalWorkerProtocolVersion.V1;
     internal FixtureEventSink Sink { get; } = new();
     internal ChildWorkerSession? Session { get; private set; }
     internal int? ProcessId { get; private set; }
@@ -71,9 +74,22 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
 
     internal ChildProcessStartDescriptor Descriptor(IReadOnlyList<string> arguments)
     {
+        return Descriptor(arguments, InternalWorkerProtocolVersion.V1);
+    }
+
+    internal ChildProcessStartDescriptor Descriptor(
+        IReadOnlyList<string> arguments,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
         Assert.IsTrue(Path.IsPathFullyQualified(FixtureExecutable), "Fixture locator must be absolute.");
         Assert.IsTrue(File.Exists(FixtureExecutable), $"Build or publish must stage the fixture at {FixtureExecutable}.");
-        return new ChildProcessStartDescriptor(FixtureExecutable, arguments, FixtureDirectory, ChildProcessEnvironmentPolicy.InheritCurrent);
+        var environmentPolicy = protocolVersion switch
+        {
+            InternalWorkerProtocolVersion.V1 => ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion,
+            InternalWorkerProtocolVersion.V2 => ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2,
+            _ => throw new ArgumentOutOfRangeException(nameof(protocolVersion))
+        };
+        return new ChildProcessStartDescriptor(FixtureExecutable, arguments, FixtureDirectory, environmentPolicy);
     }
 
     internal string[] Arguments(string scenario, bool capture = true, params string[] options)
@@ -92,12 +108,62 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         return LaunchAsync(scenario, Sink, capture, options);
     }
 
+    internal Task<ChildWorkerSession> LaunchAsync(
+        string scenario,
+        InternalWorkerProtocolVersion protocolVersion,
+        bool capture = true,
+        params string[] options)
+    {
+        return LaunchAsync(scenario, Sink, protocolVersion, capture, options);
+    }
+
     internal async Task<ChildWorkerSession> LaunchAsync(string scenario, IWorkerProtocolEventSink sink, bool capture = true, params string[] options)
     {
-        var descriptor = Descriptor(Arguments(scenario, capture, options));
+        return await LaunchAsync(
+            scenario,
+            sink,
+            InternalWorkerProtocolVersion.V1,
+            capture,
+            options);
+    }
+
+    internal async Task<ChildWorkerSession> LaunchAsync(
+        string scenario,
+        IWorkerProtocolEventSink sink,
+        InternalWorkerProtocolVersion protocolVersion,
+        bool capture = true,
+        params string[] options)
+    {
+        ProtocolVersion = protocolVersion;
+        var descriptor = Descriptor(Arguments(scenario, capture, options), protocolVersion);
         var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
         var result = await launcher.LaunchDescriptorAsync(descriptor, Request, sink,
-            LauncherOptions, CancellationToken.None).AsTask().WaitAsync(Watchdog);
+            LauncherOptions, CancellationToken.None, protocolVersion).AsTask().WaitAsync(Watchdog);
+        Session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result).Session;
+        Assert.AreEqual(ProcessId, Session.ProcessId);
+        return Session;
+    }
+
+    internal async Task<ChildWorkerSession> LaunchAsync(
+        string scenario,
+        WorkerJobDispatch dispatch,
+        IWorkerJobEventSink sink,
+        InternalWorkerProtocolVersion protocolVersion,
+        bool capture = true,
+        params string[] options)
+    {
+        var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
+        Assert.AreEqual(Request, processAssets.Request.ProcessingRequest);
+        ProtocolVersion = protocolVersion;
+        var descriptor = Descriptor(Arguments(scenario, capture, options), protocolVersion);
+        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
+        var result = await launcher.LaunchDescriptorAsync(
+            descriptor,
+            dispatch,
+            sink,
+            LauncherOptions,
+            CancellationToken.None,
+            protocolVersion).AsTask().WaitAsync(Watchdog);
         Session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result).Session;
         Assert.AreEqual(ProcessId, Session.ProcessId);
         return Session;
@@ -120,6 +186,9 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(result.StandardOutputFinality);
         Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(result.StandardErrorFinality);
         Assert.AreEqual(Request.RunId, result.RunId);
+        Assert.AreEqual(Request.RunId, result.JobId);
+        Assert.AreEqual(WorkerJobKind.ProcessAssets, result.JobKind);
+        Assert.AreEqual(ProtocolVersion, result.ProtocolVersion);
         return result;
     }
 
@@ -127,9 +196,21 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     {
         CollectionAssert.AreEqual(WrittenInput.ToArray(), File.ReadAllBytes(CapturePath), "Capture must preserve the exact input frame, including LF.");
         Assert.AreEqual(1, Directory.GetFiles(Root).Length, "Atomic publication must leave no candidate behind.");
-        var decoded = WorkerProtocolCodec.ParseControllerInput(File.ReadAllBytes(CapturePath));
-        Assert.IsTrue(decoded.IsSuccess);
-        Assert.AreEqual(Request, Assert.IsInstanceOfType<ExecuteRequestPayload>(decoded.Message!.Payload).Request);
+        if (ProtocolVersion == InternalWorkerProtocolVersion.V1)
+        {
+            var decoded = WorkerProtocolCodec.ParseControllerInput(File.ReadAllBytes(CapturePath));
+            Assert.IsTrue(decoded.IsSuccess);
+            Assert.AreEqual(Request, Assert.IsInstanceOfType<ExecuteRequestPayload>(decoded.Message!.Payload).Request);
+        }
+        else
+        {
+            var decoded = WorkerJobProtocolCodec.ParseControllerInput(File.ReadAllBytes(CapturePath));
+            Assert.IsTrue(decoded.IsSuccess);
+            var execute = Assert.IsInstanceOfType<ProcessAssetsExecutePayload>(decoded.Message!.Payload);
+            Assert.AreEqual(Request, execute.Request.ProcessingRequest);
+            Assert.AreEqual(Request.RunId, decoded.Message.JobId);
+            Assert.AreEqual(WorkerJobKind.ProcessAssets, decoded.Message.JobKind);
+        }
     }
 
     public ValueTask DisposeAsync()

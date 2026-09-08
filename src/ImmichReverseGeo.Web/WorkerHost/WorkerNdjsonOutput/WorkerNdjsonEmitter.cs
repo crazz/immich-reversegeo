@@ -4,6 +4,7 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.WorkerHost;
@@ -23,8 +24,12 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<WorkerNdjsonEmitter> _logger;
     private readonly WorkerProcessExitOutcomeAccumulator _outcomes;
+    private readonly InternalWorkerProtocolVersion _protocolVersion;
+    private readonly WorkerJobReadyPayload? _jobReadyPayload;
     private readonly Channel<EmissionCandidate> _queue;
     private readonly WorkerProtocolEventStreamValidator _validator = new();
+    private WorkerJobOutputStreamValidator? _jobValidator;
+    private WorkerJobOutputMessage? _jobReady;
     private readonly object _stateGate = new();
     private readonly CancellationTokenSource _lifetimeCancellation = new();
     private readonly Task _writer;
@@ -44,7 +49,9 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         TimeProvider timeProvider,
         ILogger<WorkerNdjsonEmitter> logger,
         WorkerProcessExitOutcomeAccumulator outcomes,
-        int queueCapacity = ProductionQueueCapacity)
+        int queueCapacity = ProductionQueueCapacity,
+        InternalWorkerProtocolVersion protocolVersion = InternalWorkerProtocolVersion.V1,
+        WorkerJobReadyPayload? jobReadyPayload = null)
     {
         ArgumentNullException.ThrowIfNull(stdout);
         ArgumentNullException.ThrowIfNull(timeProvider);
@@ -57,6 +64,20 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         _timeProvider = timeProvider;
         _logger = logger;
         _outcomes = outcomes;
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
+        if ((protocolVersion == InternalWorkerProtocolVersion.V2) != (jobReadyPayload is not null))
+        {
+            throw new ArgumentException(
+                "Protocol v2 requires registered job-kind metadata and protocol v1 must not receive it.",
+                nameof(jobReadyPayload));
+        }
+
+        _protocolVersion = protocolVersion;
+        _jobReadyPayload = jobReadyPayload;
         _queue = Channel.CreateBounded<EmissionCandidate>(new BoundedChannelOptions(queueCapacity)
         {
             FullMode = BoundedChannelFullMode.Wait,
@@ -99,6 +120,51 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
                 timeProvider,
                 logger,
                 outcomes);
+            broken.Break(WorkerNdjsonFailureStage.OpenStandardOutput);
+            return broken;
+        }
+    }
+
+    internal static WorkerNdjsonEmitter CreateProduction(
+        IWorkerNdjsonOutputStreamFactory stdoutFactory,
+        TimeProvider timeProvider,
+        ILogger<WorkerNdjsonEmitter> logger,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion,
+        WorkerJobReadyPayload? jobReadyPayload)
+    {
+        ArgumentNullException.ThrowIfNull(stdoutFactory);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(outcomes);
+
+        try
+        {
+            return new WorkerNdjsonEmitter(
+                stdoutFactory.OpenStandardOutput(),
+                WorkerNdjsonOutputStreamOwnership.Unowned,
+                timeProvider,
+                logger,
+                outcomes,
+                ProductionQueueCapacity,
+                protocolVersion,
+                jobReadyPayload);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            var broken = new WorkerNdjsonEmitter(
+                Stream.Null,
+                WorkerNdjsonOutputStreamOwnership.Unowned,
+                timeProvider,
+                logger,
+                outcomes,
+                ProductionQueueCapacity,
+                protocolVersion,
+                jobReadyPayload);
             broken.Break(WorkerNdjsonFailureStage.OpenStandardOutput);
             return broken;
         }
@@ -171,6 +237,10 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
     internal async ValueTask SubmitAsync(ProcessingEvent processingEvent, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(processingEvent);
+        if (_protocolVersion != InternalWorkerProtocolVersion.V1)
+        {
+            throw new InvalidOperationException("Processing protocol output requires protocol v1.");
+        }
 
         try
         {
@@ -183,6 +253,84 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
                 cancellationToken).ConfigureAwait(false);
 
             // An accepted candidate is committed; intentionally do not use the caller token here.
+            await candidate.Completion.Task.ConfigureAwait(false);
+        }
+        catch (OutOfMemoryException outOfMemoryFailure)
+        {
+            throw FailFatally(outOfMemoryFailure);
+        }
+    }
+
+    internal ValueTask SubmitJobStartedAsync(
+        WorkerJobContext context,
+        string trigger,
+        DateTimeOffset startedAtUtc,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        return SubmitJobOutputAsync(
+            context,
+            new WorkerJobStartedPayload(trigger, startedAtUtc),
+            startedAtUtc,
+            isJobStarted: true,
+            isTerminal: false,
+            cancellationToken);
+    }
+
+    internal ValueTask SubmitJobEventAsync(
+        WorkerJobContext context,
+        WorkerJobHandlerEvent @event,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(@event);
+        return SubmitJobOutputAsync(
+            context,
+            @event.Payload,
+            @event.TimestampUtc,
+            isJobStarted: false,
+            isTerminal: false,
+            cancellationToken);
+    }
+
+    internal ValueTask SubmitJobTerminalAsync(
+        WorkerJobContext context,
+        WorkerJobTerminalPayload terminal,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(terminal);
+        return SubmitJobOutputAsync(
+            context,
+            terminal,
+            terminal.EndedAtUtc,
+            isJobStarted: false,
+            isTerminal: true,
+            cancellationToken);
+    }
+
+    private async ValueTask SubmitJobOutputAsync(
+        WorkerJobContext context,
+        WorkerJobOutputPayload payload,
+        DateTimeOffset timestampUtc,
+        bool isJobStarted,
+        bool isTerminal,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(payload);
+        if (_protocolVersion != InternalWorkerProtocolVersion.V2)
+        {
+            throw new InvalidOperationException("Typed worker-job output requires protocol v2.");
+        }
+
+        try
+        {
+            var candidate = new EmissionCandidate(context, payload, timestampUtc);
+            await EnqueueAsync(
+                candidate,
+                requiresReady: true,
+                isRunStarted: isJobStarted,
+                isTerminal,
+                cancellationToken).ConfigureAwait(false);
             await candidate.Completion.Task.ConfigureAwait(false);
         }
         catch (OutOfMemoryException outOfMemoryFailure)
@@ -320,26 +468,12 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
     private async Task EmitAsync(EmissionCandidate candidate)
     {
         var sequence = checked(_nextSequence + 1);
-        WorkerProtocolEvent @event;
-        try
-        {
-            @event = candidate.ProcessingEvent is null
-                ? WorkerProtocolMapper.Ready(sequence, _timeProvider.GetUtcNow())
-                : WorkerProtocolMapper.Map(candidate.ProcessingEvent, sequence, _timeProvider.GetUtcNow());
-        }
-        catch (OutOfMemoryException)
-        {
-            throw;
-        }
-        catch
-        {
-            throw Break(WorkerNdjsonFailureStage.Mapping);
-        }
-
         byte[] json;
         try
         {
-            json = WorkerProtocolCodec.Serialize(@event);
+            json = _protocolVersion == InternalWorkerProtocolVersion.V1
+                ? CreateAndValidateV1(candidate, sequence)
+                : CreateAndValidateV2(candidate, sequence);
         }
         catch (OutOfMemoryException)
         {
@@ -352,22 +486,6 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         catch
         {
             throw Break(WorkerNdjsonFailureStage.Serialization);
-        }
-
-        try
-        {
-            if (!_validator.Validate(@event).IsSuccess)
-            {
-                throw new InvalidOperationException();
-            }
-        }
-        catch (OutOfMemoryException)
-        {
-            throw;
-        }
-        catch
-        {
-            throw Break(WorkerNdjsonFailureStage.Validation);
         }
 
         byte[] frame;
@@ -429,7 +547,7 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
         }
 
         _nextSequence = sequence;
-        if (candidate.ProcessingEvent is null)
+        if (candidate.IsReady)
         {
             lock (_stateGate)
             {
@@ -437,10 +555,98 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
             }
         }
 
-        if (candidate.ProcessingEvent is RunFinished)
+        if (candidate.IsTerminal)
         {
             _queue.Writer.TryComplete();
         }
+    }
+
+    private byte[] CreateAndValidateV1(EmissionCandidate candidate, long sequence)
+    {
+        WorkerProtocolEvent @event;
+        try
+        {
+            @event = candidate.ProcessingEvent is null
+                ? WorkerProtocolMapper.Ready(sequence, _timeProvider.GetUtcNow())
+                : WorkerProtocolMapper.Map(candidate.ProcessingEvent, sequence, _timeProvider.GetUtcNow());
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw Break(WorkerNdjsonFailureStage.Mapping);
+        }
+
+        byte[] json = WorkerProtocolCodec.Serialize(@event);
+        if (!_validator.Validate(@event).IsSuccess)
+        {
+            throw Break(WorkerNdjsonFailureStage.Validation);
+        }
+
+        return json;
+    }
+
+    private byte[] CreateAndValidateV2(EmissionCandidate candidate, long sequence)
+    {
+        WorkerJobOutputMessage message;
+        try
+        {
+            if (candidate.IsReady)
+            {
+                message = WorkerJobProtocolMapper.Ready(
+                    sequence,
+                    _timeProvider.GetUtcNow(),
+                    _jobReadyPayload!);
+                _jobReady = message;
+            }
+            else if (candidate.JobPayload is WorkerJobStartedPayload started)
+            {
+                message = WorkerJobProtocolMapper.JobStarted(
+                    candidate.JobContext!,
+                    started.Trigger,
+                    started.StartedAtUtc,
+                    sequence);
+                _jobValidator = new WorkerJobOutputStreamValidator(
+                    candidate.JobContext!.JobId,
+                    candidate.JobContext.JobKind);
+                if (_jobReady is null || !_jobValidator.Validate(_jobReady).IsSuccess)
+                {
+                    throw new InvalidOperationException();
+                }
+            }
+            else if (candidate.JobPayload is WorkerJobTerminalPayload terminal)
+            {
+                message = WorkerJobProtocolMapper.Terminal(
+                    candidate.JobContext!,
+                    terminal,
+                    sequence);
+            }
+            else
+            {
+                message = WorkerJobProtocolMapper.Map(
+                    candidate.JobContext!,
+                    new WorkerJobHandlerEvent(candidate.JobTimestampUtc!.Value, candidate.JobPayload!),
+                    sequence);
+            }
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            throw Break(WorkerNdjsonFailureStage.Mapping);
+        }
+
+        if (message.Type != WorkerJobProtocolV2.ReadyType
+            && (_jobValidator is null || !_jobValidator.Validate(message).IsSuccess))
+        {
+            throw Break(WorkerNdjsonFailureStage.Validation);
+        }
+
+        return WorkerJobProtocolCodec.Serialize(message);
     }
 
     public ValueTask DisposeAsync()
@@ -506,7 +712,11 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
             failure ??= Break(WorkerNdjsonFailureStage.Writer);
         }
 
-        if (failure is null && !_validator.FinalizeStream().IsComplete)
+        bool protocolIncomplete = _protocolVersion == InternalWorkerProtocolVersion.V1
+            ? !_validator.FinalizeStream().IsComplete
+            : _jobValidator is not null
+                && _jobValidator.FinalizeOutput(hasPartialFrame: false) is not null;
+        if (failure is null && protocolIncomplete)
         {
             failure = Break(WorkerNdjsonFailureStage.Disposal);
         }
@@ -675,7 +885,22 @@ internal sealed class WorkerNdjsonEmitter : IWorkerReadinessPublisher, IAsyncDis
             ProcessingEvent = processingEvent;
         }
 
+        internal EmissionCandidate(
+            WorkerJobContext jobContext,
+            WorkerJobOutputPayload jobPayload,
+            DateTimeOffset jobTimestampUtc)
+        {
+            JobContext = jobContext;
+            JobPayload = jobPayload;
+            JobTimestampUtc = jobTimestampUtc;
+        }
+
         internal ProcessingEvent? ProcessingEvent { get; }
+        internal WorkerJobContext? JobContext { get; }
+        internal WorkerJobOutputPayload? JobPayload { get; }
+        internal DateTimeOffset? JobTimestampUtc { get; }
+        internal bool IsReady => ProcessingEvent is null && JobPayload is null;
+        internal bool IsTerminal => ProcessingEvent is RunFinished || JobPayload is WorkerJobTerminalPayload;
         internal TaskCompletionSource Completion { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal void CancelAdmission()

@@ -1,6 +1,7 @@
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.ChildWorkerCancellation;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -11,6 +12,7 @@ using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using System.Text;
+using System.Text.Json;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
 namespace ImmichReverseGeo.Tests.ChildWorkerExecution;
@@ -20,6 +22,111 @@ namespace ImmichReverseGeo.Tests.ChildWorkerExecution;
 public sealed class ChildBackendLifecycleTests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
+
+    [TestMethod]
+    [TestCategory("Change47")]
+    public async Task ExplicitV1Launch_RemovesAmbientV2AndDefersOneCancelUntilExecuteFlushThenReleasesExactHandle()
+    {
+        var input = new SessionInputStream { BlockFlushCall = 1 };
+        var ambientEnvironment = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable] = "2",
+            ["KEEP_ME"] = "unchanged"
+        };
+        await using var fixture = WebChildBackendFixture.Create(
+            new ImmediateInvocationBuilder(),
+            firstInput: input,
+            firstEnvironment: ambientEnvironment);
+        Task<ProcessingRunAdmissionResult> dispatch = fixture.Coordinator.TriggerManualAsync();
+        Task? stop = null;
+        try
+        {
+            Assert.AreEqual(
+                ProcessingRunAdmissionResult.Accepted,
+                await dispatch.WaitAsync(Bound),
+                "v1-ambient-admission");
+            await fixture.Launcher.WaitUntilEnteredAsync();
+            ProcessingRunRequest request = fixture.Launcher.Request!;
+            SessionTestProcess process = fixture.Launcher.Process!;
+
+            process.StandardOutputSource.Enqueue(
+                SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
+            await input.BlockedFlushEntered.WaitAsync(Bound);
+
+            Assert.IsFalse(fixture.Launcher.Session!.ExecuteRequestAccepted.IsCompleted, "execute-not-accepted-before-flush");
+            Assert.AreEqual(1, input.WriteCalls, "only-execute-written-before-flush");
+            Assert.AreEqual(1, input.FlushCalls, "execute-flush-is-blocked");
+            Assert.AreEqual(1, input.Frames.Count, "no-cancel-frame-before-execute-flush");
+            Assert.AreEqual(
+                ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion,
+                fixture.Launcher.Descriptor!.EnvironmentPolicy,
+                "descriptor-explicit-v1-policy");
+            Assert.IsFalse(
+                fixture.Launcher.ChildEnvironment!.ContainsKey(
+                    ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable),
+                "same-launch-child-environment-removes-ambient-selector");
+            Assert.AreEqual("unchanged", fixture.Launcher.ChildEnvironment["KEEP_ME"], "same-launch-unrelated-environment");
+            Assert.AreEqual("2", ambientEnvironment[ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable], "parent-environment-unmutated");
+
+            stop = fixture.Coordinator.StopActiveRun()
+                ?? throw new AssertFailedException("the admitted worker did not expose its stop task");
+            await fixture.Launcher.Session.FirstTerminationRequest.WaitAsync(Bound);
+            Assert.AreEqual(1, input.WriteCalls, "stop-does-not-write-before-execute-flush");
+
+            input.ReleaseBlockedFlush();
+            await input.SecondFlush.WaitAsync(Bound);
+            Assert.AreEqual(2, input.WriteCalls, "one-execute-one-cancel-write");
+            Assert.AreEqual(2, input.FlushCalls, "one-execute-one-cancel-flush");
+            Assert.AreSame(stop, fixture.Coordinator.StopActiveRun(), "repeated-stop-joins-one-operation");
+            AssertV1ExecuteAndCancelFrames(input.Frames, request);
+
+            var terminalCommitted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            void ObserveTerminal()
+            {
+                if (fixture.Reporter.GetFinalizationReceipt(request) is not null)
+                {
+                    terminalCommitted.TrySetResult();
+                }
+            }
+
+            fixture.State.OnChanged += ObserveTerminal;
+            try
+            {
+                EmitPostReadyTerminalSequence(process, request, WorkerProtocolV1.CancelledType);
+                await terminalCommitted.Task.WaitAsync(Bound);
+                Assert.AreSame(request, fixture.Coordinator.ActiveRequest, "terminal-retains-exact-handle-before-process-finality");
+                Assert.IsFalse(fixture.Coordinator.WaitForActiveRunAsync().IsCompleted, "terminal-does-not-release-before-stream-and-exit-finality");
+            }
+            finally
+            {
+                fixture.State.OnChanged -= ObserveTerminal;
+            }
+
+            process.Exit(130);
+            await stop.WaitAsync(Bound);
+            await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
+
+            ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)!;
+            Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome, "authoritative-cancelled-terminal");
+            Assert.AreSame(request, receipt.Request, "receipt-retains-admitted-request");
+            Assert.IsNull(fixture.Coordinator.ActiveRequest, "exact-handle-released-after-finality");
+            Assert.IsFalse(fixture.State.IsRunning, "processing-state-idle-after-finality");
+            Assert.AreEqual(1, process.DisposeCalls, "owned-process-disposed-once");
+            Assert.AreEqual(0, process.KillCalls, "cooperative-terminal-needs-no-kill");
+        }
+        finally
+        {
+            input.ReleaseBlockedFlush();
+            fixture.Launcher.Process?.Exit(130);
+            if (stop is not null)
+            {
+                await stop.WaitAsync(Bound);
+            }
+
+            await dispatch.WaitAsync(Bound);
+            await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
+        }
+    }
 
     [TestMethod]
     [TestCategory("Change44")]
@@ -687,6 +794,40 @@ public sealed class ChildBackendLifecycleTests
                 : new CancelledPayload("manual", at, at, 0, 0, 0, 0))));
     }
 
+    private static void AssertV1ExecuteAndCancelFrames(
+        IReadOnlyList<byte[]> frames,
+        ProcessingRunRequest request)
+    {
+        Assert.AreEqual(2, frames.Count, "one-execute-and-one-cancel-frame");
+        WorkerProtocolControllerParseResult execute = WorkerProtocolCodec.ParseControllerInput(frames[0]);
+        WorkerProtocolControllerParseResult cancel = WorkerProtocolCodec.ParseControllerInput(frames[1]);
+        Assert.IsTrue(execute.IsSuccess, "v1-execute-parses");
+        Assert.IsTrue(cancel.IsSuccess, "v1-cancel-parses");
+        Assert.AreEqual(WorkerProtocolV1.Version, ReadVersion(frames[0]), "v1-execute-version");
+        Assert.AreEqual(WorkerProtocolV1.Version, ReadVersion(frames[1]), "v1-cancel-version");
+        Assert.AreEqual(WorkerProtocolV1.ExecuteType, execute.Message!.Type, "v1-execute-type");
+        Assert.AreEqual(WorkerProtocolV1.CancelType, cancel.Message!.Type, "v1-cancel-type");
+        CollectionAssert.AreEqual(
+            frames[0],
+            WorkerProtocolCodec.SerializeControllerInput(execute.Message),
+            "v1-execute-canonical-bytes-match-frozen-codec");
+        CollectionAssert.AreEqual(
+            frames[1],
+            WorkerProtocolCodec.SerializeControllerInput(cancel.Message),
+            "v1-cancel-canonical-bytes-match-frozen-codec");
+        Assert.AreEqual(request.RunId, execute.Message.RunId, "execute-admitted-run-id");
+        Assert.AreEqual(request.RunId, cancel.Message.RunId, "cancel-admitted-run-id");
+        ProcessingRunRequest encodedRequest = ((ExecuteRequestPayload)execute.Message.Payload).Request;
+        Assert.AreEqual(request.RunId, encodedRequest.RunId, "execute-request-run-id");
+        Assert.AreEqual(request.Trigger, encodedRequest.Trigger, "execute-request-trigger");
+    }
+
+    private static int ReadVersion(byte[] frame)
+    {
+        using JsonDocument document = JsonDocument.Parse(frame);
+        return document.RootElement.GetProperty("version").GetInt32();
+    }
+
     private sealed class WebChildBackendFixture : IAsyncDisposable
     {
         private readonly string _root;
@@ -721,11 +862,17 @@ public sealed class ChildBackendLifecycleTests
             ChildProcessKillOutcome killOutcome = ChildProcessKillOutcome.Requested,
             bool exitOnKill = true,
             SessionInputStream? firstInput = null,
+            Dictionary<string, string?>? firstEnvironment = null,
             IScheduledRunWorkGate? scheduledGate = null,
             bool gateAcceptedStatus = false)
         {
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change33", Guid.NewGuid().ToString("N"));
-            var launcher = new ControlledSessionLauncher(startFailure, killOutcome, exitOnKill, firstInput);
+            var launcher = new ControlledSessionLauncher(
+                startFailure,
+                killOutcome,
+                exitOnKill,
+                firstInput,
+                firstEnvironment);
             try
             {
                 var services = new ServiceCollection();
@@ -789,17 +936,20 @@ public sealed class ChildBackendLifecycleTests
         private readonly ChildProcessKillOutcome _killOutcome;
         private readonly bool _exitOnKill;
         private readonly SessionInputStream? _firstInput;
+        private readonly Dictionary<string, string?>? _firstEnvironment;
 
         internal ControlledSessionLauncher(
             bool startFailure,
             ChildProcessKillOutcome killOutcome,
             bool exitOnKill,
-            SessionInputStream? firstInput)
+            SessionInputStream? firstInput,
+            Dictionary<string, string?>? firstEnvironment)
         {
             _startFailure = startFailure;
             _killOutcome = killOutcome;
             _exitOnKill = exitOnKill;
             _firstInput = firstInput;
+            _firstEnvironment = firstEnvironment;
         }
 
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -808,6 +958,8 @@ public sealed class ChildBackendLifecycleTests
         internal SessionTestProcess? Process { get; private set; }
         internal ChildWorkerSession? Session { get; private set; }
         internal ChildWorkerObserverArmingAcknowledgements? ObserverArming { get; private set; }
+        internal ChildProcessStartDescriptor? Descriptor { get; private set; }
+        internal Dictionary<string, string?>? ChildEnvironment { get; private set; }
         internal int CallCount { get; private set; }
 
         internal async Task WaitUntilEnteredAsync()
@@ -826,12 +978,14 @@ public sealed class ChildBackendLifecycleTests
 
         public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerInvocation invocation,
-            ProcessingRunRequest request,
-            IWorkerProtocolEventSink eventSink,
+            WorkerJobDispatch dispatch,
+            IWorkerJobEventSink eventSink,
             ChildWorkerLauncherOptions options,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(invocation);
+            var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
+            ProcessingRunRequest request = processAssets.Request.ProcessingRequest;
             CallCount++;
             Request = request;
             if (_startFailure)
@@ -840,20 +994,23 @@ public sealed class ChildBackendLifecycleTests
                 return new ChildWorkerLaunchResult.StartFailed(ChildWorkerStartFailureCategory.ProcessStartFailed);
             }
 
-            Process = new SessionTestProcess(
-                CallCount == 1 && _firstInput is not null
-                    ? _firstInput
-                    : new SessionInputStream(),
+            var factory = new ControlledProcessFactory(
+                CallCount == 1 ? _firstInput : null,
                 _killOutcome,
-                _exitOnKill);
-            var observerArming = new ChildWorkerObserverArmingAcknowledgements();
-            ObserverArming = observerArming;
-            Session = await ChildWorkerSession.CreateAsync(
-                Process,
-                request,
+                _exitOnKill,
+                CallCount == 1 ? _firstEnvironment : null);
+            ChildWorkerLaunchResult result = await new ChildWorkerLauncher(
+                factory,
+                () => ObserverArming = new ChildWorkerObserverArmingAcknowledgements()).LaunchAsync(
+                invocation,
+                dispatch,
                 eventSink,
                 options,
-                observerArming);
+                cancellationToken);
+            Process = factory.Process;
+            Descriptor = factory.Descriptor;
+            ChildEnvironment = factory.ChildEnvironment;
+            Session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result, "controlled-real-launcher").Session;
             if (CallCount == 1)
             {
                 Entered.TrySetResult();
@@ -862,7 +1019,36 @@ public sealed class ChildBackendLifecycleTests
             {
                 SecondEntered.TrySetResult();
             }
-            return new ChildWorkerLaunchResult.Started(Session);
+            return result;
+        }
+
+        private sealed class ControlledProcessFactory(
+            SessionInputStream? input,
+            ChildProcessKillOutcome killOutcome,
+            bool exitOnKill,
+            Dictionary<string, string?>? parentEnvironment) : IChildProcessFactory
+        {
+            internal SessionTestProcess? Process { get; private set; }
+            internal ChildProcessStartDescriptor? Descriptor { get; private set; }
+            internal Dictionary<string, string?>? ChildEnvironment { get; private set; }
+
+            public ValueTask<IChildProcess?> StartAsync(
+                ChildProcessStartDescriptor descriptor,
+                CancellationToken cancellationToken)
+            {
+                Descriptor = descriptor;
+                var source = parentEnvironment
+                    ?? new Dictionary<string, string?>(StringComparer.Ordinal);
+                ChildEnvironment = new Dictionary<string, string?>(source, source.Comparer);
+                SystemChildProcessFactory.ApplyEnvironmentPolicy(
+                    ChildEnvironment,
+                    descriptor.EnvironmentPolicy);
+                Process = new SessionTestProcess(
+                    input ?? new SessionInputStream(),
+                    killOutcome,
+                    exitOnKill);
+                return ValueTask.FromResult<IChildProcess?>(Process);
+            }
         }
 
         private static string DescribeObserverArming(

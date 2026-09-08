@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -324,6 +325,12 @@ internal sealed partial class ChildWorkerSession
     {
         await Task.CompletedTask.ConfigureAwait(ConfigureAwaitOptions.ForceYielding);
 
+        if (!_isCancellable)
+        {
+            SetDeliveryPhase(ChildWorkerCancelDeliveryPhase.NotSupported);
+            return;
+        }
+
         var winner = await Task
             .WhenAny(_startup.Task, _confirmedExit.Task, deadline)
             .ConfigureAwait(false);
@@ -369,14 +376,24 @@ internal sealed partial class ChildWorkerSession
         byte[] frame;
         try
         {
-            var message = new WorkerProtocolControllerMessage(
-                WorkerProtocolV1.ControlCategory,
-                WorkerProtocolV1.CancelType,
-                2,
-                _timeProvider.GetUtcNow(),
-                _request.RunId,
-                new CancelControlPayload());
-            var objectBytes = WorkerProtocolCodec.SerializeControllerInput(message);
+            byte[] objectBytes = _protocolVersion == InternalWorkerProtocolVersion.V1
+                ? WorkerProtocolCodec.SerializeControllerInput(
+                    new WorkerProtocolControllerMessage(
+                        WorkerProtocolV1.ControlCategory,
+                        WorkerProtocolV1.CancelType,
+                        2,
+                        _timeProvider.GetUtcNow(),
+                        RunId,
+                        new CancelControlPayload()))
+                : WorkerJobProtocolCodec.SerializeControllerInput(
+                    new WorkerJobControllerMessage(
+                        WorkerJobProtocolV2.ControlCategory,
+                        WorkerJobProtocolV2.CancelType,
+                        2,
+                        _timeProvider.GetUtcNow(),
+                        JobId,
+                        JobKind,
+                        new WorkerJobCancelPayload()));
             frame = new byte[objectBytes.Length + 1];
             objectBytes.CopyTo(frame, 0);
             frame[^1] = (byte)10;

@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.ChildWorkerCancellation;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -63,7 +64,9 @@ public sealed class FailureControlPlaneTests
 
         int retainedLogCount = fixture.State.RecentLog.Count;
         await fixture.Launcher.First.EventSink!.AcceptAsync(
-            WorkerProtocolMapper.Ready(9, clock.GetUtcNow()),
+            ProcessAssetsWorkerJobProjection.MapV1(
+                firstRequest,
+                WorkerProtocolMapper.Ready(9, clock.GetUtcNow())),
             CancellationToken.None);
         Assert.AreEqual(retainedLogCount, fixture.State.RecentLog.Count, "ready-timeout-late-event-ignored");
 
@@ -415,20 +418,23 @@ public sealed class FailureControlPlaneTests
 
         public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerInvocation invocation,
-            ProcessingRunRequest request,
-            IWorkerProtocolEventSink eventSink,
+            WorkerJobDispatch dispatch,
+            IWorkerJobEventSink eventSink,
             ChildWorkerLauncherOptions options,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(invocation);
+            var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
+            ProcessingRunRequest request = processAssets.Request.ProcessingRequest;
             var input = _inputFactory();
             var process = new SessionTestProcess(input, ChildProcessKillOutcome.Requested, exitOnKill: false);
             ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
                 process,
-                request,
+                dispatch,
                 eventSink,
                 options,
-                new ChildWorkerObserverArmingAcknowledgements());
+                new ChildWorkerObserverArmingAcknowledgements(),
+                invocation.ProtocolVersion);
             var launch = new FailureLaunch(request, input, process, session, eventSink);
             _launches.Add(launch);
             if (_launches.Count == 1)
@@ -457,7 +463,7 @@ public sealed class FailureControlPlaneTests
         SessionInputStream Input,
         SessionTestProcess Process,
         ChildWorkerSession Session,
-        IWorkerProtocolEventSink EventSink);
+        IWorkerJobEventSink EventSink);
 
     private sealed class ScopeDisposalControl(bool throwAfterFirstGate)
     {

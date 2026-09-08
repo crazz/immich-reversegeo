@@ -1,8 +1,10 @@
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using Microsoft.Extensions.Logging;
 
@@ -25,8 +27,10 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
 {
     private readonly IWorkerStandardInputStreamFactory _inputFactory;
     private readonly ILogger<WorkerStdinRequestSource> _logger;
+    private readonly InternalWorkerProtocolVersion _protocolVersion;
     private readonly object _gate = new();
     private readonly WorkerProtocolControllerInputValidator _validator = new();
+    private readonly WorkerJobControllerInputValidator? _jobValidator;
     private readonly TaskCompletionSource<InitialProcessingRunAcquisition> _initial = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<WorkerInputPumpFinality> _finality = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private WorkerStdinFrameReader? _reader;
@@ -40,12 +44,30 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
 
     internal WorkerStdinRequestSource(
         IWorkerStandardInputStreamFactory inputFactory,
-        ILogger<WorkerStdinRequestSource> logger)
+        ILogger<WorkerStdinRequestSource> logger,
+        InternalWorkerProtocolVersion protocolVersion = InternalWorkerProtocolVersion.V1,
+        IReadOnlyList<WorkerJobDescriptor>? supportedJobDescriptors = null)
     {
         ArgumentNullException.ThrowIfNull(inputFactory);
         ArgumentNullException.ThrowIfNull(logger);
         _inputFactory = inputFactory;
         _logger = logger;
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
+        if ((protocolVersion == InternalWorkerProtocolVersion.V2) != (supportedJobDescriptors is not null))
+        {
+            throw new ArgumentException(
+                "Protocol v2 requires registered job kinds and protocol v1 must not receive them.",
+                nameof(supportedJobDescriptors));
+        }
+
+        _protocolVersion = protocolVersion;
+        _jobValidator = supportedJobDescriptors is null
+            ? null
+            : new WorkerJobControllerInputValidator(supportedJobDescriptors);
     }
 
     public Task<InitialProcessingRunAcquisition> AcquireAsync(CancellationToken cancellationToken)
@@ -193,35 +215,14 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
                 return;
             }
 
-            var parsed = WorkerProtocolCodec.ParseControllerInput(frameResult.Frame!);
-            if (!parsed.IsSuccess)
-            {
-                RecordInputFailure(WorkerSafeFailure.Input(parsed.Failure!.Code));
-                return;
-            }
-
-            WorkerStdinProcessingRunLease? acceptedLease = null;
-            var requestCancellation = false;
-            WorkerSafeFailure? validationFailure = null;
-            lock (_gate)
-            {
-                var validated = _validator.Validate(parsed.Message!, true, ToProtocolPhase(_phase));
-                if (!validated.IsSuccess)
-                {
-                    validationFailure = WorkerSafeFailure.Input(validated.Failure!.Code);
-                }
-                else if (validated.Message!.Payload is ExecuteRequestPayload execute)
-                {
-                    acceptedLease = new WorkerStdinProcessingRunLease(execute.Request, this);
-                    _lease = acceptedLease;
-                }
-                else
-                {
-                    requestCancellation = validated.CancelDisposition is
-                        WorkerProtocolCancelDisposition.LatchedBeforeInvocation or
-                        WorkerProtocolCancelDisposition.CooperativeCancellationRequested;
-                }
-            }
+            WorkerStdinProcessingRunLease? acceptedLease;
+            bool requestCancellation;
+            WorkerSafeFailure? validationFailure;
+            AcceptFrame(
+                frameResult.Frame!,
+                out acceptedLease,
+                out requestCancellation,
+                out validationFailure);
 
             if (validationFailure is not null)
             {
@@ -247,12 +248,103 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
         }
     }
 
+    private void AcceptFrame(
+        ReadOnlyMemory<byte> frame,
+        out WorkerStdinProcessingRunLease? acceptedLease,
+        out bool requestCancellation,
+        out WorkerSafeFailure? validationFailure)
+    {
+        acceptedLease = null;
+        requestCancellation = false;
+        validationFailure = null;
+
+        if (_protocolVersion == InternalWorkerProtocolVersion.V1)
+        {
+            WorkerProtocolControllerParseResult parsed =
+                WorkerProtocolCodec.ParseControllerInput(frame.Span);
+            if (!parsed.IsSuccess)
+            {
+                validationFailure = WorkerSafeFailure.Input(parsed.Failure!.Code);
+                return;
+            }
+
+            lock (_gate)
+            {
+                WorkerProtocolControllerParseResult validated = _validator.Validate(
+                    parsed.Message!,
+                    true,
+                    ToProtocolPhase(_phase));
+                if (!validated.IsSuccess)
+                {
+                    validationFailure = WorkerSafeFailure.Input(validated.Failure!.Code);
+                }
+                else if (validated.Message!.Payload is ExecuteRequestPayload execute)
+                {
+                    acceptedLease = new WorkerStdinProcessingRunLease(execute.Request, this);
+                    _lease = acceptedLease;
+                }
+                else
+                {
+                    requestCancellation = validated.CancelDisposition is
+                        WorkerProtocolCancelDisposition.LatchedBeforeInvocation or
+                        WorkerProtocolCancelDisposition.CooperativeCancellationRequested;
+                }
+            }
+
+            return;
+        }
+
+        WorkerJobControllerParseResult jobParsed =
+            WorkerJobProtocolCodec.ParseControllerInput(frame.Span);
+        if (!jobParsed.IsSuccess)
+        {
+            validationFailure = WorkerSafeFailure.Input(jobParsed.Failure!.Code);
+            return;
+        }
+
+        lock (_gate)
+        {
+            WorkerJobControllerValidationResult validated = _jobValidator!.Validate(
+                jobParsed.Message!,
+                isReady: true,
+                ToJobProtocolPhase(_phase));
+            if (!validated.IsSuccess)
+            {
+                validationFailure = WorkerSafeFailure.Input(validated.Failure!.Code);
+            }
+            else if (validated.Message!.Payload is ProcessAssetsExecutePayload execute)
+            {
+                acceptedLease = new WorkerStdinProcessingRunLease(
+                    execute.Request.ProcessingRequest,
+                    this);
+                _lease = acceptedLease;
+            }
+            else
+            {
+                requestCancellation = validated.CancelDisposition is
+                    WorkerJobCancelDisposition.LatchedBeforeInvocation or
+                    WorkerJobCancelDisposition.CooperativeCancellationRequested;
+            }
+        }
+    }
+
     private void HandleEndOfInput()
     {
         InitialProcessingRunAcquisition? initial = null;
         lock (_gate)
         {
-            if (_lease is null)
+            if (_protocolVersion == InternalWorkerProtocolVersion.V2)
+            {
+                if (_lease is null)
+                {
+                    initial = InitialProcessingRunAcquisition.EndOfInput();
+                }
+                else
+                {
+                    RecordFinalityUnderGate(WorkerInputPumpFinality.ControlsClosed());
+                }
+            }
+            else if (_lease is null)
             {
                 var finalized = _validator.FinalizeInput(false);
                 initial = finalized.IsSuccess
@@ -269,7 +361,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
                 else
                 {
                     RecordFinalityUnderGate(WorkerInputPumpFinality.InputFailure(
-                        WorkerSafeFailure.Input(finalized.Failure!.Code)));
+                    WorkerSafeFailure.Input(finalized.Failure!.Code)));
                 }
             }
         }
@@ -498,6 +590,17 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
             InputPhase.BeforeInvocation => WorkerProtocolExecutionPhase.BeforeInvocation,
             InputPhase.Executing => WorkerProtocolExecutionPhase.Executing,
             InputPhase.Terminal or InputPhase.Stopped => WorkerProtocolExecutionPhase.Terminal,
+            _ => throw new ArgumentOutOfRangeException(nameof(phase), phase, null)
+        };
+    }
+
+    private static WorkerJobExecutionPhase ToJobProtocolPhase(InputPhase phase)
+    {
+        return phase switch
+        {
+            InputPhase.BeforeInvocation => WorkerJobExecutionPhase.BeforeInvocation,
+            InputPhase.Executing => WorkerJobExecutionPhase.Executing,
+            InputPhase.Terminal or InputPhase.Stopped => WorkerJobExecutionPhase.Terminal,
             _ => throw new ArgumentOutOfRangeException(nameof(phase), phase, null)
         };
     }

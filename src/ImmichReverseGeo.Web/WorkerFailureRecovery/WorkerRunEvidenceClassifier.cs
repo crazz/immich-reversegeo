@@ -1,5 +1,6 @@
 using System;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
@@ -14,7 +15,13 @@ internal static class WorkerRunEvidenceClassifier
         ArgumentNullException.ThrowIfNull(evidence);
         if ((evidence.Completion is null) == (evidence.NoProcessFailure is null)
             || evidence.NoProcessFailure is not (null or WorkerRunFailureCategory.CommandResolution or WorkerRunFailureCategory.ProcessStart)
-            || (evidence.Completion is { } completion && completion.RunId != evidence.Request.RunId))
+            || evidence.JobId != evidence.Request.RunId
+            || evidence.JobKind != WorkerJobKind.ProcessAssets
+            || !Enum.IsDefined(evidence.ProtocolVersion)
+            || (evidence.Completion is { } completion
+                && (completion.RunId != evidence.Request.RunId
+                    || completion.JobId != evidence.JobId
+                    || completion.JobKind != evidence.JobKind)))
         {
             throw new ArgumentException("Final evidence must identify exactly one matching session or no-process failure.", nameof(evidence));
         }

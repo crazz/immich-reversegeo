@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
@@ -86,8 +87,13 @@ internal sealed class ProcessCoordinatorFixture
 
     private sealed class ParentLauncher(ProcessCoordinatorFixture fixture) : IChildWorkerLauncher
     {
-        public ValueTask<ChildWorkerLaunchResult> LaunchAsync(WorkerInvocation invocation, ProcessingRunRequest request, IWorkerProtocolEventSink eventSink, ChildWorkerLauncherOptions options, CancellationToken cancellationToken) =>
-            fixture.CurrentWorker.LaunchAsync(invocation, request, eventSink, options, cancellationToken);
+        public ValueTask<ChildWorkerLaunchResult> LaunchAsync(
+            WorkerInvocation invocation,
+            WorkerJobDispatch dispatch,
+            IWorkerJobEventSink eventSink,
+            ChildWorkerLauncherOptions options,
+            CancellationToken cancellationToken) =>
+            fixture.CurrentWorker.LaunchAsync(invocation, dispatch, eventSink, options, cancellationToken);
     }
 
     private sealed class LifecycleObserver(ProcessCoordinatorFixture fixture) : IProcessingRunCoordinatorObserver

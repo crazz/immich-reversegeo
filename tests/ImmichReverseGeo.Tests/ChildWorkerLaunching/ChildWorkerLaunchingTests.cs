@@ -1640,6 +1640,9 @@ public sealed partial class ChildWorkerLaunchingTests
         internal Task DisposeStarted => _disposeStarted.Task;
         internal int WriteCalls { get; private set; }
         internal int FlushCalls { get; private set; }
+        internal TaskCompletionSource FlushStarted { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task? FlushGate { get; set; }
         internal bool ThrowAfterWrite { get; set; }
         internal bool ThrowOnFlush { get; set; }
         internal int? FailWriteAfterBytes { get; set; }
@@ -1668,12 +1671,26 @@ public sealed partial class ChildWorkerLaunchingTests
         {
             FlushCalls++;
             Trace.Add("flush");
+            FlushStarted.TrySetResult();
             if (ThrowOnFlush)
             {
                 throw new IOException();
             }
 
+            if (FlushGate is { } gate)
+            {
+                return FlushAfterGateAsync(gate, cancellationToken);
+            }
+
             return base.FlushAsync(cancellationToken);
+        }
+
+        private async Task FlushAfterGateAsync(
+            Task gate,
+            CancellationToken cancellationToken)
+        {
+            await gate.WaitAsync(cancellationToken);
+            await base.FlushAsync(cancellationToken);
         }
 
         public override ValueTask DisposeAsync()

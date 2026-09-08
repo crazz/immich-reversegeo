@@ -2,6 +2,7 @@ using System;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
 using WorkerStateBridge = ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridge;
@@ -16,19 +17,27 @@ internal sealed class WorkerRunFinalizer
     private readonly DateTimeOffset _admittedAtUtc;
     private readonly ChildWorkerEvidenceFinalityGate? _evidenceGate;
     private readonly IProcessAssetsWorkerStatusSink? _statusSink;
+    private readonly InternalWorkerProtocolVersion _protocolVersion;
     private readonly TaskCompletionSource<ProcessingRunResult> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _stateFinality = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private int _started;
 
     internal WorkerRunFinalizer(ProcessingRunRequest request, ProcessingStateEventReporter reporter, TimeProvider clock,
         ChildWorkerEvidenceFinalityGate? evidenceGate = null,
-        IProcessAssetsWorkerStatusSink? statusSink = null)
+        IProcessAssetsWorkerStatusSink? statusSink = null,
+        InternalWorkerProtocolVersion protocolVersion = InternalWorkerProtocolVersion.V1)
     {
         _request = request;
         _reporter = reporter;
         _clock = clock;
         _evidenceGate = evidenceGate;
         _statusSink = statusSink;
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
+        _protocolVersion = protocolVersion;
         _admittedAtUtc = clock.GetUtcNow();
         State = new WorkerRunFinalityState(phase => ObserveStatus(
             sink => sink.ObserveTransport(_request, phase)));
@@ -49,6 +58,7 @@ internal sealed class WorkerRunFinalizer
         var evidence = new WorkerRunEvidence
         {
             Request = _request,
+            IntendedProtocolVersion = _protocolVersion,
             LastPhase = State.Snapshot.Transport,
             NoProcessFailure = failure,
             Receipt = _reporter.GetFinalizationReceipt(_request)
@@ -94,6 +104,7 @@ internal sealed class WorkerRunFinalizer
             var evidence = new WorkerRunEvidence
             {
                 Request = _request,
+                IntendedProtocolVersion = session.ProtocolVersion,
                 LastPhase = lastPhase,
                 Completion = raw,
                 Receipt = _reporter.GetFinalizationReceipt(_request),

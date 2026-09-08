@@ -1,4 +1,5 @@
 using System.Text;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 
 namespace ImmichReverseGeo.WorkerProcessFixture;
@@ -16,10 +17,22 @@ internal static class Program
             return WorkerProcessExitCodes.InvalidInput;
         }
 
+        var protocolSelection = InternalWorkerProtocolVersionSelector.Select(
+            Environment.GetEnvironmentVariable);
+        if (protocolSelection is not InternalWorkerProtocolVersionSelection.Success selected)
+        {
+            await TryWriteDiagnosticAsync(
+                standardError,
+                "fixture-input",
+                InternalWorkerProtocolVersionSelector.InvalidSelectionDiagnostic).ConfigureAwait(false);
+            return WorkerProcessExitCodes.InvalidInput;
+        }
+
         try
         {
             var runner = new FixtureRunner(
                 options!,
+                selected.Version,
                 Console.OpenStandardInput(),
                 Console.OpenStandardOutput(),
                 standardError);
@@ -32,7 +45,10 @@ internal static class Program
         }
         catch (Exception exception)
         {
-            await TryWriteDiagnosticAsync(standardError, "fixture-failure", exception.GetType().Name).ConfigureAwait(false);
+            await TryWriteDiagnosticAsync(
+                standardError,
+                "fixture-failure",
+                $"{exception.GetType().Name}: {exception.Message}").ConfigureAwait(false);
             return WorkerProcessExitCodes.InfrastructureFailure;
         }
     }

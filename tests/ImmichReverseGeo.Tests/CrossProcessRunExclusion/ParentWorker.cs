@@ -5,6 +5,7 @@ using System.Text;
 using System.Text.Json;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
@@ -333,20 +334,23 @@ internal sealed class ParentWorker : IAsyncDisposable
 
     internal async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
         WorkerInvocation ignoredInvocation,
-        ProcessingRunRequest request,
-        IWorkerProtocolEventSink sink,
+        WorkerJobDispatch dispatch,
+        IWorkerJobEventSink sink,
         ChildWorkerLauncherOptions options,
         CancellationToken cancellationToken)
     {
+        var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
+        ProcessingRunRequest request = processAssets.Request.ProcessingRequest;
         LauncherCalls++;
         BindRequest(request);
         var launcher = new ChildWorkerLauncher(new RegisteredProcessFactory(this));
         var result = await launcher.LaunchDescriptorAsync(
             _descriptor,
-            request,
-            new TeeSink(this, sink),
+            dispatch,
+            new TeeSink(this, request, sink),
             options,
-            cancellationToken);
+            cancellationToken,
+            ignoredInvocation.ProtocolVersion);
         if (result is ChildWorkerLaunchResult.Started started)
         {
             _session = started.Session;
@@ -677,14 +681,20 @@ internal sealed class ParentWorker : IAsyncDisposable
         }
     }
 
-    private sealed class TeeSink(ParentWorker owner, IWorkerProtocolEventSink inner) : IWorkerProtocolEventSink
+    private sealed class TeeSink(
+        ParentWorker owner,
+        ProcessingRunRequest request,
+        IWorkerJobEventSink inner) : IWorkerJobEventSink
     {
-        public async ValueTask AcceptAsync(WorkerProtocolEvent @event, CancellationToken cancellationToken)
+        private readonly ProcessAssetsWorkerJobProjection _projection = new(request);
+
+        public async ValueTask AcceptAsync(WorkerJobOutputMessage message, CancellationToken cancellationToken)
         {
             owner.EnterSinkCallback();
             try
             {
-                await inner.AcceptAsync(@event, cancellationToken);
+                await inner.AcceptAsync(message, cancellationToken);
+                WorkerProtocolEvent @event = _projection.Map(message);
                 owner._events.Enqueue(@event);
                 owner._eventAvailable.Release();
             }

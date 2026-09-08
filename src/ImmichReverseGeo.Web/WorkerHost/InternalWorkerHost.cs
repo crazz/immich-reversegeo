@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Runtime.ExceptionServices;
 using System.Threading.Tasks;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
@@ -18,11 +19,19 @@ internal static class InternalWorkerHost
         ApplicationCompositionContext context,
         WorkerProcessExitOutcomeAccumulator outcomes)
     {
+        return CreateBuilder(context, outcomes, InternalWorkerProtocolVersion.V1);
+    }
+
+    internal static HostApplicationBuilder CreateBuilder(
+        ApplicationCompositionContext context,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(outcomes);
 
         var builder = CreateRawBuilder();
-        Configure(builder, context, outcomes);
+        Configure(builder, context, outcomes, protocolVersion);
         return builder;
     }
 
@@ -33,7 +42,22 @@ internal static class InternalWorkerHost
         return Build(CreateBuilder(context, outcomes));
     }
 
+    internal static IHost Build(
+        ApplicationCompositionContext context,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        return Build(CreateBuilder(context, outcomes, protocolVersion));
+    }
+
     internal static Task<int> RunProductionAsync(WorkerProcessExitOutcomeAccumulator outcomes)
+    {
+        return RunProductionAsync(outcomes, InternalWorkerProtocolVersion.V1);
+    }
+
+    internal static Task<int> RunProductionAsync(
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
     {
         ArgumentNullException.ThrowIfNull(outcomes);
 
@@ -43,7 +67,8 @@ internal static class InternalWorkerHost
                 Directory.GetCurrentDirectory(),
                 Environment.GetEnvironmentVariable("DATA_DIR"),
                 Environment.GetEnvironmentVariable("CONFIG_DIR"),
-                outcomes);
+                outcomes,
+                protocolVersion);
         }
         catch (OutOfMemoryException)
         {
@@ -62,6 +87,21 @@ internal static class InternalWorkerHost
         string? configDirectory,
         WorkerProcessExitOutcomeAccumulator outcomes)
     {
+        return await RunAsync(
+            contentRoot,
+            dataDirectory,
+            configDirectory,
+            outcomes,
+            InternalWorkerProtocolVersion.V1);
+    }
+
+    internal static async Task<int> RunAsync(
+        string contentRoot,
+        string? dataDirectory,
+        string? configDirectory,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
         ArgumentNullException.ThrowIfNull(outcomes);
 
@@ -76,7 +116,7 @@ internal static class InternalWorkerHost
                 contentRoot,
                 dataDirectory,
                 configDirectory);
-            Configure(builder, context, outcomes);
+            Configure(builder, context, outcomes, protocolVersion);
             return await RunHostAsync(Build(builder), outcomes);
         }
         catch (OutOfMemoryException)
@@ -206,14 +246,16 @@ internal static class InternalWorkerHost
     private static void Configure(
         HostApplicationBuilder builder,
         ApplicationCompositionContext context,
-        WorkerProcessExitOutcomeAccumulator outcomes)
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
     {
         builder.Logging.ClearProviders();
         builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
         builder.Services.AddInternalWorkerComposition(context);
         builder.Services.AddInternalWorkerHostServices(
             new WorkerNdjsonStandardOutputStreamFactory(),
-            outcomes);
+            outcomes,
+            protocolVersion);
     }
 }
 
@@ -224,8 +266,31 @@ internal static class InternalWorkerProcess
         TextWriter errorWriter,
         Func<WorkerProcessExitOutcomeAccumulator, Task<int>> runWorkerAsync)
     {
+        ArgumentNullException.ThrowIfNull(runWorkerAsync);
+        return Run(
+            selectedArguments,
+            errorWriter,
+            _ => null,
+            (version, outcomes) =>
+            {
+                if (version != InternalWorkerProtocolVersion.V1)
+                {
+                    throw new InvalidOperationException("The legacy worker runner only supports protocol v1.");
+                }
+
+                return runWorkerAsync(outcomes);
+            });
+    }
+
+    internal static int Run(
+        IReadOnlyList<string> selectedArguments,
+        TextWriter errorWriter,
+        Func<string, string?> environmentVariableReader,
+        Func<InternalWorkerProtocolVersion, WorkerProcessExitOutcomeAccumulator, Task<int>> runWorkerAsync)
+    {
         ArgumentNullException.ThrowIfNull(selectedArguments);
         ArgumentNullException.ThrowIfNull(errorWriter);
+        ArgumentNullException.ThrowIfNull(environmentVariableReader);
         ArgumentNullException.ThrowIfNull(runWorkerAsync);
 
         if (selectedArguments.Count != 0)
@@ -233,11 +298,18 @@ internal static class InternalWorkerProcess
             throw new InvalidOperationException("Internal worker arguments must have been consumed before host construction.");
         }
 
+        InternalWorkerProtocolVersionSelection selection =
+            InternalWorkerProtocolVersionSelector.Select(environmentVariableReader);
+        if (selection is not InternalWorkerProtocolVersionSelection.Success selected)
+        {
+            return CompleteInvalidInvocation(errorWriter);
+        }
+
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
 
         try
         {
-            runWorkerAsync(outcomes).GetAwaiter().GetResult();
+            runWorkerAsync(selected.Version, outcomes).GetAwaiter().GetResult();
         }
         catch (OutOfMemoryException)
         {

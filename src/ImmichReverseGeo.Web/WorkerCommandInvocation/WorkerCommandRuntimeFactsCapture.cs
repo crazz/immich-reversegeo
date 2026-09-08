@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using ImmichReverseGeo.Core.WorkerJobs;
 using System.Reflection;
 
 namespace ImmichReverseGeo.Web.WorkerCommandInvocation;
@@ -150,6 +151,18 @@ internal sealed class WorkerCommandAmbientRuntimeObservationSource : IWorkerComm
 internal interface IWorkerCommandInvocationBuilder
 {
     WorkerCommandInvocationResolution Build();
+
+    WorkerCommandInvocationResolution Build(InternalWorkerProtocolVersion protocolVersion)
+    {
+        if (!Enum.IsDefined(protocolVersion))
+        {
+            throw new ArgumentOutOfRangeException(nameof(protocolVersion));
+        }
+
+        // Test and compatibility builders that predate protocol selection retain
+        // their explicit descriptor. The production builder overrides this method.
+        return Build();
+    }
 }
 
 /// <summary>
@@ -168,5 +181,10 @@ internal sealed class WorkerCommandInvocationBuilder : IWorkerCommandInvocationB
     public WorkerCommandInvocationResolution Build()
     {
         return WorkerCommandInvocation.Resolve(_capture.Capture());
+    }
+
+    public WorkerCommandInvocationResolution Build(InternalWorkerProtocolVersion protocolVersion)
+    {
+        return WorkerCommandInvocation.Resolve(_capture.Capture(), protocolVersion);
     }
 }

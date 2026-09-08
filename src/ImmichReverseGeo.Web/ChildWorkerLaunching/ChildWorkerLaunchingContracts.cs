@@ -3,6 +3,7 @@ using System.IO;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
@@ -13,15 +14,57 @@ internal interface IChildWorkerLauncher
 {
     ValueTask<ChildWorkerLaunchResult> LaunchAsync(
         WorkerInvocation invocation,
-        ProcessingRunRequest request,
-        IWorkerProtocolEventSink eventSink,
+        WorkerJobDispatch dispatch,
+        IWorkerJobEventSink eventSink,
         ChildWorkerLauncherOptions options,
+        CancellationToken cancellationToken);
+}
+
+internal interface IWorkerJobEventSink
+{
+    ValueTask AcceptAsync(
+        WorkerJobOutputMessage message,
+        CancellationToken cancellationToken);
+}
+
+internal interface IProcessAssetsWorkerJobEventSink : IWorkerJobEventSink
+{
+    ValueTask AcceptProcessAssetsAsync(
+        WorkerJobOutputMessage message,
+        WorkerProtocolEvent compatibilityEvent,
         CancellationToken cancellationToken);
 }
 
 internal interface IWorkerProtocolEventSink
 {
     ValueTask AcceptAsync(WorkerProtocolEvent @event, CancellationToken cancellationToken);
+}
+
+internal sealed class ProcessAssetsWorkerJobEventSink(
+    ProcessingRunRequest request,
+    IWorkerProtocolEventSink processingSink) : IProcessAssetsWorkerJobEventSink
+{
+    private readonly ProcessAssetsWorkerJobProjection _projection = new(request);
+
+    public ValueTask AcceptAsync(
+        WorkerJobOutputMessage message,
+        CancellationToken cancellationToken)
+    {
+        return processingSink.AcceptAsync(
+            _projection.Map(message),
+            cancellationToken);
+    }
+
+
+    public ValueTask AcceptProcessAssetsAsync(
+        WorkerJobOutputMessage message,
+        WorkerProtocolEvent compatibilityEvent,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(compatibilityEvent);
+        return processingSink.AcceptAsync(compatibilityEvent, cancellationToken);
+    }
 }
 
 internal sealed record ChildWorkerLauncherOptions
@@ -207,10 +250,14 @@ internal sealed record ChildWorkerCompletionObservation(
     ChildWorkerStreamFinality StandardOutputFinality,
     ChildWorkerStreamFinality StandardErrorFinality,
     WorkerProtocolEvent? Terminal,
+    WorkerJobOutputMessage? JobTerminal,
     ChildWorkerProtocolObservation? FirstProtocolObservation,
-    ChildWorkerStandardErrorTail StandardErrorTail)
+    ChildWorkerStandardErrorTail StandardErrorTail,
+    WorkerJobKind JobKind,
+    InternalWorkerProtocolVersion ProtocolVersion)
 {
     internal bool AcceptedRunStarted { get; init; }
+    internal Guid JobId => RunId;
 }
 
 internal interface IChildProcessFactory

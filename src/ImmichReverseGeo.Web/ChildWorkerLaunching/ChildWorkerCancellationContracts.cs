@@ -117,6 +117,7 @@ internal enum ChildProcessKillOutcome
 internal enum ChildWorkerCancelDeliveryPhase
 {
     Pending,
+    NotSupported,
     NotAccepted,
     InputClosed,
     DeadlineElapsed,

@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.ChildWorkerCancellation;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -460,21 +461,24 @@ public sealed class ManualChildWorkerControlPlaneTests
 
         public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerInvocation invocation,
-            ProcessingRunRequest request,
-            IWorkerProtocolEventSink eventSink,
+            WorkerJobDispatch dispatch,
+            IWorkerJobEventSink eventSink,
             ChildWorkerLauncherOptions options,
             CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(invocation);
+            var processAssets = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(dispatch);
+            ProcessingRunRequest request = processAssets.Request.ProcessingRequest;
             CallCount++;
             Request = request;
             Process = new SessionTestProcess(new SessionInputStream(), ChildProcessKillOutcome.Requested, exitOnKill: false);
             Session = await ChildWorkerSession.CreateAsync(
                 Process,
-                request,
+                dispatch,
                 new AwaitedInnerSink(eventSink, _runStartedAccepted, _activityEndedAccepted),
                 options,
-                new ChildWorkerObserverArmingAcknowledgements());
+                new ChildWorkerObserverArmingAcknowledgements(),
+                invocation.ProtocolVersion);
             Entered.TrySetResult();
             return new ChildWorkerLaunchResult.Started(Session);
         }
@@ -482,18 +486,18 @@ public sealed class ManualChildWorkerControlPlaneTests
 
 
     private sealed class AwaitedInnerSink(
-        IWorkerProtocolEventSink inner,
+        IWorkerJobEventSink inner,
         TaskCompletionSource runStartedAccepted,
-        TaskCompletionSource activityEndedAccepted) : IWorkerProtocolEventSink
+        TaskCompletionSource activityEndedAccepted) : IWorkerJobEventSink
     {
-        public async ValueTask AcceptAsync(WorkerProtocolEvent @event, CancellationToken cancellationToken)
+        public async ValueTask AcceptAsync(WorkerJobOutputMessage message, CancellationToken cancellationToken)
         {
-            await inner.AcceptAsync(@event, cancellationToken).ConfigureAwait(false);
-            if (@event.Type == WorkerProtocolV1.RunStartedType)
+            await inner.AcceptAsync(message, cancellationToken).ConfigureAwait(false);
+            if (message.Type == WorkerJobProtocolV2.JobStartedType)
             {
                 runStartedAccepted.TrySetResult();
             }
-            else if (@event.Type == WorkerProtocolV1.ActivityEndedType)
+            else if (message.Type == WorkerJobProtocolV2.ActivityEndedType)
             {
                 activityEndedAccepted.TrySetResult();
             }

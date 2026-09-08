@@ -450,6 +450,10 @@ internal sealed class SessionInputStream : Stream
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource _blockedWriteRelease =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _blockedFlushEntered =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _blockedFlushRelease =
+        new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly ManualResetEventSlim _synchronousWriteRelease = new(false);
     private readonly TaskCompletionSource _synchronousWriteEntered =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -457,6 +461,7 @@ internal sealed class SessionInputStream : Stream
     private int _flushCalls;
     private int _disposeCalls;
     private int _blockWriteCall;
+    private int _blockFlushCall;
 
     internal int WriteCalls => Volatile.Read(ref _writeCalls);
     internal int FlushCalls => Volatile.Read(ref _flushCalls);
@@ -466,6 +471,7 @@ internal sealed class SessionInputStream : Stream
     internal Task SecondFlush => _secondFlush.Task;
     internal Task DisposeStarted => _disposeStarted.Task;
     internal Task SynchronousWriteEntered => _synchronousWriteEntered.Task;
+    internal Task BlockedFlushEntered => _blockedFlushEntered.Task;
 
     internal int BlockWriteCall
     {
@@ -474,6 +480,13 @@ internal sealed class SessionInputStream : Stream
     }
 
     internal int SynchronousBlockWriteCall { get; set; }
+
+    internal int BlockFlushCall
+    {
+        get => Volatile.Read(ref _blockFlushCall);
+        set => Volatile.Write(ref _blockFlushCall, value);
+    }
+
     internal int FaultWriteCall { get; set; }
     internal int FaultFlushCall { get; set; }
     internal Action<int>? WriteBoundary { get; set; }
@@ -520,7 +533,7 @@ internal sealed class SessionInputStream : Stream
     {
     }
 
-    public override Task FlushAsync(CancellationToken cancellationToken)
+    public override async Task FlushAsync(CancellationToken cancellationToken)
     {
         var call = Interlocked.Increment(ref _flushCalls);
         if (call == 2)
@@ -529,9 +542,16 @@ internal sealed class SessionInputStream : Stream
         }
 
         FlushBoundary?.Invoke(call);
-        return call == FaultFlushCall
-            ? Task.FromException(new IOException("Synthetic flush failure."))
-            : Task.CompletedTask;
+        if (call == FaultFlushCall)
+        {
+            throw new IOException("Synthetic flush failure.");
+        }
+
+        if (call == BlockFlushCall)
+        {
+            _blockedFlushEntered.TrySetResult();
+            await _blockedFlushRelease.Task.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
     }
 
     public override async ValueTask WriteAsync(
@@ -583,12 +603,14 @@ internal sealed class SessionInputStream : Stream
         {
             _disposeStarted.TrySetResult();
             _blockedWriteRelease.TrySetResult();
+            _blockedFlushRelease.TrySetResult();
         }
 
         return ValueTask.CompletedTask;
     }
 
     internal void ReleaseBlockedWrite() => _blockedWriteRelease.TrySetResult();
+    internal void ReleaseBlockedFlush() => _blockedFlushRelease.TrySetResult();
     internal void ReleaseSynchronousWrite() => _synchronousWriteRelease.Set();
 
     public override int Read(byte[] buffer, int offset, int count)

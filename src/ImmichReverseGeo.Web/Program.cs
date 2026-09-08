@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ApplicationRole;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.RunOnce;
@@ -22,7 +23,9 @@ void RunInternalWorker(IReadOnlyList<string> selectedArguments)
     Environment.ExitCode = InternalWorkerProcess.Run(
         selectedArguments,
         workerErrorWriter,
-        InternalWorkerHost.RunProductionAsync);
+        Environment.GetEnvironmentVariable,
+        static (protocolVersion, outcomes) =>
+            InternalWorkerHost.RunProductionAsync(outcomes, protocolVersion));
 }
 
 void RunWebApplication(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode deploymentMode, IReadOnlyList<string> selectedArguments)

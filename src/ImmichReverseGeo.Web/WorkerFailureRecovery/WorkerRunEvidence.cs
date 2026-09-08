@@ -1,5 +1,6 @@
 using System;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
@@ -145,6 +146,12 @@ internal enum WorkerRunAuthority
 internal sealed record WorkerRunEvidence
 {
     internal required ProcessingRunRequest Request { get; init; }
+    internal Guid JobId => Request.RunId;
+    internal WorkerJobKind JobKind => WorkerJobKind.ProcessAssets;
+    internal InternalWorkerProtocolVersion ProtocolVersion =>
+        Completion?.ProtocolVersion ?? IntendedProtocolVersion;
+    internal InternalWorkerProtocolVersion IntendedProtocolVersion { get; init; } =
+        InternalWorkerProtocolVersion.V1;
     internal required WorkerRunTransportPhase LastPhase { get; init; }
     internal WorkerRunFailureCategory? NoProcessFailure { get; init; }
     internal ChildWorkerCompletionObservation? Completion { get; init; }
