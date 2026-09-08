@@ -962,7 +962,7 @@ Processing isolation alone is not enough: Lookup and some Data operations can st
 
 **Dependencies and sequencing:** Requires the applied block 15–30 protocol, composition, launcher, bridge, cancellation, exit, and crash-handling contracts; implementation must stop if those landed semantics differ from their finalized artifacts. Land v2 types/codecs and dual-version fixtures first, adapt processing through the generic handler/session second, prove parity third, then switch production processing to v2 while retaining v1 rollback. Block 50 alone owns shared arbitration, block 48 owns concrete `CoordinateLookup` payload/result/handler behavior, and block 51 owns concrete `CacheMutation` operations; do not advance them here. Block 46 is parallel-owned and untouched.
 
-**OpenSpec:** [`47-generalize-worker-launcher-to-worker-jobs`](openspec/changes/47-generalize-worker-launcher-to-worker-jobs/).
+**OpenSpec:** [`47-generalize-worker-launcher-to-worker-jobs`](openspec/changes/archive/2026-09-08-47-generalize-worker-launcher-to-worker-jobs/).
 
 ### 48. `feat: add coordinate Lookup worker job`
 
