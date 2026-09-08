@@ -708,7 +708,7 @@ public sealed class WebProcessingGeodataBoundaryTests
 
     private sealed record SettlementObservation(ProcessingRunRequest Request, CancellationToken ActiveToken);
 
-    private sealed class ProcessingFactoryGraph
+    internal sealed class ProcessingFactoryGraph
     {
         private static readonly IReadOnlyDictionary<Type, string> Forbidden = new Dictionary<Type, string>
         {
