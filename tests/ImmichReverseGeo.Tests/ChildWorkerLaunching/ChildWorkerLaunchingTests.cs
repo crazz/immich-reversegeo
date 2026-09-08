@@ -490,6 +490,65 @@ public sealed partial class ChildWorkerLaunchingTests
     }
 
     [TestMethod]
+    public async Task LaunchAsync_CancellationDuringPartialObserverArmingRetainsAndReapsExactProcess()
+    {
+        using var cancellation = new CancellationTokenSource();
+        var observerArming = new ChildWorkerObserverArmingAcknowledgements();
+        using var process = new ObserverArmingProbeProcess(
+            observerArming,
+            "stdout",
+            []);
+        var launch = new ChildWorkerLauncher(
+            new RecordingFactory { Process = process },
+            () => observerArming).LaunchAsync(
+                CreateInvocation(),
+                CreateRequest(),
+                new RecordingSink(),
+                TestOptions(),
+                cancellation.Token).AsTask();
+        ChildWorkerLaunchResult? result = null;
+        var launchPendingAfterCancellation = false;
+        var processUndisposedBeforeOwnershipTransfer = false;
+        var bound = TimeSpan.FromSeconds(5);
+
+        try
+        {
+            await Task.WhenAll(
+                process.StandardOutput.InvocationEntered,
+                process.StandardError.InvocationEntered,
+                process.ExitInvocationEntered).WaitAsync(bound);
+            await Task.WhenAll(observerArming.StandardError, observerArming.Exit).WaitAsync(bound);
+
+            cancellation.Cancel();
+            launchPendingAfterCancellation = !launch.IsCompleted;
+            processUndisposedBeforeOwnershipTransfer = process.DisposeCalls == 0;
+
+            process.ReleaseDelayedInvocation();
+            result = await launch.WaitAsync(bound);
+        }
+        finally
+        {
+            process.ReleaseDelayedInvocation();
+            process.StandardOutput.Complete();
+            process.StandardError.Complete();
+            process.Exit(0);
+            ChildWorkerLaunchResult cleanupResult = result ?? await launch.WaitAsync(bound);
+            if (cleanupResult is ChildWorkerLaunchResult.Started started)
+            {
+                await started.Session.DisposeAsync().AsTask().WaitAsync(bound);
+            }
+        }
+
+        Assert.IsTrue(launchPendingAfterCancellation, "partial-arming: cancellation-does-not-publish-an-unarmed-session");
+        Assert.IsTrue(processUndisposedBeforeOwnershipTransfer, "partial-arming: raw-process-remains-owned-during-arming");
+        Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result, "partial-arming: exact-session-owner-returned-after-arming");
+        Assert.AreEqual(1, process.StandardInput.DisposeCalls, "partial-arming: stdin-disposed-once");
+        Assert.AreEqual(1, process.StandardOutput.DisposeCalls, "partial-arming: stdout-disposed-once");
+        Assert.AreEqual(1, process.StandardError.DisposeCalls, "partial-arming: stderr-disposed-once");
+        Assert.AreEqual(1, process.DisposeCalls, "partial-arming: process-disposed-once");
+    }
+
+    [TestMethod]
     public async Task LaunchAsync_CancellationAfterProcessCreationReturnsOwnedSessionAndFactoryUsesNone()
     {
         using var cancellation = new CancellationTokenSource();
@@ -1095,6 +1154,7 @@ public sealed partial class ChildWorkerLaunchingTests
         private readonly TaskCompletionSource _exitInvocationEntered = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _exitInvocationReturned = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _waitCalls;
+        private int _disposeCalls;
         private int _exitArmingWasAcknowledgedAtEntry;
 
         internal ObserverArmingProbeProcess(
@@ -1127,6 +1187,7 @@ public sealed partial class ChildWorkerLaunchingTests
         internal ObserverArmingProbeStream StandardOutput { get; }
         internal ObserverArmingProbeStream StandardError { get; }
         internal int WaitCalls => Volatile.Read(ref _waitCalls);
+        internal int DisposeCalls => Volatile.Read(ref _disposeCalls);
         internal bool ExitArmingWasAcknowledgedAtEntry => Volatile.Read(ref _exitArmingWasAcknowledgedAtEntry) != 0;
         internal Task ExitInvocationEntered => _exitInvocationEntered.Task;
         internal Task ExitInvocationReturned => _exitInvocationReturned.Task;
@@ -1158,7 +1219,11 @@ public sealed partial class ChildWorkerLaunchingTests
         public ChildProcessKillOutcome KillProcessTree()
             => GetExitState() == ChildProcessExitState.Exited ? ChildProcessKillOutcome.AlreadyExited : ChildProcessKillOutcome.Failed;
 
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            Interlocked.Increment(ref _disposeCalls);
+            return ValueTask.CompletedTask;
+        }
 
         public void Dispose() => _releaseDelayedInvocation.Dispose();
 
@@ -1177,6 +1242,7 @@ public sealed partial class ChildWorkerLaunchingTests
         private readonly TaskCompletionSource _firstInvocationReturned = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _firstResultConsumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _readCalls;
+        private int _disposeCalls;
         private int _armingWasAcknowledgedAtEntry;
 
         internal ObserverArmingProbeStream(
@@ -1192,6 +1258,7 @@ public sealed partial class ChildWorkerLaunchingTests
         }
 
         internal int ReadCalls => Volatile.Read(ref _readCalls);
+        internal int DisposeCalls => Volatile.Read(ref _disposeCalls);
         internal bool ArmingWasAcknowledgedAtEntry => Volatile.Read(ref _armingWasAcknowledgedAtEntry) != 0;
         internal Task InvocationEntered => _invocationEntered.Task;
         internal Task FirstInvocationReturned => _firstInvocationReturned.Task;
@@ -1242,6 +1309,7 @@ public sealed partial class ChildWorkerLaunchingTests
 
         public override ValueTask DisposeAsync()
         {
+            Interlocked.Increment(ref _disposeCalls);
             Complete();
             return ValueTask.CompletedTask;
         }

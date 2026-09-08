@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using ImmichReverseGeo.Web.ApplicationRole;
 using ImmichReverseGeo.Web.Composition;
+using ImmichReverseGeo.Web.RunOnce;
 using ImmichReverseGeo.Web.WorkerHost;
 
 var workerErrorWriter = Console.Error;
@@ -37,4 +38,11 @@ void RunWebApplication(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode depl
 
 void RunOnce(ImmichReverseGeo.Core.ApplicationRole.DeploymentMode deploymentMode, IReadOnlyList<string> selectedArguments)
 {
+    Environment.ExitCode = RunOnceProcess.Run(
+        deploymentMode,
+        selectedArguments,
+        Console.Out,
+        workerErrorWriter,
+        RunOnceApplication.RunProductionAsync,
+        Environment.GetEnvironmentVariable);
 }

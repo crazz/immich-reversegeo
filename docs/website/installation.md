@@ -20,7 +20,7 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
 
 The reference Compose file omits `IMMICH_REVERSEGEO_MODE`, which selects the compatible Standard default. Standard runs the Web app and schedule, and starts temporary child workers for accepted processing runs. If you need the Web interface and manual runs without the internal scheduler, set `IMMICH_REVERSEGEO_MODE=web-only`. Saved schedule values stay in Settings but remain inactive until you return to Standard mode.
 
-Use one exact lowercase value: `standard`, `web-only`, or `run-once`. This is an environment setting, not a `settings.json` option, so restart the container after changing it. Run-once is recognized, but its runtime behavior is not available yet.
+Use one exact lowercase value: `standard`, `web-only`, or `run-once`. This is an environment setting, not a `settings.json` option, so restart the container after changing it.
 
 - Add the service to your existing Immich `docker-compose.yml`.
 - Reuse the same `.env` file that already contains your Immich database settings.
@@ -61,6 +61,48 @@ Then start the stack:
 ```bash
 docker compose up -d
 ```
+
+## Optional Run-once job
+
+Run-once is intended for cron or another external scheduler. It starts no Web server, makes one processing attempt in the current process, waits for cleanup, and exits. Add this optional service beside the persistent service in the same Immich Compose file:
+
+```yaml title="docker-compose.yml"
+services:
+  immich-reversegeo-run-once:
+    image: ghcr.io/immich-reversegeo/immich-reversegeo:latest
+    pull_policy: always
+    profiles: ["run-once"]
+    volumes:
+      - reversegeo-config:/config
+      - reversegeo-data:/data
+    env_file:
+      - .env
+    environment:
+      - IMMICH_REVERSEGEO_MODE=run-once
+    stop_grace_period: 40s
+    restart: "no"
+```
+
+This uses the image's normal entrypoint, the existing Immich database settings and Compose network, and the same separate config and data volumes. It publishes no port. Start one disposable attempt with:
+
+```bash
+docker compose run --rm immich-reversegeo-run-once
+```
+
+A cron entry can change to the directory containing the Compose file and run that same command. Each launch creates one new attempt. Immich ReverseGeo does not retry, replay, roll back, or start a replacement process. If another deployment owns the database processing lock, the job exits immediately with code `3`; a later invocation is a new decision by your scheduler.
+
+Use the exit code as the automation result:
+
+| Code | Meaning |
+| --- | --- |
+| `0` | Completed, including when there was no eligible work |
+| `2` | Invalid deployment mode or reserved startup syntax |
+| `3` | Another Immich ReverseGeo deployment is already processing this database |
+| `4` | The processing attempt failed |
+| `5` | Required configuration, data, database, lock, lifecycle, or cleanup infrastructure failed |
+| `130` | The attempt was cooperatively cancelled during shutdown |
+
+The job writes ordinary readable progress to standard output and warnings or failures to standard error. Log text is for operators; the exit code is the stable automation contract. A failed or cancelled attempt can leave already committed asset updates and skipped-item records in place, so inspect the result before choosing whether to launch another attempt.
 
 ## Stopping or updating the service
 

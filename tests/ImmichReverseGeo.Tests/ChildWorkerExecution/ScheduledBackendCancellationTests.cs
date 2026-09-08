@@ -63,7 +63,7 @@ public sealed class ScheduledBackendCancellationTests
             Assert.AreSame(admitted, fixture.Coordinator.ActiveRequest, "resolution-cancel-retains-handle");
             Assert.IsTrue(fixture.State.IsRunning, "resolution-cancel-remains-pending");
             builder.Release.TrySetResult();
-            launch = await fixture.Launcher.NextAsync().WaitAsync(Bound);
+            launch = await fixture.Launcher.NextAsync();
             ChildWorkerTerminationRequest termination =
                 await launch.Session.FirstTerminationRequest.WaitAsync(Bound);
 
@@ -102,7 +102,7 @@ public sealed class ScheduledBackendCancellationTests
 
         try
         {
-            launch = await fixture.Launcher.NextAsync().WaitAsync(Bound);
+            launch = await fixture.Launcher.NextAsync();
             await ReadyAndAcceptAsync(launch);
             long timerGeneration = clock.TimerGeneration;
             stopping.Cancel();
@@ -152,7 +152,7 @@ public sealed class ScheduledBackendCancellationTests
             ((IScheduledRunTrigger)fixture.Coordinator).TriggerScheduledAsync(firstStopping.Token);
         try
         {
-            first = await fixture.Launcher.NextAsync().WaitAsync(Bound);
+            first = await fixture.Launcher.NextAsync();
             await ReadyAndAcceptAsync(first);
             clock.BlockNextTimestamp();
             cancellation = Task.Run(firstStopping.Cancel);
@@ -174,7 +174,7 @@ public sealed class ScheduledBackendCancellationTests
 
             Task<ScheduledTriggerResult> replacement =
                 ((IScheduledRunTrigger)fixture.Coordinator).TriggerScheduledAsync(CancellationToken.None);
-            second = await fixture.Launcher.NextAsync().WaitAsync(Bound);
+            second = await fixture.Launcher.NextAsync();
             await ReadyAndAcceptAsync(second);
             EmitTerminal(second, ProcessingRunOutcome.Completed);
             second.Process.Exit(0);
@@ -198,6 +198,51 @@ public sealed class ScheduledBackendCancellationTests
                 await cancellation.WaitAsync(Bound);
             }
         }
+    }
+
+    [TestMethod]
+    public async Task FixtureDispose_ExitsRawProcessCreatedBeforeSessionPublication()
+    {
+        var clock = new CancellationTestClock(SessionTestSupport.Start);
+        var fixture = ScheduledChildFixture.Create(
+            new ImmediateInvocationBuilder(),
+            clock,
+            gateSessionCreation: true);
+        Task<ScheduledTriggerResult> scheduled =
+            ((IScheduledRunTrigger)fixture.Coordinator).TriggerScheduledAsync(CancellationToken.None);
+        SessionTestProcess? process = null;
+        Task? disposal = null;
+
+        try
+        {
+            await fixture.Launcher.SessionCreationEntered.Task.WaitAsync(Bound);
+            process = fixture.Launcher.RawProcess!;
+            disposal = fixture.DisposeAsync().AsTask();
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(1));
+        }
+        finally
+        {
+            fixture.Launcher.ReleaseSessionCreation.TrySetResult();
+            (process ?? fixture.Launcher.RawProcess)?.Exit(143);
+            disposal ??= fixture.DisposeAsync().AsTask();
+            try
+            {
+                await disposal.WaitAsync(Bound);
+            }
+            finally
+            {
+                try
+                {
+                    await scheduled.WaitAsync(Bound);
+                }
+                catch (OperationCanceledException)
+                {
+                }
+            }
+        }
+
+        Assert.AreEqual(ChildProcessExitState.Exited, process!.GetExitState(), "fixture-dispose-exits-unpublished-process");
+        Assert.AreEqual(1, process.DisposeCalls, "fixture-dispose-reaps-unpublished-process-once");
     }
 
     private static async Task ReadyAndAcceptAsync(ScheduledChildLaunch launch)
@@ -265,13 +310,14 @@ public sealed class ScheduledBackendCancellationTests
 
         internal static ScheduledChildFixture Create(
             IWorkerCommandInvocationBuilder builder,
-            TimeProvider clock)
+            TimeProvider clock,
+            bool gateSessionCreation = false)
         {
             string root = Path.Combine(
                 Path.GetTempPath(),
                 "immich-reversegeo-change33-scheduled",
                 Guid.NewGuid().ToString("N"));
-            var launcher = new ScheduledChildLauncher();
+            var launcher = new ScheduledChildLauncher(gateSessionCreation);
             try
             {
                 var services = new ServiceCollection();
@@ -345,12 +391,25 @@ public sealed class ScheduledBackendCancellationTests
 
     private sealed class ScheduledChildLauncher : IChildWorkerLauncher
     {
+        private readonly bool _gateSessionCreation;
         private readonly ConcurrentQueue<ScheduledChildLaunch> _launches = new();
         private readonly ConcurrentBag<ScheduledChildLaunch> _allLaunches = [];
+        private readonly ConcurrentBag<SessionTestProcess> _ownedProcesses = [];
         private readonly SemaphoreSlim _available = new(0);
         private int _callCount;
 
+        internal ScheduledChildLauncher(bool gateSessionCreation = false)
+        {
+            _gateSessionCreation = gateSessionCreation;
+        }
+
         internal int CallCount => Volatile.Read(ref _callCount);
+        internal TaskCompletionSource SessionCreationEntered { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource ReleaseSessionCreation { get; } =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal SessionTestProcess? RawProcess { get; private set; }
+        internal ChildWorkerObserverArmingAcknowledgements? ObserverArming { get; private set; }
 
         public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerInvocation invocation,
@@ -367,18 +426,28 @@ public sealed class ScheduledBackendCancellationTests
                 input,
                 ChildProcessKillOutcome.Requested,
                 exitOnKill: false);
+            _ownedProcesses.Add(process);
+            RawProcess = process;
+            if (_gateSessionCreation)
+            {
+                SessionCreationEntered.TrySetResult();
+                await ReleaseSessionCreation.Task.ConfigureAwait(false);
+            }
+
             Task readyTimerCreated = options.TimeProvider switch
             {
                 CancellationTestClock clock => clock.WaitForTimerCreatedAsync(clock.TimerGeneration),
                 BlockingTimestampClock clock => clock.WaitForTimerCreatedAsync(clock.TimerGeneration),
                 _ => throw new InvalidOperationException("The scheduled cancellation fixture requires a signaling clock.")
             };
+            var observerArming = new ChildWorkerObserverArmingAcknowledgements();
+            ObserverArming = observerArming;
             ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
                 process,
                 request,
                 eventSink,
                 options,
-                new ChildWorkerObserverArmingAcknowledgements());
+                observerArming);
             var launch = new ScheduledChildLaunch(
                 request,
                 input,
@@ -393,7 +462,17 @@ public sealed class ScheduledBackendCancellationTests
 
         internal async Task<ScheduledChildLaunch> NextAsync()
         {
-            await _available.WaitAsync().ConfigureAwait(false);
+            try
+            {
+                await _available.WaitAsync().WaitAsync(Bound).ConfigureAwait(false);
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    $"The child launch was not published before the phase bound. {DescribeObserverArming(ObserverArming)}",
+                    exception);
+            }
+
             return _launches.TryDequeue(out ScheduledChildLaunch? launch)
                 ? launch
                 : throw new InvalidOperationException("The launch signal had no matching session.");
@@ -401,10 +480,38 @@ public sealed class ScheduledBackendCancellationTests
 
         internal void ExitAll()
         {
-            foreach (ScheduledChildLaunch launch in _allLaunches)
+            foreach (SessionTestProcess process in _ownedProcesses)
             {
-                launch.Process.Exit(143);
+                process.Exit(143);
             }
+        }
+
+        private static string DescribeObserverArming(
+            ChildWorkerObserverArmingAcknowledgements? observerArming)
+        {
+            return $"Observer arming: stdout={DescribeTask(observerArming?.StandardOutput)}, "
+                + $"stderr={DescribeTask(observerArming?.StandardError)}, "
+                + $"exit={DescribeTask(observerArming?.Exit)}.";
+        }
+
+        private static string DescribeTask(Task? task)
+        {
+            if (task is null)
+            {
+                return "not-created";
+            }
+
+            if (!task.IsCompleted)
+            {
+                return "pending";
+            }
+
+            if (task.IsCompletedSuccessfully)
+            {
+                return "complete";
+            }
+
+            return task.IsCanceled ? "canceled" : "faulted";
         }
     }
 

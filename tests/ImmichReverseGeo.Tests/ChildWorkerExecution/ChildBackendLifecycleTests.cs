@@ -29,7 +29,7 @@ public sealed class ChildBackendLifecycleTests
             ProcessingRunAdmissionResult.Accepted,
             await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
             "child-terminal-admission");
-        await fixture.Launcher.Entered.Task.WaitAsync(Bound);
+        await fixture.Launcher.WaitUntilEnteredAsync();
         ProcessingRunRequest request = fixture.Launcher.Request!;
         void ObserveCommit()
         {
@@ -79,7 +79,7 @@ public sealed class ChildBackendLifecycleTests
         {
             builder.Release.TrySetResult();
             Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await dispatch.WaitAsync(Bound), "child-stop-admission");
-            await fixture.Launcher.Entered.Task.WaitAsync(Bound);
+            await fixture.Launcher.WaitUntilEnteredAsync();
 
             ProcessingRunRequest request = fixture.Launcher.Request!;
             SessionTestProcess process = fixture.Launcher.Process!;
@@ -131,7 +131,7 @@ public sealed class ChildBackendLifecycleTests
             ProcessingRunAdmissionResult.Accepted,
             await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
             "child-crash-admission");
-        await fixture.Launcher.Entered.Task.WaitAsync(Bound);
+        await fixture.Launcher.WaitUntilEnteredAsync();
         ProcessingRunRequest request = fixture.Launcher.Request!;
         SessionTestProcess process = fixture.Launcher.Process!;
         process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
@@ -163,7 +163,7 @@ public sealed class ChildBackendLifecycleTests
             ProcessingRunAdmissionResult.Accepted,
             await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
             "child-protocol-admission");
-        await fixture.Launcher.Entered.Task.WaitAsync(Bound);
+        await fixture.Launcher.WaitUntilEnteredAsync();
         ProcessingRunRequest request = fixture.Launcher.Request!;
         SessionTestProcess process = fixture.Launcher.Process!;
         process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
@@ -197,7 +197,7 @@ public sealed class ChildBackendLifecycleTests
             ProcessingRunAdmissionResult.Accepted,
             await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
             "child-projection-admission");
-        await fixture.Launcher.Entered.Task.WaitAsync(Bound);
+        await fixture.Launcher.WaitUntilEnteredAsync();
         ProcessingRunRequest request = fixture.Launcher.Request!;
         SessionTestProcess process = fixture.Launcher.Process!;
         fixture.State.OnChanged += FailFirstProjection;
@@ -251,7 +251,7 @@ public sealed class ChildBackendLifecycleTests
             ProcessingRunAdmissionResult.Accepted,
             await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
             "child-kill-admission");
-        await fixture.Launcher.Entered.Task.WaitAsync(Bound);
+        await fixture.Launcher.WaitUntilEnteredAsync();
         ProcessingRunRequest request = fixture.Launcher.Request!;
         SessionTestProcess process = fixture.Launcher.Process!;
         process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
@@ -384,6 +384,7 @@ public sealed class ChildBackendLifecycleTests
 
         public async ValueTask DisposeAsync()
         {
+            Launcher.Process?.Exit(143);
             await Coordinator.DisposeAsync();
             await _provider.DisposeAsync();
             if (Directory.Exists(_root))
@@ -413,7 +414,22 @@ public sealed class ChildBackendLifecycleTests
         internal ProcessingRunRequest? Request { get; private set; }
         internal SessionTestProcess? Process { get; private set; }
         internal ChildWorkerSession? Session { get; private set; }
+        internal ChildWorkerObserverArmingAcknowledgements? ObserverArming { get; private set; }
         internal int CallCount { get; private set; }
+
+        internal async Task WaitUntilEnteredAsync()
+        {
+            try
+            {
+                await Entered.Task.WaitAsync(Bound);
+            }
+            catch (TimeoutException exception)
+            {
+                throw new TimeoutException(
+                    $"The child launch was not published before the phase bound. {DescribeObserverArming(ObserverArming)}",
+                    exception);
+            }
+        }
 
         public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
             WorkerInvocation invocation,
@@ -435,14 +451,44 @@ public sealed class ChildBackendLifecycleTests
                 new SessionInputStream(),
                 _killOutcome,
                 _exitOnKill);
+            var observerArming = new ChildWorkerObserverArmingAcknowledgements();
+            ObserverArming = observerArming;
             Session = await ChildWorkerSession.CreateAsync(
                 Process,
                 request,
                 eventSink,
                 options,
-                new ChildWorkerObserverArmingAcknowledgements());
+                observerArming);
             Entered.TrySetResult();
             return new ChildWorkerLaunchResult.Started(Session);
+        }
+
+        private static string DescribeObserverArming(
+            ChildWorkerObserverArmingAcknowledgements? observerArming)
+        {
+            return $"Observer arming: stdout={DescribeTask(observerArming?.StandardOutput)}, "
+                + $"stderr={DescribeTask(observerArming?.StandardError)}, "
+                + $"exit={DescribeTask(observerArming?.Exit)}.";
+        }
+
+        private static string DescribeTask(Task? task)
+        {
+            if (task is null)
+            {
+                return "not-created";
+            }
+
+            if (!task.IsCompleted)
+            {
+                return "pending";
+            }
+
+            if (task.IsCompletedSuccessfully)
+            {
+                return "complete";
+            }
+
+            return task.IsCanceled ? "canceled" : "faulted";
         }
     }
 

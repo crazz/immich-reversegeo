@@ -143,6 +143,7 @@ public sealed class ChildWorkerOnlyCompositionTests
         var allowedExecutorSources = new HashSet<string>(StringComparer.Ordinal)
         {
             Path.Combine("Composition", "WorkerExecutionServiceCollectionExtensions.cs"),
+            Path.Combine("RunOnce", "RunOnceApplication.cs"),
             Path.Combine("Services", "ProcessingRunContracts.cs"),
             Path.Combine("Services", "ProcessingRunExecutor.cs"),
             Path.Combine("WorkerHost", "InternalWorkerLifecycleService.cs")
