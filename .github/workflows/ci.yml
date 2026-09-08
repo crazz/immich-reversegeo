@@ -34,8 +34,13 @@ jobs:
       - name: Test
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --no-build --filter "TestCategory!=Integration&TestCategory!=Performance"
 
-      - name: Build Docker image
-        run: docker build -f src/ImmichReverseGeo.Web/Dockerfile -t immich-reversegeo:test .
+      - name: Install Docker smoke prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends strace
+
+      - name: Test Docker deployment modes
+        run: npm run test:docker-smoke
 
   change23:
     name: Change 23 focused tests (${{ matrix.os }})

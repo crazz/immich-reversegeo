@@ -8,6 +8,7 @@
     "test:integration": "dotnet test --settings integration.runsettings --filter \"TestCategory=Integration\" --ignore-exit-code 8",
     "agent:test": "node scripts/run-tests.mjs",
     "agent:test:integration": "node scripts/run-tests.mjs --integration",
+    "test:docker-smoke": "bash scripts/docker-mode-smoke.sh",
     "start": "dotnet run --project src/ImmichReverseGeo.Web",
     "docker:build": "docker compose -f docker-compose.local.yml build --no-cache",
     "docker:up": "docker compose -f docker-compose.local.yml build --no-cache && docker compose -f docker-compose.local.yml up -d --force-recreate",
