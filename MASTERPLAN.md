@@ -867,7 +867,7 @@ Document an optional ephemeral Docker Compose Run-once service/job using the sam
 
 **Dependencies and sequencing** — Requires finalized/applied blocks 18–20, 23, 31, 38, and 40–41; consume their landed names and stop rather than invent parallel role, host, executor, reporter, lock, or outcome contracts. Do not edit parallel block 42. Block 44 owns UI status, block 45 the cross-mode composition matrix, block 46 production-image/Docker smoke, and later phases any retry or scheduling enhancements.
 
-**OpenSpec** — [43-implement-run-once-deployment-mode](openspec/changes/43-implement-run-once-deployment-mode/)
+**OpenSpec** — [43-implement-run-once-deployment-mode](openspec/changes/archive/2026-09-08-43-implement-run-once-deployment-mode/)
 
 ### 44. `feat: expose mode and worker status in WebUI`
 
