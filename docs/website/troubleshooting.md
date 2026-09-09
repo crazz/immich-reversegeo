@@ -37,6 +37,14 @@ Large countries can also produce much larger cache files than small ones.
   </div>
 </div>
 
+## Lookup is busy or its worker is unavailable
+
+Lookup uses an isolated worker in both Standard and Web-only mode. A busy message means another lookup still owns the temporary worker slot. Wait until that lookup finishes or completes cancellation, then try again. Repeated clicks do not queue extra work.
+
+An unavailable or failed message means the isolated worker could not start or did not return a valid final result. Check the container logs, confirm the complete application image was installed, and recreate the service if files were copied or upgraded separately. Lookup does not fall back to loading the geographic resolvers inside the Web service.
+
+If you leave the page or stop the service during a lookup, the app requests cancellation and waits for the owned worker to exit. A completed result only becomes available after the worker output has finished. Lookup remains read-only throughout this cleanup and does not change Immich asset metadata.
+
 ## Processing seems slower than expected
 
 Things that affect throughput:

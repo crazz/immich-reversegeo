@@ -87,7 +87,7 @@ Alternative: treat the last progress text as completion. Rejected because progre
 
 User Cancel invokes one idempotent stop operation against the exact active `jobId`, using block 47's cooperative cancel, grace period, and process-tree kill escalation. The state changes immediately to `CancelRequested`, but controls remain locked until the authoritative terminal/classified completion and stream drain; a completion racing with Cancel wins according to the session finalization gate. Repeated Cancel, navigation disposal, and circuit disposal join the same stop task.
 
-The component implements async disposal. It marks itself disposed first, suppresses further render callbacks, requests stop for an admitted active job, awaits bounded session cleanup/disposal, and releases temporary/shared admission exactly once. Disposal must not block synchronously on the Blazor renderer and must not leave an orphan process. Host shutdown remains launcher-owned and composes with this call.
+The component implements async disposal. It marks itself disposed first, suppresses further render callbacks, requests stop for an admitted active job, awaits bounded session cleanup/disposal, and releases temporary/shared admission exactly once. Disposal must not block synchronously on the Blazor renderer and must not leave an orphan process. A lightweight hosted Lookup lifetime coordinator tracks the page-owned controllers and joins this same disposal path during host shutdown; the bare launcher does not own that application-lifetime hook.
 
 Alternative: cancel only the page token or dispose without stopping. Rejected because the child can continue expensive cache/geodata work after its circuit disappears.
 
@@ -126,5 +126,5 @@ Add Standard/Web-only composition tests and negative assertions for no Lookup-pa
 2. Add the page-independent state/controller and fake contract tests, including local validation and all lifecycle/disposal races.
 3. Add the temporary shared-shaped admission/launch implementation, DI registrations, and real-worker fixture coverage; route `Lookup.razor` through it and remove all direct heavy injections/methods from the page.
 4. Verify Standard and Web-only composition, no in-process fallback, no `ProcessingState` events, and no asset writes; update public docs and GADM copy.
-5. When block 50 lands, replace the temporary implementation with the shared coordinator adapter, delete the temporary gate, and rerun busy/release/cancel/crash/reuse tests without changing the page contract.
+5. Change 49 records and verifies the stable admission contract and temporary Lookup-only gate boundary. During block 50, replace the temporary implementation with the shared coordinator adapter, delete the temporary gate, and rerun busy/release/cancel/crash/reuse tests without changing the page contract. That replacement and deletion remain deferred to block 50.
 6. Land before block 55 removes heavy Web registrations. Rollback restores the prior page only while those registrations still exist; after block 55, rollback must revert the dependent removal too. No data or database migration is required.

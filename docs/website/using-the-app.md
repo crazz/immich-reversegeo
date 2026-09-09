@@ -42,6 +42,12 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 - `Include live Overture Places lookup` adds an extra live place search for debugging, but it is slower and not needed for normal use
 - `Prefer cached GADM administrative areas` switches the administrative area part of the lookup to an experimental on-demand GADM cache for that country; country detection still starts with the bundled Overture country data
 
+Lookup starts a temporary isolated worker in both Standard and Web-only mode. While it is checking availability, starting, or running, the coordinate and source options stay locked. The page shows the current lookup step and any active cache preparation. `Cancel` requests a stop and remains in `Cancelling…` until the worker has exited and its output has finished draining.
+
+If another lookup already owns the temporary worker slot, the page reports that it is busy and starts no second worker. If the worker cannot start or stops without a valid result, Lookup shows a short safe failure message. It does not switch to an in-process resolver. You can retry after the existing job has finished or after correcting the worker installation problem.
+
+Lookup is always a preview. It may download or read geographic caches, but it does not update an Immich asset or write the displayed city, state, or country to `asset_exif`.
+
 ## Data tools
 
 The Data area contains maintenance tools that change downloaded caches or Immich reverse geo values.

@@ -186,6 +186,33 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         return Session;
     }
 
+    internal async Task<ChildWorkerSession> LaunchCoordinateAsync(
+        string scenario,
+        CoordinateLookupWorkerJobDispatch dispatch,
+        IWorkerJobEventSink sink,
+        bool capture = true,
+        params string[] options)
+    {
+        ArgumentNullException.ThrowIfNull(dispatch);
+        ProtocolVersion = InternalWorkerProtocolVersion.V2;
+        _expectedJobId = dispatch.Context.JobId;
+        _expectedJobKind = WorkerJobKind.CoordinateLookup;
+        var descriptor = Descriptor(
+            Arguments(scenario, capture, options),
+            InternalWorkerProtocolVersion.V2);
+        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
+        var result = await launcher.LaunchDescriptorAsync(
+            descriptor,
+            dispatch,
+            sink,
+            LauncherOptions,
+            CancellationToken.None,
+            InternalWorkerProtocolVersion.V2).AsTask().WaitAsync(Watchdog);
+        Session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result).Session;
+        Assert.AreEqual(ProcessId, Session.ProcessId);
+        return Session;
+    }
+
     internal async Task<DirectFixture> StartDirectAsync(IReadOnlyList<string> arguments)
     {
         var process = await new RegisteredFactory(this).StartAsync(Descriptor(arguments), CancellationToken.None);

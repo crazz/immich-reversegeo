@@ -101,6 +101,19 @@ internal static class WebServiceCollectionExtensions
         services.AddSingleton<IWorkerCommandRuntimeFactsCapture>(sp => sp.GetRequiredService<WorkerCommandRuntimeFactsCapture>());
         services.AddSingleton(sp => new WorkerCommandInvocationBuilder(sp.GetRequiredService<IWorkerCommandRuntimeFactsCapture>()));
         services.AddSingleton<IWorkerCommandInvocationBuilder>(sp => sp.GetRequiredService<WorkerCommandInvocationBuilder>());
+        services.AddSingleton<TemporaryCoordinateLookupAdmissionGate>();
+        services.AddSingleton<IWorkerJobAdmissionGate>(sp =>
+            sp.GetRequiredService<TemporaryCoordinateLookupAdmissionGate>());
+        services.AddSingleton<ConfigCoordinateLookupSettingsSnapshotProvider>();
+        services.AddSingleton<ICoordinateLookupSettingsSnapshotProvider>(sp =>
+            sp.GetRequiredService<ConfigCoordinateLookupSettingsSnapshotProvider>());
+        services.AddSingleton<CoordinateLookupWorkerClient>();
+        services.AddSingleton<ICoordinateLookupWorkerClient>(sp =>
+            sp.GetRequiredService<CoordinateLookupWorkerClient>());
+        services.AddSingleton<CoordinateLookupPageControllerHostLifetime>();
+        services.AddHostedService(sp =>
+            sp.GetRequiredService<CoordinateLookupPageControllerHostLifetime>());
+        services.AddSingleton<CoordinateLookupPageControllerFactory>();
         services.AddSingleton(sp => new ImmichReverseGeo.Web.WorkerFailureRecovery.WorkerRunControlPlane(
             sp.GetRequiredService<IWorkerCommandInvocationBuilder>(),
             sp.GetRequiredService<IChildWorkerLauncher>(),

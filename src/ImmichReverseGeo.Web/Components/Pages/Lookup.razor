@@ -1,12 +1,9 @@
 @page "/lookup"
 @rendermode InteractiveServer
-@inject GadmDivisionsService GadmDivisions
-@inject GadmDivisionCacheService GadmCache
-@inject OverturePlacesService Overture
-@inject OvertureDivisionCacheService OvertureCache
-@inject OvertureDivisionsService OvertureDivisions
+@using ImmichReverseGeo.Core.WorkerJobs
+@implements IAsyncDisposable
+@inject CoordinateLookupPageControllerFactory ControllerFactory
 @inject ConfigService Config
-@inject CityResolverProfileCatalogService CityResolverCatalog
 
 <h2>Coordinate Lookup</h2>
 <p class="page-desc">Enter coordinates to inspect how the Overture-backed resolver behaves.</p>
@@ -16,7 +13,7 @@
         <label for="paste">Paste coordinates</label>
         <input id="paste" type="text" class="paste-input"
                placeholder="47.4647, 8.5492 or N47.4647 E8.5492"
-               @oninput="OnPasteInput" />
+               @oninput="OnPasteInput" disabled="@(!PageState.FormControlsEnabled)" />
         @if (_parseError is not null)
         {
             <span class="parse-error">@_parseError</span>
@@ -26,57 +23,81 @@
         <div class="input-group">
             <label for="lat">Latitude</label>
             <input id="lat" type="number" step="any" placeholder="47.4647"
-                   @bind="_lat" @bind:event="oninput" class="coord-input" />
+                   @bind="_lat" @bind:event="oninput" class="coord-input" disabled="@(!PageState.FormControlsEnabled)" />
         </div>
         <div class="input-group">
             <label for="lon">Longitude</label>
             <input id="lon" type="number" step="any" placeholder="8.5492"
-                   @bind="_lon" @bind:event="oninput" class="coord-input" />
+                   @bind="_lon" @bind:event="oninput" class="coord-input" disabled="@(!PageState.FormControlsEnabled)" />
         </div>
-        <button class="btn btn-primary" @onclick="RunLookup" disabled="@_running">
-            @(_running ? "Looking up…" : "Lookup")
+        <button class="btn btn-primary" @onclick="RunLookup" disabled="@(!PageState.FormControlsEnabled)">
+            @(PageState.IsActive ? "Looking up…" : "Lookup")
         </button>
+        @if (PageState.HasAdmittedOperation)
+        {
+            <button class="btn btn-secondary" @onclick="CancelLookup" disabled="@(!PageState.CanCancel)">
+                @(PageState.Phase == CoordinateLookupPagePhase.CancelRequested ? "Cancelling…" : "Cancel")
+            </button>
+        }
     </div>
     <div class="lookup-options-row">
         <label class="checkbox-label">
-            <input type="checkbox" @bind="_includeAirportInfrastructure" />
+            <input type="checkbox" @bind="_includeAirportInfrastructure" disabled="@(!PageState.FormControlsEnabled)" />
             <span>Include bundled airport infrastructure lookup</span>
         </label>
         <label class="checkbox-label">
-            <input type="checkbox" @bind="_includeLivePlaces" />
+            <input type="checkbox" @bind="_includeLivePlaces" disabled="@(!PageState.FormControlsEnabled)" />
             <span>Include live Overture Places lookup (slower)</span>
         </label>
         <label class="checkbox-label">
-            <input type="checkbox" @bind="_preferGadmAdministrativeAreas" />
+            <input type="checkbox" @bind="_preferGadmAdministrativeAreas" disabled="@(!PageState.FormControlsEnabled)" />
             <span>Prefer cached GADM administrative areas (experimental, non-commercial)</span>
         </label>
     </div>
 </div>
 
-@if (_error is not null)
+@if (PageState.Error is not null)
 {
-    <div class="alert alert-error">@_error</div>
+    <div class="alert alert-error">@PageState.Error</div>
 }
 
-@if (_running || _lookupStatus is not null)
+@if (PageState.Phase != CoordinateLookupPagePhase.Idle)
 {
     <div class="settings-card">
         <h3>Lookup Status</h3>
-        <p class="section-intro">
-            @(_running ? "The lookup is running. Current step:" : "Last lookup activity:")
-        </p>
-        <p class="run-info activity">@(_lookupStatus ?? "Preparing lookup...")</p>
+        <p class="section-intro">@DescribePhase(PageState.Phase)</p>
+        <p class="run-info activity">@PageState.Status</p>
+        @if (PageState.CurrentActivity is not null)
+        {
+            <p class="run-info activity">Current activity: @PageState.CurrentActivity</p>
+        }
+        else if (PageState.CurrentStep is not null)
+        {
+            <p class="run-info activity">Current step: @DescribeStep(PageState.CurrentStep.Value)</p>
+        }
+        @if (PageState.JobId is not null)
+        {
+            <p class="result-note">Worker job <span class="mono">@PageState.JobId</span></p>
+        }
     </div>
 }
 
 @if (_result is not null)
 {
     <div class="lookup-results">
-        <div class="result-card @(_result.Iso3 is not null ? "found" : "not-found")">
+        @if (PageState.ResultIsFromLastCompletedLookup)
+        {
+            <div class="result-note">Showing the last completed lookup while the latest attempt was not admitted or did not pass validation.</div>
+        }
+        @if (_result.TruncatedTextCount > 0)
+        {
+            <div class="result-note">@_result.TruncatedTextCount result text values truncated by the worker transport bound.</div>
+        }
+        <div class="result-card @(_result.CountryStatus == CoordinateLookupCountryStatus.Matched ? "found" : "not-found")">
             <div class="result-header">
                 <span class="result-source">Country — Overture Bundled Cache</span>
-                <span class="result-badge @(_result.Iso3 is not null ? "badge-found" : "badge-miss")">
-                    @(_result.Iso3 is not null ? "found" : "no match")
+                <span class="result-badge @(_result.CountryStatus == CoordinateLookupCountryStatus.Matched ? "badge-found" : "badge-miss")">
+                    @DescribeCountryStatus(_result.CountryStatus)
                 </span>
             </div>
             @if (_result.Iso3 is not null)
@@ -89,13 +110,17 @@
             {
                 <div class="result-note">No bundled Overture country division matched this point.</div>
             }
+            @if (_result.CountryError is not null)
+            {
+                <div class="result-note">Country source unavailable: @_result.CountryError</div>
+            }
         </div>
 
         <div class="result-card @(_result.OvertureDivisionState is not null ? "found" : "not-found")">
             <div class="result-header">
                 <span class="result-source">Administrative Areas — Cached Overture Divisions</span>
-                <span class="result-badge @(_result.Iso3 is null ? "badge-miss" : _result.OvertureDivisionState is not null || _result.OvertureDivisionCity is not null ? "badge-found" : "badge-miss")">
-                    @(_result.Iso3 is null ? "skipped" : _result.OvertureDivisionState is not null || _result.OvertureDivisionCity is not null ? "found" : "no match")
+                <span class="result-badge @SourceBadgeClass(_result.OvertureDivisionDiagnostics.State)">
+                    @DescribeSourceState(_result.OvertureDivisionDiagnostics.State)
                 </span>
             </div>
             @if (_result.Iso3 is null)
@@ -104,6 +129,7 @@
             }
             else
             {
+                <div class="result-row"><span class="result-key">Source status</span><span class="result-val">@DescribeSourceState(_result.OvertureDivisionDiagnostics.State)</span></div>
                 <div class="result-row"><span class="result-key">State</span><span class="result-val">@(_result.OvertureDivisionState ?? "—")</span></div>
                 <div class="result-row"><span class="result-key">Resolved City</span><span class="result-val">@(_result.OvertureDivisionCity ?? "—")</span></div>
                 <div class="result-row"><span class="result-key">City Resolver Profile</span><span class="result-val">@(_result.CityResolverSummary ?? "—")</span></div>
@@ -113,15 +139,31 @@
                 <div class="result-row"><span class="result-key">Cache</span><span class="result-val">@(_result.OvertureDivisionCacheReady ? "ready" : "missing")</span></div>
                 <div class="result-note">Resolved City uses the configured country-aware profile. Raw Best Area shows the strongest single cached division candidate before that policy is applied.</div>
             }
+            @foreach (var cache in _result.OvertureDivisionDiagnostics.Caches)
+            {
+                <div class="result-note">@cache.CountryCode cache: @DescribeSourceState(cache.State)@(cache.Error is null ? string.Empty : $" — {cache.Error.Message}")</div>
+            }
+            @if (_result.OvertureDivisionDiagnostics.OmittedCacheCount > 0)
+            {
+                <div class="result-note">@_result.OvertureDivisionDiagnostics.OmittedCacheCount additional cache statuses omitted by the worker transport bound.</div>
+            }
+            @if (_result.OvertureDivisionDiagnostics.TruncatedTextCount > 0)
+            {
+                <div class="result-note">@_result.OvertureDivisionDiagnostics.TruncatedTextCount source text values truncated by the worker transport bound.</div>
+            }
         </div>
 
         <div class="result-card @(_result.GadmDivisionState is not null ? "found" : "not-found")">
             <div class="result-header">
                 <span class="result-source">Administrative Areas — Cached GADM</span>
-                <span class="result-badge @(_result.Iso3 is null ? "badge-miss" : !_result.GadmEnabled ? "badge-miss" : _result.GadmDivisionState is not null || _result.GadmDivisionCity is not null ? "badge-found" : "badge-miss")">
-                    @(_result.Iso3 is null ? "skipped" : !_result.GadmEnabled ? "disabled" : _result.GadmDivisionState is not null || _result.GadmDivisionCity is not null ? "found" : "no match")
+                <span class="result-badge @SourceBadgeClass(_result.GadmDivisionDiagnostics.State)">
+                    @DescribeSourceState(_result.GadmDivisionDiagnostics.State)
                 </span>
             </div>
+            @if (_result.GadmEnabled)
+            {
+                <div class="result-note">@(_result.GadmDivisionDiagnostics.UsageNotice ?? CoordinateLookupGadmAttribution.UsageNotice) <a href="@CoordinateLookupGadmAttribution.LicenseUrl" target="_blank" rel="noopener noreferrer">Official GADM license</a>.</div>
+            }
             @if (!_result.GadmEnabled)
             {
                 <div class="result-note">Cached GADM lookup is disabled for this run.</div>
@@ -130,8 +172,13 @@
             {
                 <div class="result-note">Country lookup must succeed before the per-country GADM cache can be queried.</div>
             }
+            else if (_result.GadmDivisionDiagnostics.Error is not null)
+            {
+                <div class="result-note">GADM data is unavailable: @_result.GadmDivisionDiagnostics.Error</div>
+            }
             else
             {
+                <div class="result-row"><span class="result-key">Source status</span><span class="result-val">@DescribeSourceState(_result.GadmDivisionDiagnostics.State)</span></div>
                 <div class="result-row"><span class="result-key">State</span><span class="result-val">@(_result.GadmDivisionState ?? "—")</span></div>
                 <div class="result-row"><span class="result-key">Resolved City</span><span class="result-val">@(_result.GadmDivisionCity ?? "—")</span></div>
                 <div class="result-row"><span class="result-key">Raw Best Area</span><span class="result-val">@(_result.GadmDivision?.Name ?? "—")</span></div>
@@ -140,13 +187,29 @@
                 <div class="result-row"><span class="result-key">Cache</span><span class="result-val">@(_result.GadmDivisionCacheReady ? "ready" : "missing")</span></div>
                 <div class="result-note">This experimental path still uses bundled Overture country detection to decide which country cache to load first.</div>
             }
+            @foreach (var cache in _result.GadmDivisionDiagnostics.Caches)
+            {
+                <div class="result-note">@cache.CountryCode cache: @DescribeSourceState(cache.State)@(cache.Error is null ? string.Empty : $" — {cache.Error.Message}")</div>
+            }
+            @if (_result.GadmDivisionDiagnostics.OmittedCacheCount > 0)
+            {
+                <div class="result-note">@_result.GadmDivisionDiagnostics.OmittedCacheCount additional cache statuses omitted by the worker transport bound.</div>
+            }
+            @if (_result.GadmDivisionDiagnostics.TruncatedTextCount > 0)
+            {
+                <div class="result-note">@_result.GadmDivisionDiagnostics.TruncatedTextCount source text values truncated by the worker transport bound.</div>
+            }
+            @if (_result.GadmDivisionDiagnostics.Attribution is not null)
+            {
+                <div class="result-note">Dataset: @_result.GadmDivisionDiagnostics.Attribution@(_result.GadmDivisionDiagnostics.Version is null ? string.Empty : $" {_result.GadmDivisionDiagnostics.Version}")</div>
+            }
         </div>
 
         <div class="result-card @(_result.OvertureInfrastructure is not null ? "found" : "not-found")">
             <div class="result-header">
                 <span class="result-source">Airport Infrastructure — Bundled Overture</span>
-                <span class="result-badge @(_result.Iso3 is null || !_result.AirportInfrastructureEnabled ? "badge-miss" : _result.OvertureInfrastructure is not null ? "badge-found" : "badge-miss")">
-                    @(_result.Iso3 is null ? "skipped" : !_result.AirportInfrastructureEnabled ? "disabled" : _result.OvertureInfrastructure is not null ? "found" : "no match")
+                <span class="result-badge @SourceBadgeClass(_result.OvertureInfrastructureDiagnostics.State)">
+                    @DescribeSourceState(_result.OvertureInfrastructureDiagnostics.State)
                 </span>
             </div>
             @if (!_result.AirportInfrastructureEnabled)
@@ -158,9 +221,9 @@
                 <div class="result-row"><span class="result-key">Name</span><span class="result-val">@_result.OvertureInfrastructure.Name</span></div>
                 <div class="result-row"><span class="result-key">Subtype</span><span class="result-val">@(_result.OvertureInfrastructure.SubType ?? "—")</span></div>
                 <div class="result-row"><span class="result-key">Class</span><span class="result-val">@(_result.OvertureInfrastructure.ClassName ?? "—")</span></div>
-                <div class="result-row"><span class="result-key">BBox Contains Point</span><span class="result-val">@(_result.OvertureInfrastructure.BoundingBoxContainsPoint ? "yes" : "no")</span></div>
-                <div class="result-row"><span class="result-key">Geometry Contains Point</span><span class="result-val">@(_result.OvertureInfrastructure.GeometryContainsPoint ? "yes" : "no")</span></div>
-                <div class="result-row"><span class="result-key">Distance</span><span class="result-val">@((int)_result.OvertureInfrastructure.DistanceMetres) m</span></div>
+                <div class="result-row"><span class="result-key">BBox Contains Point</span><span class="result-val">@DescribeFact(_result.OvertureInfrastructure.BoundingBoxContainsPoint)</span></div>
+                <div class="result-row"><span class="result-key">Geometry Contains Point</span><span class="result-val">@DescribeFact(_result.OvertureInfrastructure.GeometryContainsPoint)</span></div>
+                <div class="result-row"><span class="result-key">Distance</span><span class="result-val">@DescribeDistance(_result.OvertureInfrastructure.DistanceMetres)</span></div>
             }
             else if (_result.Iso3 is not null)
             {
@@ -170,13 +233,21 @@
             {
                 <div class="result-note">Ranking prefers better airport class, then real geometry matches, then bbox matches, then distance.</div>
             }
+            @if (_result.OvertureInfrastructureDiagnostics.OmittedCacheCount > 0)
+            {
+                <div class="result-note">@_result.OvertureInfrastructureDiagnostics.OmittedCacheCount additional cache statuses omitted by the worker transport bound.</div>
+            }
+            @if (_result.OvertureInfrastructureDiagnostics.TruncatedTextCount > 0)
+            {
+                <div class="result-note">@_result.OvertureInfrastructureDiagnostics.TruncatedTextCount source text values truncated by the worker transport bound.</div>
+            }
         </div>
 
         <div class="result-card @(_result.OverturePoi is not null ? "found" : "not-found")">
             <div class="result-header">
                 <span class="result-source">Overture Places — Live Lookup</span>
-                <span class="result-badge @(!_result.LivePlacesEnabled || _result.Iso3 is null ? "badge-miss" : _result.OvertureDiagnostics?.Error is not null ? "badge-miss" : _result.OverturePoi is not null ? "badge-found" : "badge-miss")">
-                    @(!_result.LivePlacesEnabled || _result.Iso3 is null ? "skipped" : _result.OvertureDiagnostics?.Error is not null ? "error" : _result.OverturePoi is not null ? "found" : "no match")
+                <span class="result-badge @SourceBadgeClass(_result.OvertureDiagnostics.State)">
+                    @DescribeSourceState(_result.OvertureDiagnostics.State)
                 </span>
             </div>
             @if (!_result.LivePlacesEnabled)
@@ -187,13 +258,13 @@
             {
                 <div class="result-row"><span class="result-key">Name</span><span class="result-val">@_result.OverturePoi.Name</span></div>
                 <div class="result-row"><span class="result-key">Category</span><span class="result-val">@(_result.OverturePoi.Category ?? _result.OverturePoi.BasicCategory ?? "—")</span></div>
-                <div class="result-row"><span class="result-key">Confidence</span><span class="result-val">@_result.OverturePoi.Confidence.ToString("0.00")</span></div>
+                <div class="result-row"><span class="result-key">Confidence</span><span class="result-val">@DescribeConfidence(_result.OverturePoi.Confidence)</span></div>
                 <div class="result-row"><span class="result-key">Status</span><span class="result-val">@(_result.OverturePoi.OperatingStatus ?? "—")</span></div>
-                <div class="result-row"><span class="result-key">BBox Contains Point</span><span class="result-val">@(_result.OverturePoi.BoundingBoxContainsPoint ? "yes" : "no")</span></div>
+                <div class="result-row"><span class="result-key">BBox Contains Point</span><span class="result-val">@DescribeFact(_result.OverturePoi.BoundingBoxContainsPoint)</span></div>
                 <div class="result-row"><span class="result-key">Sources</span><span class="result-val">@DescribeSources(_result.OverturePoi.Sources)</span></div>
-                <div class="result-row"><span class="result-key">Distance</span><span class="result-val">@((int)_result.OverturePoi.DistanceMetres) m</span></div>
+                <div class="result-row"><span class="result-key">Distance</span><span class="result-val">@DescribeDistance(_result.OverturePoi.DistanceMetres)</span></div>
             }
-            else if (_result.OvertureDiagnostics?.Error is not null)
+            else if (_result.OvertureDiagnostics.Error is not null)
             {
                 <div class="result-note">Live Overture Places lookup failed: @_result.OvertureDiagnostics.Error</div>
             }
@@ -204,6 +275,14 @@
             @if (_result.LivePlacesEnabled && _result.Iso3 is not null)
             {
                 <div class="result-note">Confidence below 0.90 is filtered out. Among the remaining candidates, ranking prefers active/open places, then bbox containment, then distance.</div>
+            }
+            @if (_result.OvertureDiagnostics.OmittedCacheCount > 0)
+            {
+                <div class="result-note">@_result.OvertureDiagnostics.OmittedCacheCount additional cache statuses omitted by the worker transport bound.</div>
+            }
+            @if (_result.OvertureDiagnostics.TruncatedTextCount > 0)
+            {
+                <div class="result-note">@_result.OvertureDiagnostics.TruncatedTextCount source text values truncated by the worker transport bound.</div>
             }
         </div>
 
@@ -218,7 +297,7 @@
             <div class="result-row"><span class="result-key">City Source</span><span class="result-val">@(_result.FinalCitySource ?? "—")</span></div>
             <div class="result-row"><span class="result-key">State</span><span class="result-val">@(_result.FinalState ?? "—")</span></div>
             <div class="result-row"><span class="result-key">State Source</span><span class="result-val">@(_result.FinalStateSource ?? "—")</span></div>
-            <div class="result-row"><span class="result-key">Country</span><span class="result-val">@(_result.CountryName ?? "—")</span></div>
+            <div class="result-row"><span class="result-key">Country</span><span class="result-val">@(_result.FinalCountry ?? "—")</span></div>
             <div class="result-row"><span class="result-key">Country Source</span><span class="result-val">@(_result.FinalCountrySource ?? "—")</span></div>
         </div>
 
@@ -233,6 +312,10 @@
                     @foreach (var line in _result.Trace)
                     {
                         <div class="trace-line">@line</div>
+                    }
+                    @if (_result.OmittedTraceCount > 0)
+                    {
+                        <div class="trace-line">@_result.OmittedTraceCount additional trace lines omitted by the worker transport bound.</div>
                     }
                 </div>
             </details>
@@ -256,9 +339,9 @@
                                 <div class="trace-candidate @(candidate.Selected ? "selected" : null)">
                                     <div class="trace-candidate-main">
                                         <span class="trace-name">@candidate.Name</span>
-                                        <span class="trace-meta">@((int)candidate.DistanceMetres) m</span>
-                                        <span class="trace-meta">bbox @(candidate.BoundingBoxContainsPoint ? "yes" : "no")</span>
-                                        <span class="trace-meta">geom @(candidate.GeometryContainsPoint ? "yes" : "no")</span>
+                                        <span class="trace-meta">@DescribeDistance(candidate.DistanceMetres)</span>
+                                        <span class="trace-meta">bbox @DescribeFact(candidate.BoundingBoxContainsPoint)</span>
+                                        <span class="trace-meta">geom @DescribeFact(candidate.GeometryContainsPoint)</span>
                                         <span class="trace-meta">@((candidate.SubType ?? candidate.FeatureType ?? "unknown").ToLowerInvariant())</span>
                                     </div>
                                     <div class="trace-candidate-sub">
@@ -266,8 +349,20 @@
                                         <span>@(candidate.ClassName ?? "unclassified")</span>
                                         <span>@candidate.Decision</span>
                                     </div>
+                                    @if (candidate.OmittedRecordSourceCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.OmittedRecordSourceCount additional record sources omitted by the worker transport bound.</div>
+                                    }
+                                    @if (candidate.TruncatedTextCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.TruncatedTextCount candidate text values truncated by the worker transport bound.</div>
+                                    }
                                 </div>
                             }
+                        }
+                        @if (_result.OvertureInfrastructureDiagnostics.OmittedCandidateCount > 0)
+                        {
+                            <div class="trace-line">@_result.OvertureInfrastructureDiagnostics.OmittedCandidateCount additional candidates omitted by the worker transport bound.</div>
                         }
                     </div>
                 </details>
@@ -294,19 +389,31 @@
                                         <span class="trace-name">@candidate.Name</span>
                                         <span class="trace-meta">@((candidate.SubType ?? "unknown").ToLowerInvariant())</span>
                                         <span class="trace-meta">admin @((candidate.AdminLevel?.ToString()) ?? "—")</span>
-                                        <span class="trace-meta">bbox @(candidate.BoundingBoxContainsPoint ? "yes" : "no")</span>
-                                        <span class="trace-meta">geom @(candidate.GeometryContainsPoint ? "yes" : "no")</span>
-                                        <span class="trace-meta">territorial @(candidate.IsTerritorial ? "yes" : "no")</span>
+                                        <span class="trace-meta">bbox @DescribeFact(candidate.BoundingBoxContainsPoint)</span>
+                                        <span class="trace-meta">geom @DescribeFact(candidate.GeometryContainsPoint)</span>
+                                        <span class="trace-meta">territorial @DescribeFact(candidate.IsTerritorial)</span>
                                     </div>
                                     <div class="trace-candidate-sub">
                                         <span class="mono">@candidate.Id</span>
                                         <span>@(candidate.ClassName ?? "unclassified")</span>
                                         <span>@(candidate.Country ?? "—")</span>
-                                        <span>bbox area @candidate.BoundingBoxArea.ToString("0.######")</span>
+                                        <span>bbox area @DescribeArea(candidate.BoundingBoxArea)</span>
                                         <span>@candidate.Decision</span>
                                     </div>
+                                    @if (candidate.OmittedRecordSourceCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.OmittedRecordSourceCount additional record sources omitted by the worker transport bound.</div>
+                                    }
+                                    @if (candidate.TruncatedTextCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.TruncatedTextCount candidate text values truncated by the worker transport bound.</div>
+                                    }
                                 </div>
                             }
+                        }
+                        @if (_result.OvertureDivisionDiagnostics.OmittedCandidateCount > 0)
+                        {
+                            <div class="trace-line">@_result.OvertureDivisionDiagnostics.OmittedCandidateCount additional candidates omitted by the worker transport bound.</div>
                         }
                     </div>
                 </details>
@@ -332,17 +439,29 @@
                                     <div class="trace-candidate-main">
                                         <span class="trace-name">@candidate.Name</span>
                                         <span class="trace-meta">level @candidate.AdminLevel</span>
-                                        <span class="trace-meta">bbox @(candidate.BoundingBoxContainsPoint ? "yes" : "no")</span>
-                                        <span class="trace-meta">geom @(candidate.GeometryContainsPoint ? "yes" : "no")</span>
+                                        <span class="trace-meta">bbox @DescribeFact(candidate.BoundingBoxContainsPoint)</span>
+                                        <span class="trace-meta">geom @DescribeFact(candidate.GeometryContainsPoint)</span>
                                         <span class="trace-meta">@((candidate.EnglishType ?? candidate.LocalType ?? "unknown").ToLowerInvariant())</span>
                                     </div>
                                     <div class="trace-candidate-sub">
                                         <span class="mono">@candidate.Id</span>
-                                        <span>bbox area @candidate.BoundingBoxArea.ToString("0.######")</span>
+                                        <span>bbox area @DescribeArea(candidate.BoundingBoxArea)</span>
                                         <span>@candidate.Decision</span>
                                     </div>
+                                    @if (candidate.OmittedRecordSourceCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.OmittedRecordSourceCount additional record sources omitted by the worker transport bound.</div>
+                                    }
+                                    @if (candidate.TruncatedTextCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.TruncatedTextCount candidate text values truncated by the worker transport bound.</div>
+                                    }
                                 </div>
                             }
+                        }
+                        @if (_result.GadmDivisionDiagnostics.OmittedCandidateCount > 0)
+                        {
+                            <div class="trace-line">@_result.GadmDivisionDiagnostics.OmittedCandidateCount additional candidates omitted by the worker transport bound.</div>
                         }
                     </div>
                 </details>
@@ -367,9 +486,9 @@
                                 <div class="trace-candidate @(candidate.Selected ? "selected" : null)">
                                     <div class="trace-candidate-main">
                                         <span class="trace-name">@candidate.Name</span>
-                                        <span class="trace-meta">@((int)candidate.DistanceMetres) m</span>
-                                        <span class="trace-meta">conf @candidate.Confidence.ToString("0.00")</span>
-                                        <span class="trace-meta">bbox @(candidate.BoundingBoxContainsPoint ? "yes" : "no")</span>
+                                        <span class="trace-meta">@DescribeDistance(candidate.DistanceMetres)</span>
+                                        <span class="trace-meta">conf @DescribeConfidence(candidate.Confidence)</span>
+                                        <span class="trace-meta">bbox @DescribeFact(candidate.BoundingBoxContainsPoint)</span>
                                         <span class="trace-meta">@((candidate.OperatingStatus ?? "unknown").ToLowerInvariant())</span>
                                     </div>
                                     <div class="trace-candidate-sub">
@@ -378,8 +497,20 @@
                                         <span>@DescribeSources(candidate.Sources)</span>
                                         <span>@candidate.Decision</span>
                                     </div>
+                                    @if (candidate.OmittedRecordSourceCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.OmittedRecordSourceCount additional record sources omitted by the worker transport bound.</div>
+                                    }
+                                    @if (candidate.TruncatedTextCount > 0)
+                                    {
+                                        <div class="trace-candidate-sub">@candidate.TruncatedTextCount candidate text values truncated by the worker transport bound.</div>
+                                    }
                                 </div>
                             }
+                        }
+                        @if (_result.OvertureDiagnostics.OmittedCandidateCount > 0)
+                        {
+                            <div class="trace-line">@_result.OvertureDiagnostics.OmittedCandidateCount additional candidates omitted by the worker transport bound.</div>
                         }
                     </div>
                 </details>
@@ -392,36 +523,66 @@
     private double _lat;
     private double _lon;
     private string? _parseError;
-    private bool _running;
     private bool _expandTrace = true;
     private bool _includeAirportInfrastructure = true;
     private bool _includeLivePlaces;
     private bool _preferGadmAdministrativeAreas;
-    private IReadOnlyList<string> _gadmCandidateCodes = [];
-    private string? _lookupStatus;
-    private string? _error;
-    private LookupResult? _result;
+    private CoordinateLookupPageController? _controller;
+    private CoordinateLookupResult? _displaySource;
+    private CoordinateLookupDisplayResult? _displayResult;
+    private bool _renderingDisposed;
+
+    private CoordinateLookupPageState PageState =>
+        _controller?.State ?? CoordinateLookupPageState.Idle;
+
+    private CoordinateLookupDisplayResult? _result
+    {
+        get
+        {
+            CoordinateLookupResult? source = PageState.Result;
+            if (!ReferenceEquals(source, _displaySource))
+            {
+                _displaySource = source;
+                _displayResult = source is null ? null : new CoordinateLookupDisplayResult(source);
+            }
+
+            return _displayResult;
+        }
+    }
 
     protected override async Task OnInitializedAsync()
     {
-        var cfg = await Config.GetConfigAsync();
-        _includeAirportInfrastructure = cfg.Processing.UseAirportInfrastructure;
+        _controller = ControllerFactory.Create(QueueRender);
+        try
+        {
+            var config = await Config.GetConfigAsync();
+            _includeAirportInfrastructure = config.Processing.UseAirportInfrastructure;
+        }
+        catch
+        {
+            _includeAirportInfrastructure = true;
+        }
     }
 
     private void OnPasteInput(ChangeEventArgs e)
     {
-        var text = e.Value?.ToString() ?? string.Empty;
-        _parseError = null;
-
-        if (string.IsNullOrWhiteSpace(text))
+        if (!PageState.FormControlsEnabled)
         {
             return;
         }
 
-        if (TryParseCoordinates(text, out var lat, out var lon))
+        string text = e.Value?.ToString() ?? string.Empty;
+        if (string.IsNullOrWhiteSpace(text))
         {
-            _lat = lat;
-            _lon = lon;
+            _parseError = null;
+            return;
+        }
+
+        if (CoordinateLookupInputParser.TryParse(text, out double latitude, out double longitude))
+        {
+            _lat = latitude;
+            _lon = longitude;
+            _parseError = null;
         }
         else
         {
@@ -429,375 +590,95 @@
         }
     }
 
-    private static bool TryParseCoordinates(string text, out double lat, out double lon)
-    {
-        lat = lon = 0;
-        text = text.Trim();
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"[,;|]+", " ");
-        text = System.Text.RegularExpressions.Regex.Replace(text, @"\s+", " ").Trim();
-
-        var dms = System.Text.RegularExpressions.Regex.Match(text,
-            @"(\d+)[°d\s]\s*(\d+)['']\s*(\d+(?:\.\d+)?)['""s]?\s*([NSns])\s+" +
-            @"(\d+)[°d\s]\s*(\d+)['']\s*(\d+(?:\.\d+)?)['""s]?\s*([EWew])");
-        if (dms.Success)
-        {
-            lat = DmsToDecimal(dms.Groups[1], dms.Groups[2], dms.Groups[3], dms.Groups[4].Value);
-            lon = DmsToDecimal(dms.Groups[5], dms.Groups[6], dms.Groups[7], dms.Groups[8].Value);
-            return true;
-        }
-
-        var dir = System.Text.RegularExpressions.Regex.Match(text,
-            @"([NSns])\s*(\d+(?:\.\d+)?)\s+([EWew])\s*(\d+(?:\.\d+)?)");
-        if (!dir.Success)
-        {
-            dir = System.Text.RegularExpressions.Regex.Match(text,
-                @"(\d+(?:\.\d+)?)\s*([NSns])\s+(\d+(?:\.\d+)?)\s*([EWew])");
-            if (dir.Success)
-            {
-                lat = ApplyDirection(double.Parse(dir.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture), dir.Groups[2].Value);
-                lon = ApplyDirection(double.Parse(dir.Groups[3].Value, System.Globalization.CultureInfo.InvariantCulture), dir.Groups[4].Value);
-                return true;
-            }
-        }
-        else
-        {
-            lat = ApplyDirection(double.Parse(dir.Groups[2].Value, System.Globalization.CultureInfo.InvariantCulture), dir.Groups[1].Value);
-            lon = ApplyDirection(double.Parse(dir.Groups[4].Value, System.Globalization.CultureInfo.InvariantCulture), dir.Groups[3].Value);
-            return true;
-        }
-
-        var kv = System.Text.RegularExpressions.Regex.Match(text,
-            @"lat\s*=\s*(-?\d+(?:\.\d+)?)\s+lon\s*=\s*(-?\d+(?:\.\d+)?)",
-            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
-        if (kv.Success
-            && double.TryParse(kv.Groups[1].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lat)
-            && double.TryParse(kv.Groups[2].Value, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out lon))
-        {
-            return true;
-        }
-
-        var parts = text.Split(' ', StringSplitOptions.RemoveEmptyEntries);
-        if (parts.Length >= 2
-            && double.TryParse(parts[0], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var a)
-            && double.TryParse(parts[1], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var b))
-        {
-            lat = a;
-            lon = b;
-            return true;
-        }
-
-        return false;
-    }
-
-    private static double DmsToDecimal(System.Text.RegularExpressions.Group deg, System.Text.RegularExpressions.Group min, System.Text.RegularExpressions.Group sec, string direction)
-    {
-        var v = double.Parse(deg.Value) + double.Parse(min.Value) / 60.0
-              + double.Parse(sec.Value, System.Globalization.CultureInfo.InvariantCulture) / 3600.0;
-        return ApplyDirection(v, direction);
-    }
-
-    private static double ApplyDirection(double value, string direction)
-    {
-        return direction.ToUpperInvariant() is "S" or "W" ? -value : value;
-    }
-
     private Task RunLookup()
     {
-        return RunLookupAsync(RunLookupCore, StateHasChanged);
+        _parseError = null;
+        return _controller?.SubmitAsync(new CoordinateLookupSubmission(
+            _lat,
+            _lon,
+            _includeAirportInfrastructure,
+            _includeLivePlaces,
+            _preferGadmAdministrativeAreas)) ?? Task.CompletedTask;
     }
 
-    internal async Task RunLookupAsync(Func<Task> operation, Action? stateHasChanged = null)
+    private Task CancelLookup()
     {
-        _error = null;
-        _result = null;
-        _running = true;
-        _lookupStatus = "Preparing lookup...";
-        stateHasChanged?.Invoke();
+        return _controller?.CancelAsync() ?? Task.CompletedTask;
+    }
 
+    private void QueueRender()
+    {
+        if (_renderingDisposed)
+        {
+            return;
+        }
+
+        _ = RenderAsync();
+    }
+
+    private async Task RenderAsync()
+    {
         try
         {
-            await LookupRunExceptionHelper.ExecuteAsync(operation);
-        }
-        catch (OutOfMemoryException)
-        {
-            throw;
-        }
-        catch (Exception ex)
-        {
-            _error = ex.Message;
-            _lookupStatus = $"Lookup failed: {ex.Message}";
-        }
-        finally
-        {
-            _lookupStatus ??= "Lookup finished.";
-            _running = false;
-        }
-    }
-
-    private async Task RunLookupCore()
-    {
-        var r = new LookupResult
-        {
-            AirportInfrastructureEnabled = _includeAirportInfrastructure,
-            LivePlacesEnabled = _includeLivePlaces,
-            GadmEnabled = _preferGadmAdministrativeAreas
-        };
-
-        await UpdateLookupStatusAsync("Checking bundled Overture country coverage...");
-        var countryLookup = await OvertureDivisions.FindBundledCountryAsync(_lat, _lon);
-        if (!countryLookup.IsMatched)
-        {
-            var failure = countryLookup.FailureReason ?? (countryLookup.Status == BundledCountryLookupStatus.SpatialNoMatch
-                ? "Bundled Overture spatial coverage found no match."
-                : "Bundled Overture country identity mapping failed.");
-            r.Trace.Add($"Country lookup: {failure}");
-            await UpdateLookupStatusAsync(failure);
-            _result = r;
-            StateHasChanged();
-            return;
-        }
-
-        r.Iso3 = countryLookup.Iso3;
-        r.CountryName = countryLookup.CountryName;
-        r.Alpha2 = countryLookup.Alpha2;
-        r.Trace.Add($"Country matched from bundled Overture divisions: {r.CountryName} ({r.Iso3}, {r.Alpha2 ?? "no alpha-2"})");
-        await UpdateLookupStatusAsync($"Country resolved as {r.CountryName} ({r.Iso3}).");
-
-        var cfg = await Config.GetConfigAsync();
-        var cityResolverProfile = CityResolverCatalog.GetProfile(cfg.Processing.CityResolver, r.Iso3);
-        r.CityResolverSummary = $"{string.Join(" > ", cityResolverProfile.PreferredSubtypes)} ({cityResolverProfile.TieBreakMode})";
-        r.Trace.Add($"City resolver profile: {r.CityResolverSummary}");
-
-        var ensureDivisionTask = EnsureDivisionCacheAsync(r);
-        _gadmCandidateCodes = r.Iso3 is not null
-            ? GadmCountryFallbackCatalog.ExpandCandidateCodes(r.Iso3)
-            : [];
-
-        var ensureGadmTask = EnsureGadmCacheAsync(r, _gadmCandidateCodes);
-        Task<OvertureInfrastructureLookupDiagnostics>? infrastructureTask = null;
-        if (_includeAirportInfrastructure)
-        {
-            infrastructureTask = Overture.FindNearestInfrastructureWithDiagnosticsAsync(_lat, _lon, r.Iso3);
-        }
-        Task<OvertureLookupDiagnostics>? livePlacesTask = null;
-        if (_includeLivePlaces)
-        {
-            livePlacesTask = Overture.FindNearestPlaceWithDiagnosticsAsync(_lat, _lon, r.Alpha2);
-        }
-
-        await ensureDivisionTask;
-        await UpdateLookupStatusAsync("Querying cached Overture administrative areas...");
-        r.OvertureDivisionDiagnostics = await OvertureDivisions.FindContainingDivisionAreasAsync(_lat, _lon, r.Alpha2, r.Iso3);
-        r.OvertureDivision = r.OvertureDivisionDiagnostics.BestMatch;
-        r.OvertureDivisionState = OvertureDivisionsLogic.SelectStateName(r.OvertureDivisionDiagnostics.Candidates);
-        r.OvertureDivisionCity = OvertureDivisionsLogic.SelectCityName(r.OvertureDivisionDiagnostics.Candidates, cityResolverProfile);
-        r.Trace.Add(r.OvertureDivisionDiagnostics.Error is not null
-            ? $"Overture division lookup failed: {r.OvertureDivisionDiagnostics.Error}"
-            : $"Overture division admin resolution: state={r.OvertureDivisionState ?? "—"}, city={r.OvertureDivisionCity ?? "—"}");
-
-        await ensureGadmTask;
-        if (_preferGadmAdministrativeAreas && r.GadmDivisionCacheReady)
-        {
-            await UpdateLookupStatusAsync($"Querying cached GADM administrative areas across {string.Join(", ", _gadmCandidateCodes)}...");
-            r.GadmDivisionDiagnostics = await GadmDivisions.FindContainingDivisionAreasAsync(_lat, _lon, _gadmCandidateCodes);
-            r.GadmDivision = r.GadmDivisionDiagnostics.BestMatch;
-            r.GadmDivisionState = GadmDivisionsLogic.SelectStateName(r.GadmDivisionDiagnostics.Candidates);
-            r.GadmDivisionCity = GadmDivisionsLogic.SelectCityName(r.GadmDivisionDiagnostics.Candidates);
-            r.Trace.Add(r.GadmDivisionDiagnostics.Error is not null
-                ? $"GADM lookup failed: {r.GadmDivisionDiagnostics.Error}"
-                : $"GADM admin resolution: state={r.GadmDivisionState ?? "—"}, city={r.GadmDivisionCity ?? "—"} (candidates: {string.Join(", ", _gadmCandidateCodes)})");
-        }
-        else if (_preferGadmAdministrativeAreas)
-        {
-            r.Trace.Add("GADM lookup skipped because the cache is unavailable.");
-        }
-        else
-        {
-            r.Trace.Add("GADM lookup skipped.");
-        }
-
-        if (infrastructureTask is not null)
-        {
-            await UpdateLookupStatusAsync("Querying bundled airport infrastructure...");
-            r.OvertureInfrastructureDiagnostics = await infrastructureTask;
-            r.OvertureInfrastructure = r.OvertureInfrastructureDiagnostics.BestMatch;
-            r.Trace.Add(r.OvertureInfrastructureDiagnostics.Error is not null
-                ? $"Overture infrastructure lookup failed: {r.OvertureInfrastructureDiagnostics.Error}"
-                : r.OvertureInfrastructure is not null
-                    ? $"Overture infrastructure winner: {r.OvertureInfrastructure.Name} at {(int)r.OvertureInfrastructure.DistanceMetres} m (bbox={(r.OvertureInfrastructure.BoundingBoxContainsPoint ? "yes" : "no")}, geom={(r.OvertureInfrastructure.GeometryContainsPoint ? "yes" : "no")})"
-                    : "Overture infrastructure lookup: no in-range match");
-        }
-        else
-        {
-            r.Trace.Add("Overture infrastructure lookup skipped.");
-        }
-
-        if (livePlacesTask is not null)
-        {
-            await UpdateLookupStatusAsync("Querying live Overture Places...");
-            r.OvertureDiagnostics = await livePlacesTask;
-            r.OverturePoi = r.OvertureDiagnostics.BestMatch;
-            r.Trace.Add(r.OvertureDiagnostics.Error is not null
-                ? $"Overture Places lookup failed: {r.OvertureDiagnostics.Error}"
-                : r.OverturePoi is not null
-                    ? $"Overture Places winner: {r.OverturePoi.Name} at {(int)r.OverturePoi.DistanceMetres} m (conf={r.OverturePoi.Confidence:0.00}, status={r.OverturePoi.OperatingStatus ?? "unknown"})"
-                    : "Overture Places lookup: no in-range match");
-        }
-        else
-        {
-            r.Trace.Add("Overture Places lookup skipped.");
-        }
-
-        var adminState = _preferGadmAdministrativeAreas && r.GadmDivisionState is not null
-            ? r.GadmDivisionState
-            : r.OvertureDivisionState;
-        var adminStateSource = _preferGadmAdministrativeAreas && r.GadmDivisionState is not null
-            ? "Cached GADM divisions"
-            : r.OvertureDivisionState is not null
-                ? "Cached Overture divisions"
-                : null;
-        var adminCity = _preferGadmAdministrativeAreas && r.GadmDivisionCity is not null
-            ? r.GadmDivisionCity
-            : r.OvertureDivisionCity;
-        var adminCitySource = _preferGadmAdministrativeAreas && r.GadmDivisionCity is not null
-            ? "Cached GADM divisions"
-            : r.OvertureDivisionCity is not null
-                ? "Cached Overture divisions"
-                : null;
-
-        r.FinalState = adminState;
-        r.FinalStateSource = adminStateSource;
-        r.FinalCountrySource = r.CountryName is not null ? "Bundled Overture country divisions" : null;
-        var city = r.OvertureInfrastructure?.GeometryContainsPoint == true
-            ? r.OvertureInfrastructure.Name
-            : adminCity ?? r.OvertureInfrastructure?.Name;
-        r.FinalCitySource = r.OvertureInfrastructure?.GeometryContainsPoint == true
-            ? "Bundled airport infrastructure (geometry match)"
-            : adminCitySource is not null
-                ? adminCitySource
-                : r.OvertureInfrastructure?.Name is not null
-                    ? "Bundled airport infrastructure (fallback)"
-                    : null;
-        if (city is null && r.FinalState is not null)
-        {
-            city = r.FinalState;
-            r.FinalCitySource = r.FinalStateSource;
-        }
-        else if (city is null && r.CountryName is not null)
-        {
-            city = r.CountryName;
-            r.FinalCitySource = r.FinalCountrySource;
-        }
-
-        r.FinalCity = city;
-        r.Trace.Add($"Final city decision: {r.FinalCity ?? "no result"}");
-        await UpdateLookupStatusAsync("Lookup finished.");
-
-        _result = r;
-        StateHasChanged();
-    }
-
-    private async Task EnsureDivisionCacheAsync(LookupResult r)
-    {
-        var result = await LookupCacheHelper.TryEnsureAsync(async () =>
-        {
-            var (downloadTask, ensureResult) = OvertureCache.GetOrStartDownload(r.Iso3!);
-            await UpdateLookupStatusAsync(ensureResult switch
+            await InvokeAsync(() =>
             {
-                OvertureDivisionEnsureResult.StartedDownload => $"Downloading Overture administrative cache for {r.Iso3}...",
-                OvertureDivisionEnsureResult.AwaitedExistingDownload => $"Waiting for Overture administrative cache for {r.Iso3}...",
-                _ => $"Overture administrative cache already ready for {r.Iso3}."
-            });
-            await downloadTask;
-            return OvertureCache.HasData(r.Iso3!);
-        });
-
-        if (!result.IsAvailable)
-        {
-            r.Trace.Add($"Overture division cache unavailable: {result.Error!.Message}");
-            return;
-        }
-
-        r.OvertureDivisionCacheReady = result.Value;
-        r.Trace.Add($"Overture division cache ready for {r.Iso3}");
-    }
-
-    private async Task EnsureGadmCacheAsync(LookupResult r, IReadOnlyList<string> candidateCodes)
-    {
-        if (!_preferGadmAdministrativeAreas || r.Iso3 is null)
-        {
-            return;
-        }
-
-        var result = await LookupCacheHelper.TryEnsureAsync(async () =>
-        {
-            var readyCodes = new List<string>();
-            foreach (var iso3 in candidateCodes)
-            {
-                var (downloadTask, ensureResult) = GadmCache.GetOrStartDownload(iso3);
-                await UpdateLookupStatusAsync(ensureResult switch
+                if (!_renderingDisposed)
                 {
-                    GadmDivisionEnsureResult.StartedDownload => $"Downloading GADM administrative cache for {iso3}...",
-                    GadmDivisionEnsureResult.AwaitedExistingDownload => $"Waiting for GADM administrative cache for {iso3}...",
-                    _ => $"GADM administrative cache already ready for {iso3}."
-                });
-                await downloadTask;
-                if (GadmCache.HasData(iso3))
-                {
-                    readyCodes.Add(iso3);
+                    StateHasChanged();
                 }
-            }
-
-            return readyCodes;
-        });
-
-        if (!result.IsAvailable)
-        {
-            r.Trace.Add($"GADM division cache unavailable: {result.Error!.Message}");
-            return;
+            });
         }
-
-        r.GadmDivisionCacheReady = result.Value!.Count > 0;
-        r.Trace.Add(result.Value.Count > 0
-            ? $"GADM division cache ready for {string.Join(", ", result.Value)}"
-            : "GADM division cache unavailable.");
+        catch (InvalidOperationException) when (_renderingDisposed)
+        {
+        }
+        catch (ObjectDisposedException) when (_renderingDisposed)
+        {
+        }
     }
 
-    private Task UpdateLookupStatusAsync(string status)
+    public async ValueTask DisposeAsync()
     {
-        _lookupStatus = status;
-        return InvokeAsync(StateHasChanged);
+        _renderingDisposed = true;
+        CoordinateLookupPageController? controller =
+            System.Threading.Interlocked.Exchange(ref _controller, null);
+        if (controller is not null)
+        {
+            await controller.DisposeAsync();
+        }
     }
 
-    private sealed class LookupResult
+    private static string DescribePhase(CoordinateLookupPagePhase phase)
     {
-        public string? Iso3 { get; set; }
-        public string? CountryName { get; set; }
-        public string? Alpha2 { get; set; }
-        public bool AirportInfrastructureEnabled { get; set; }
-        public bool LivePlacesEnabled { get; set; }
-        public bool GadmEnabled { get; set; }
-        public bool OvertureDivisionCacheReady { get; set; }
-        public OvertureDivisionResult? OvertureDivision { get; set; }
-        public OvertureDivisionLookupDiagnostics? OvertureDivisionDiagnostics { get; set; }
-        public string? OvertureDivisionState { get; set; }
-        public string? OvertureDivisionCity { get; set; }
-        public bool GadmDivisionCacheReady { get; set; }
-        public GadmDivisionResult? GadmDivision { get; set; }
-        public GadmDivisionLookupDiagnostics? GadmDivisionDiagnostics { get; set; }
-        public string? GadmDivisionState { get; set; }
-        public string? GadmDivisionCity { get; set; }
-        public OvertureInfrastructureResult? OvertureInfrastructure { get; set; }
-        public OvertureInfrastructureLookupDiagnostics? OvertureInfrastructureDiagnostics { get; set; }
-        public OverturePlaceResult? OverturePoi { get; set; }
-        public OvertureLookupDiagnostics? OvertureDiagnostics { get; set; }
-        public string? FinalState { get; set; }
-        public string? FinalStateSource { get; set; }
-        public string? FinalCity { get; set; }
-        public string? FinalCitySource { get; set; }
-        public string? FinalCountrySource { get; set; }
-        public string? CityResolverSummary { get; set; }
-        public List<string> Trace { get; } = [];
+        return phase switch
+        {
+            CoordinateLookupPagePhase.Validating => "Validating the local coordinate input.",
+            CoordinateLookupPagePhase.Admitting => "Checking isolated worker availability.",
+            CoordinateLookupPagePhase.Starting => "Starting the isolated lookup worker.",
+            CoordinateLookupPagePhase.Running => "The isolated lookup worker is running.",
+            CoordinateLookupPagePhase.CancelRequested => "Waiting for the active lookup worker to stop and finish cleanup.",
+            CoordinateLookupPagePhase.Completed => "The lookup completed.",
+            CoordinateLookupPagePhase.Cancelled => "The lookup was cancelled.",
+            CoordinateLookupPagePhase.Busy => "The worker resource is busy.",
+            CoordinateLookupPagePhase.Unavailable => "The isolated lookup worker is unavailable.",
+            CoordinateLookupPagePhase.Failed => "The lookup failed safely.",
+            _ => "Ready to look up coordinates."
+        };
+    }
+
+    private static string DescribeStep(CoordinateLookupProgressStep step)
+    {
+        return step switch
+        {
+            CoordinateLookupProgressStep.Country => "Country",
+            CoordinateLookupProgressStep.OvertureCache => "Overture cache",
+            CoordinateLookupProgressStep.OvertureAdministrative => "Overture administrative areas",
+            CoordinateLookupProgressStep.GadmCache => "GADM cache",
+            CoordinateLookupProgressStep.GadmAdministrative => "GADM administrative areas",
+            CoordinateLookupProgressStep.Airport => "Airport infrastructure",
+            CoordinateLookupProgressStep.LivePlaces => "Live Overture Places",
+            CoordinateLookupProgressStep.FinalSelection => "Final selection",
+            _ => step.ToString()
+        };
     }
 
     private static string DescribeSources(IReadOnlyList<string> sources)
@@ -805,53 +686,87 @@
         return sources.Count == 0 ? "—" : string.Join(", ", sources);
     }
 
+    private static string DescribeCountryStatus(CoordinateLookupCountryStatus status)
+    {
+        return status switch
+        {
+            CoordinateLookupCountryStatus.Matched => "found",
+            CoordinateLookupCountryStatus.NoMatch => "no match",
+            CoordinateLookupCountryStatus.MappingFailed => "mapping unavailable",
+            CoordinateLookupCountryStatus.Failed => "failed",
+            _ => "unknown"
+        };
+    }
+
+    private static string DescribeSourceState(CoordinateLookupSourceState state)
+    {
+        return state switch
+        {
+            CoordinateLookupSourceState.Disabled => "disabled",
+            CoordinateLookupSourceState.Skipped => "skipped",
+            CoordinateLookupSourceState.Ready => "ready",
+            CoordinateLookupSourceState.NoMatch => "no match",
+            CoordinateLookupSourceState.Unavailable => "unavailable",
+            CoordinateLookupSourceState.Failed => "failed",
+            _ => "unknown"
+        };
+    }
+
+    private static string SourceBadgeClass(CoordinateLookupSourceState state)
+    {
+        return state == CoordinateLookupSourceState.Ready
+            ? "badge-found"
+            : "badge-miss";
+    }
+
+    private static string DescribeFact(bool? value)
+    {
+        return value switch
+        {
+            true => "yes",
+            false => "no",
+            null => "unknown"
+        };
+    }
+
+    private static string DescribeDistance(double? value)
+    {
+        return value is double distance
+            ? $"{(int)distance} m"
+            : "unknown";
+    }
+
+    private static string DescribeConfidence(double? value)
+    {
+        return value?.ToString("0.00", System.Globalization.CultureInfo.InvariantCulture)
+            ?? "unknown";
+    }
+
+    private static string DescribeArea(double? value)
+    {
+        return value?.ToString("0.######", System.Globalization.CultureInfo.InvariantCulture)
+            ?? "unknown";
+    }
+
     private static IReadOnlyDictionary<string, object>? GetDetailsAttributes(bool open)
     {
         return open ? new Dictionary<string, object> { ["open"] = "open" } : null;
     }
 
-    private static IEnumerable<OvertureDivisionCandidateDiagnostic> SortDivisionCandidates(
-        IEnumerable<OvertureDivisionCandidateDiagnostic> candidates)
-    {
-        return candidates
-            .OrderByDescending(c => c.Selected)
-            .ThenByDescending(c => c.GeometryContainsPoint)
-            .ThenByDescending(c => c.BoundingBoxContainsPoint)
-            .ThenBy(c => OvertureDivisionsLogic.GetSubtypeRank(c.SubType))
-            .ThenBy(c => c.AdminLevel ?? int.MaxValue)
-            .ThenByDescending(c => c.IsTerritorial)
-            .ThenBy(c => c.BoundingBoxArea);
-    }
+    private static IEnumerable<CoordinateLookupDisplayCandidate> SortDivisionCandidates(
+        IEnumerable<CoordinateLookupDisplayCandidate> candidates) =>
+        candidates.OrderByDescending(static candidate => candidate.Selected);
 
-    private static IEnumerable<OvertureInfrastructureCandidateDiagnostic> SortInfrastructureCandidates(
-        IEnumerable<OvertureInfrastructureCandidateDiagnostic> candidates)
-    {
-        return candidates
-            .OrderByDescending(c => c.Selected)
-            .ThenBy(c => OverturePlacesLogic.GetInfrastructureClassRank(c.SubType, c.ClassName))
-            .ThenByDescending(c => c.GeometryContainsPoint)
-            .ThenByDescending(c => c.BoundingBoxContainsPoint)
-            .ThenBy(c => c.DistanceMetres);
-    }
+    private static IEnumerable<CoordinateLookupDisplayCandidate> SortInfrastructureCandidates(
+        IEnumerable<CoordinateLookupDisplayCandidate> candidates) =>
+        candidates.OrderByDescending(static candidate => candidate.Selected);
 
-    private static IEnumerable<OvertureCandidateDiagnostic> SortPlaceCandidates(
-        IEnumerable<OvertureCandidateDiagnostic> candidates)
-    {
-        return candidates
-            .OrderByDescending(c => c.Selected)
-            .ThenByDescending(c => OverturePlacesLogic.IsPreferredStatus(c.OperatingStatus))
-            .ThenByDescending(c => c.BoundingBoxContainsPoint)
-            .ThenBy(c => c.DistanceMetres);
-    }
+    private static IEnumerable<CoordinateLookupDisplayCandidate> SortPlaceCandidates(
+        IEnumerable<CoordinateLookupDisplayCandidate> candidates) =>
+        candidates.OrderByDescending(static candidate => candidate.Selected);
 
-    private static IEnumerable<GadmDivisionCandidateDiagnostic> SortGadmCandidates(
-        IEnumerable<GadmDivisionCandidateDiagnostic> candidates)
-    {
-        return candidates
-            .OrderByDescending(candidate => candidate.Selected)
-            .ThenByDescending(candidate => candidate.GeometryContainsPoint)
-            .ThenByDescending(candidate => candidate.BoundingBoxContainsPoint)
-            .ThenByDescending(candidate => candidate.AdminLevel)
-            .ThenBy(candidate => candidate.BoundingBoxArea);
-    }
+    private static IEnumerable<CoordinateLookupDisplayCandidate> SortGadmCandidates(
+        IEnumerable<CoordinateLookupDisplayCandidate> candidates) =>
+        candidates.OrderByDescending(static candidate => candidate.Selected);
+
 }

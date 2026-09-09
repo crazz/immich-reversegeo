@@ -241,6 +241,11 @@ The recommended workflow is:
 - downloaded Overture and GADM country caches are stored under `/data`
 - the first lookup or processing pass for a new country may take longer because the cache must be created locally
 - larger countries can use hundreds of megabytes of local storage per cached country
+- Lookup runs these source operations in a temporary isolated worker in both Standard and Web-only mode; it does not load the source services in the interactive page or write Immich asset metadata
+
+A source marked unavailable in a completed Lookup result is separate from a worker failure. The completed result can still show fields resolved by other sources. A worker failure has no completed source result and Lookup does not retry the same work inside the Web service.
+
+The GADM non-commercial notice applies whenever that optional source is selected. A GADM download or query error is a technical availability problem; it does not mean the license caused the error. Review the [official GADM license](https://gadm.org/license.html) before enabling GADM, even when the source is currently unavailable.
 
 ## Notes
 

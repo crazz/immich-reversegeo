@@ -119,18 +119,4 @@ public class GeodataCacheExceptionHelperTests
         Assert.AreEqual("controlled unavailable cache", result.Error.Message);
     }
 
-    [TestMethod]
-    public async Task LookupComponentBoundary_OutOfMemoryEscapesWithoutSettingError()
-    {
-        var component = new ImmichReverseGeo.Web.Components.Pages.Lookup();
-
-        await Assert.ThrowsExactlyAsync<OutOfMemoryException>(() =>
-            component.RunLookupAsync(() => Task.FromException(new OutOfMemoryException("controlled"))));
-
-        var errorField = typeof(ImmichReverseGeo.Web.Components.Pages.Lookup).GetField(
-            "_error",
-            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic);
-        Assert.IsNotNull(errorField);
-        Assert.IsNull(errorField.GetValue(component));
-    }
 }
