@@ -39,9 +39,13 @@ public sealed class ScheduledBackendCancellationTests
         Assert.IsFalse(fixture.State.IsRunning, "pre-cancel-returns-idle");
         Assert.IsNull(fixture.State.LastError, "pre-cancel-no-error");
         Assert.IsNull(fixture.Coordinator.ActiveRequest, "pre-cancel-releases-after-cleanup");
-        IReadOnlyList<string> logs = fixture.State.GetRecentLog();
-        Assert.AreEqual(1, logs.Count(line => line.EndsWith("Run cancelled.", StringComparison.Ordinal)), "pre-cancel-one-cancellation");
-        Assert.AreEqual(1, logs.Count(line => line.EndsWith("Run complete. Processed=0 Skipped=0 Errors=0", StringComparison.Ordinal)), "pre-cancel-one-summary");
+        Assert.AreEqual(0, fixture.State.GetRecentLog().Count, "pre-cancel-creates-no-processing-log");
+        Assert.AreEqual(0L, fixture.State.ProcessedThisRun, "pre-cancel-creates-no-processed-count");
+        Assert.AreEqual(0L, fixture.State.SkippedThisRun, "pre-cancel-creates-no-skipped-count");
+        Assert.AreEqual(0L, fixture.State.ErrorsThisRun, "pre-cancel-creates-no-error-count");
+        Assert.IsNull(fixture.State.CurrentActivity, "pre-cancel-creates-no-activity");
+        Assert.IsNull(fixture.State.LastRunStarted, "pre-cancel-creates-no-start-time");
+        Assert.IsNull(fixture.State.LastRunCompleted, "pre-cancel-creates-no-completion-time");
     }
 
     [TestMethod]

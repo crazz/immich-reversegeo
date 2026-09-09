@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using ImmichReverseGeo.Core.ApplicationRole;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
@@ -79,6 +80,16 @@ internal static class WebServiceCollectionExtensions
             .SetApplicationName("ImmichReverseGeo")
             .PersistKeysToFileSystem(new DirectoryInfo(dataProtectionDirectory));
 
+        services.AddSingleton(sp => new WorkerJobCoordinator(
+            WorkerJobDescriptors.Registered,
+            sp.GetService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>(),
+            sp.GetRequiredService<TimeProvider>()));
+        services.AddSingleton<IWorkerJobAdmissionGate>(sp =>
+            sp.GetRequiredService<WorkerJobCoordinator>());
+        services.AddSingleton<IWorkerJobArbitrationDiagnostics>(sp =>
+            sp.GetRequiredService<WorkerJobCoordinator>());
+        services.AddHostedService(sp => sp.GetRequiredService<WorkerJobCoordinator>());
+
         if (scheduledRunsEnabled)
         {
             services.AddSingleton<IScheduledRunWorkCounter>(sp => new RepositoryScheduledRunWorkCounter(
@@ -101,9 +112,6 @@ internal static class WebServiceCollectionExtensions
         services.AddSingleton<IWorkerCommandRuntimeFactsCapture>(sp => sp.GetRequiredService<WorkerCommandRuntimeFactsCapture>());
         services.AddSingleton(sp => new WorkerCommandInvocationBuilder(sp.GetRequiredService<IWorkerCommandRuntimeFactsCapture>()));
         services.AddSingleton<IWorkerCommandInvocationBuilder>(sp => sp.GetRequiredService<WorkerCommandInvocationBuilder>());
-        services.AddSingleton<TemporaryCoordinateLookupAdmissionGate>();
-        services.AddSingleton<IWorkerJobAdmissionGate>(sp =>
-            sp.GetRequiredService<TemporaryCoordinateLookupAdmissionGate>());
         services.AddSingleton<ConfigCoordinateLookupSettingsSnapshotProvider>();
         services.AddSingleton<ICoordinateLookupSettingsSnapshotProvider>(sp =>
             sp.GetRequiredService<ConfigCoordinateLookupSettingsSnapshotProvider>());

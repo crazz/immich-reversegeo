@@ -31,6 +31,7 @@ internal sealed class ProcessCoordinatorFixture
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid,
             new LifecycleObserver(this),
+            workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
             applicationLifetime: null,
             timeProvider: TimeProvider.System);
         var builder = new FixedInvocationBuilder();

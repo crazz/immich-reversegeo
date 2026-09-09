@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
@@ -407,7 +408,8 @@ public sealed class CoordinateLookupPageControllerTests
     public async Task WrongSessionIdentity_RequestsStopThenFailsReleasesAndAllowsReuse(
         string mismatch)
     {
-        await using var admission = new TemporaryCoordinateLookupAdmissionGate();
+        await using var admission = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
         var worker = new RecordingWorkerClient
         {
             SessionJobId = mismatch == "job" ? Guid.NewGuid() : null,
@@ -454,9 +456,63 @@ public sealed class CoordinateLookupPageControllerTests
     }
 
     [TestMethod]
-    public async Task TemporaryGate_IsAtomicExactOwnerOnlyAndReusable()
+    [TestCategory("Change50")]
+    public async Task SharedShutdownAfterAdmissionBeforeOwnerBinding_LaunchesThenStopsAndJoinsExactSession()
     {
-        await using var gate = new TemporaryCoordinateLookupAdmissionGate();
+        await using var admission = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
+        var worker = new RecordingWorkerClient();
+        var controller = new CoordinateLookupPageController(
+            admission,
+            worker,
+            new SettingsProvider(),
+            () => FirstJobId,
+            static () => { });
+        Task? shutdown = null;
+        int shutdownStarted = 0;
+        admission.Changed += BeginShutdownAfterAdmission;
+        Task run = controller.SubmitAsync(Submission());
+        FakeWorkerSession? session = null;
+        try
+        {
+            session = await worker.WaitForSessionAsync();
+            await session.StopRequested.WaitAsync(Bound);
+
+            Assert.IsNotNull(shutdown, "admission notification starts the shared shutdown fence");
+            Assert.IsFalse(shutdown.IsCompleted, "shutdown joins the owner through final release");
+            Assert.AreEqual(1, worker.Starts, "the admitted-before-fence owner may launch exactly once");
+            Assert.AreEqual(1, session.StopCount, "the late-bound exact session receives one stop");
+            Assert.IsInstanceOfType<WorkerJobAdmissionResult.Unavailable>(
+                admission.TryAdmit(new ProcessAssetsWorkerJobDispatch(
+                    new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual))));
+        }
+        finally
+        {
+            admission.Changed -= BeginShutdownAfterAdmission;
+            session?.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
+            await run.WaitAsync(Bound);
+            await controller.DisposeAsync().AsTask().WaitAsync(Bound);
+        }
+
+        await shutdown!.WaitAsync(Bound);
+        Assert.IsNull(admission.Snapshot.ActiveJob);
+        Assert.AreEqual(1, session!.DisposeCount);
+
+        void BeginShutdownAfterAdmission()
+        {
+            if (admission.Snapshot.ActiveJob is not null
+                && Interlocked.CompareExchange(ref shutdownStarted, 1, 0) == 0)
+            {
+                shutdown = admission.BeginShutdown();
+            }
+        }
+    }
+
+    [TestMethod]
+    public async Task SharedCoordinator_IsAtomicExactOwnerOnlyAndReusable()
+    {
+        await using var gate = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
         var first = new CoordinateLookupWorkerJobDispatch(FirstJobId, Request());
         var second = new CoordinateLookupWorkerJobDispatch(Guid.NewGuid(), Request());
 
@@ -477,7 +533,8 @@ public sealed class CoordinateLookupPageControllerTests
     [TestMethod]
     public async Task PageFactory_CreatesFreshControllerAndOldGenerationEventsCannotMutateIt()
     {
-        await using var admission = new TemporaryCoordinateLookupAdmissionGate();
+        await using var admission = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
         var worker = new RecordingWorkerClient();
         var lifetime = new CoordinateLookupPageControllerHostLifetime();
         var factory = new CoordinateLookupPageControllerFactory(
@@ -758,9 +815,35 @@ public sealed class CoordinateLookupPageControllerTests
         WorkerJobContext context,
         WorkerJobDescriptor descriptor) : IWorkerJobAdmissionLease
     {
+        private Func<Task>? _requestStopAsync;
         internal int DisposeCount { get; private set; }
         public WorkerJobContext Context { get; } = context;
         public WorkerJobDescriptor Descriptor { get; } = descriptor;
+        public bool IsStopRequested { get; private set; }
+
+        public bool TryBindOwnerStop(
+            WorkerJobContext ownerContext,
+            Func<Task> requestStopAsync)
+        {
+            ArgumentNullException.ThrowIfNull(requestStopAsync);
+            if (!ReferenceEquals(Context, ownerContext) || _requestStopAsync is not null)
+            {
+                return false;
+            }
+
+            _requestStopAsync = requestStopAsync;
+            return true;
+        }
+
+        public bool TryAdvance(
+            WorkerJobContext ownerContext,
+            WorkerJobLifecycle lifecycle,
+            int? childProcessId = null)
+        {
+            _ = lifecycle;
+            _ = childProcessId;
+            return ReferenceEquals(Context, ownerContext);
+        }
 
         public ValueTask DisposeAsync()
         {

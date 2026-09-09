@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -172,6 +173,7 @@ public sealed class ChildOnlyProcessingBackendTests
             createRunId,
             cancellationFactory,
             null,
+            new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
             null,
             TimeProvider.System);
     }

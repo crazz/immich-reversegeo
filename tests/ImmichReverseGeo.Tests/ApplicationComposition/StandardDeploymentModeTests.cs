@@ -177,10 +177,12 @@ public sealed class StandardDeploymentModeTests
         Assert.AreEqual(1, fixture.ChildBackendResolution.Calls, "manual-resolves-one-real-child-backend");
         AssertPrivateWorkerCommand(manual.Descriptor, fixture.RuntimeSource);
 
+        fixture.Detector.Enqueue(true);
         Assert.AreEqual(
             ScheduledTriggerResult.RejectedAlreadyRunning,
             await scheduled.TriggerScheduledAsync(CancellationToken.None).WaitAsync(Bound),
             "scheduled-contention-uses-local-outcome");
+        Assert.AreEqual(1, fixture.Detector.CallCount, "scheduled-contention-runs-positive-detector-once");
         Assert.AreEqual(1, fixture.ProcessFactory.StartCalls, "contention-starts-no-second-child");
         Assert.AreEqual(1, fixture.ChildBackendResolution.Calls, "contention-resolves-no-second-child-backend");
         await CompleteAsync(coordinator.ActiveRequest!, manual, ProcessingRunOutcome.Completed, 0);
@@ -191,7 +193,7 @@ public sealed class StandardDeploymentModeTests
             ScheduledTriggerResult.AcceptedAfterTerminal,
             await scheduled.TriggerScheduledAsync(CancellationToken.None).WaitAsync(Bound),
             "empty-schedule-finalizes-locally");
-        Assert.AreEqual(1, fixture.Detector.CallCount, "empty-schedule-detected-once");
+        Assert.AreEqual(2, fixture.Detector.CallCount, "empty-schedule-detected-once");
         Assert.AreEqual(1, fixture.ProcessFactory.StartCalls, "empty-schedule-resolves-no-child");
         Assert.AreEqual(1, fixture.ChildBackendResolution.Calls, "empty-schedule-resolves-no-child-backend");
 
@@ -201,7 +203,7 @@ public sealed class StandardDeploymentModeTests
         AssertPrivateWorkerCommand(scheduledChild.Descriptor, fixture.RuntimeSource);
         await CompleteAsync(coordinator.ActiveRequest!, scheduledChild, ProcessingRunOutcome.Completed, 0);
         Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal, await positive.WaitAsync(Bound));
-        Assert.AreEqual(2, fixture.Detector.CallCount, "positive-schedule-detected-once");
+        Assert.AreEqual(3, fixture.Detector.CallCount, "positive-schedule-detected-once");
         Assert.AreEqual(2, fixture.ProcessFactory.StartCalls, "positive-schedule-starts-one-child");
         Assert.AreEqual(2, fixture.ChildBackendResolution.Calls, "positive-schedule-resolves-one-child-backend");
         Assert.IsNull(fixture.Application.Services.GetService<IProcessingRunExecutor>());

@@ -149,10 +149,19 @@ public sealed class ProcessingCompositionTurn2Tests
             new[] { nameof(ScheduledTriggerResult.RejectedAlreadyRunning), nameof(ScheduledTriggerResult.AcceptedAfterTerminal) },
             Enum.GetNames<ScheduledTriggerResult>());
         Assert.IsNull(typeof(ProcessingRunCoordinator).Assembly.GetType("ImmichReverseGeo.Web.Services.ProcessingRunExecution"));
-        var forbiddenNames = new[] { "RunOnce", "Worker", "Protocol", "Cron", "Npgsql", "Advisory", "Semaphore" };
-        Assert.IsFalse(typeof(ProcessingRunCoordinator)
-            .GetMembers(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic)
+        MemberInfo[] coordinatorMembers = typeof(ProcessingRunCoordinator)
+            .GetMembers(BindingFlags.Instance | BindingFlags.Static | BindingFlags.Public | BindingFlags.NonPublic);
+        var forbiddenNames = new[] { "RunOnce", "Protocol", "Cron", "Npgsql", "Advisory", "Semaphore" };
+        Assert.IsFalse(coordinatorMembers
             .Any(member => forbiddenNames.Any(forbidden => member.Name.Contains(forbidden, StringComparison.OrdinalIgnoreCase))));
+        CollectionAssert.AreEqual(
+            new[] { "RequestWorkerCoordinatorStopAsync", "_workerCoordinator" },
+            coordinatorMembers
+                .Where(member => member.Name.Contains("Worker", StringComparison.OrdinalIgnoreCase))
+                .Select(member => member.Name)
+                .Order(StringComparer.Ordinal)
+                .ToArray(),
+            "the shared arbitration coordinator is the only worker-facing surface");
         Assert.IsFalse(typeof(ProcessingBackgroundService)
             .GetFields(BindingFlags.Instance | BindingFlags.NonPublic)
             .Any(field => field.FieldType == typeof(IProcessingRunExecutor)

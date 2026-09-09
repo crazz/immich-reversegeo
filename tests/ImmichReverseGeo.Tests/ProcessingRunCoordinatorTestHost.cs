@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -49,7 +50,8 @@ internal sealed class ProcessingRunCoordinatorTestHost
             AlwaysHasWorkScheduledRunGate.Instance,
             ProcessingRunBackendTestScopeFactory.Create(executor),
             NullLogger<ProcessingRunCoordinator>.Instance,
-            Guid.NewGuid);
+            Guid.NewGuid,
+            workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered));
     }
 
     public async Task TriggerRunAsync()

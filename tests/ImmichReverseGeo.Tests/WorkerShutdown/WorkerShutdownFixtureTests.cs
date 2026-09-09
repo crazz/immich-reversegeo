@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Text;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.ChildWorkerCancellation;
 using ImmichReverseGeo.Tests.WorkerProcessFixture;
@@ -459,6 +460,7 @@ public sealed class WorkerShutdownFixtureTests
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 Guid.NewGuid,
                 observer,
+                workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
                 applicationLifetime: null,
                 timeProvider: clock);
 

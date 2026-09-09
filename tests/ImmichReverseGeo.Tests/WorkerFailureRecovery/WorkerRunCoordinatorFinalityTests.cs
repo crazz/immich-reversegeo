@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.ChildWorkerCancellation;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -435,6 +436,7 @@ public sealed class WorkerRunCoordinatorFinalityTests
             NullLogger<ProcessingRunCoordinator>.Instance,
             () => WorkerProtocolV1TestData.RunId,
             observer,
+            workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
             applicationLifetime: null,
             timeProvider: clock);
 
@@ -791,6 +793,7 @@ public sealed class WorkerRunCoordinatorFinalityTests
             NullLogger<ProcessingRunCoordinator>.Instance,
             Guid.NewGuid,
             observer,
+            new WorkerJobCoordinator(WorkerJobDescriptors.Registered, timeProvider: clock),
             applicationLifetime: null,
             timeProvider: clock);
 

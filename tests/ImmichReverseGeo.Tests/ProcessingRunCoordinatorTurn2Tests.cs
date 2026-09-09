@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -518,7 +519,8 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
             logger,
             NextId,
             cancellationFactory,
-            null);
+            null,
+            workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered));
 
         Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await coordinator.TriggerManualAsync());
         await coordinator.WaitForActiveRunAsync().WaitAsync(TestTimeout);
@@ -1402,7 +1404,8 @@ public sealed class ProcessingRunCoordinatorTurn2Tests
                 NextId,
                 Cancellations,
                 observer,
-                lifetime);
+                workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
+                applicationLifetime: lifetime);
         }
 
         public ProcessingState State { get; } = new();

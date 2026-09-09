@@ -19,12 +19,24 @@ Block 50 supersedes the original admission-first ordering. For a due scheduled o
 - **WHEN** a valid manual ProcessAssets request is submitted
 - **THEN** it does not invoke the scheduled detector and attempts shared admission directly
 
+#### Scenario: Admitted scheduled occurrence reaches detection
+- **WHEN** a due scheduled occurrence reaches its lightweight detector
+- **THEN** detection instead occurs before identity, owner publication, pending state, adapter arming, coordinator admission, and backend resolution
+
+#### Scenario: Scheduled occurrence is locally busy
+- **WHEN** detection reports work but shared admission is already owned by any exclusive heavy job
+- **THEN** the existing scheduled-contention outcome is recorded and no pending mutation, adapter, backend, worker, or queued reservation is started
+
 ### Requirement: Empty scheduled attempts complete locally
 When the detector reports no work, the system SHALL resolve neither execution backend nor coordinator admission, SHALL create no processing identity or pending lifecycle, SHALL start no child process, and SHALL construct or access no in-process executor or processing geodata dependency. It SHALL record the established bounded scheduler no-work outcome without fabricating a processing run, worker terminal, or worker result. Work appearing afterward waits for a later ordinary trigger.
 
 #### Scenario: Detector-empty scheduled occurrence
 - **WHEN** the detector reports no eligible work before identity and admission
 - **THEN** the occurrence closes locally with no ProcessingState run transition, backend resolution, child launch, worker event/result, skipped/config/batch access, or geodata work
+
+#### Scenario: Empty admitted scheduled attempt
+- **WHEN** a due scheduled occurrence's detector returns no eligible work
+- **THEN** the detector-empty occurrence instead closes before admission with the same zero backend, child, protocol, skipped/config/batch, and geodata effects and with no processing lifecycle
 
 ### Requirement: Predispatch cancellation and failure finalize locally
 The detector SHALL use the scheduler/host cancellation token before any run identity or admission owner exists. Cancellation SHALL close the occurrence through the established scheduler-level cancellation path, and an unexpected detector failure SHALL use the established bounded scheduler-level failure path. Neither outcome SHALL create a JobId, mark processing pending, arm an adapter, attempt admission, fabricate worker events, fall back, or automatically retry.
@@ -36,3 +48,11 @@ The detector SHALL use the scheduler/host cancellation token before any run iden
 #### Scenario: Detector fails before admission
 - **WHEN** the detector throws a non-cancellation failure
 - **THEN** bounded scheduler failure presentation is recorded without a processing identity, pending state, coordinator owner, or worker launch
+
+#### Scenario: Detector is cancelled
+- **WHEN** a due scheduled occurrence's detector observes scheduler or host cancellation
+- **THEN** cancellation is handled at the scheduler boundary before identity, admission, pending state, adapter arming, backend resolution, or worker launch
+
+#### Scenario: Detector fails
+- **WHEN** a due scheduled occurrence's detector throws a non-cancellation failure
+- **THEN** bounded scheduler failure presentation is recorded before identity, admission, pending state, adapter arming, backend resolution, or worker launch

@@ -20,77 +20,26 @@ public sealed class CoordinatorScheduledGateTests
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
 
     [TestMethod]
-    public async Task ScheduledLocalBusy_RejectsBeforeAnotherGateRequestOrStateLifecycle()
+    public async Task ScheduledNoWork_DetectsBeforeIdentityAdmissionOrStateLifecycle()
     {
         var gate = new SignalGate();
         await using var fixture = ScheduledCoordinatorFixture.Create(gate);
-
-        Task<ScheduledTriggerResult> admitted = fixture.TriggerScheduledAsync();
-        try
-        {
-            await gate.Entered.Task.WaitAsync(Bound);
-            ProcessingRunRequest request = fixture.Coordinator.ActiveRequest
-                ?? throw new AssertFailedException("admitted scheduled request was not published before detection");
-
-            Assert.IsTrue(fixture.State.IsRunning, "pending is published before detection");
-            Assert.IsTrue(fixture.Reporter.IsArmed(request), "the exact admitted request is armed before detection");
-
-            ScheduledTriggerResult rejected = await fixture.TriggerScheduledAsync().WaitAsync(Bound);
-
-            Assert.AreEqual(ScheduledTriggerResult.RejectedAlreadyRunning, rejected, "local busy result");
-            Assert.AreEqual(1, gate.CallCount, "local busy does not invoke a second detector");
-            Assert.AreSame(request, fixture.Coordinator.ActiveRequest, "local busy does not replace the admitted request");
-            CollectionAssert.AreEqual(
-                new[] { "Scheduled run skipped because a processing pass is already in progress." },
-                LogMessages(fixture.State),
-                "local busy uses the established control-plane log without a new state lifecycle");
-        }
-        finally
-        {
-            gate.Decide(false);
-            await admitted.WaitAsync(Bound);
-        }
-
-        Assert.AreEqual(0, fixture.Launcher.CallCount, "empty admission does not dispatch a child");
-        AssertNoChildBoundary(fixture, "local-busy-empty-admission");
-    }
-
-    [TestMethod]
-    public async Task ScheduledNoWork_CompletesLocallyWithoutBackendOrFinalizationReceipt()
-    {
-        var gate = new SignalGate();
-        await using var fixture = ScheduledCoordinatorFixture.Create(gate);
+        ProcessingStateSnapshot before = Snapshot(fixture.State);
 
         Task<ScheduledTriggerResult> scheduled = fixture.TriggerScheduledAsync();
         await gate.Entered.Task.WaitAsync(Bound);
-        ProcessingRunRequest request = fixture.Coordinator.ActiveRequest
-            ?? throw new AssertFailedException("empty request was not active during detection");
-        Assert.IsTrue(fixture.Reporter.IsArmed(request), "empty request is armed before its gate decision");
+
+        Assert.IsNull(fixture.Coordinator.ActiveRequest, "detection publishes no processing identity");
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob, "detection owns no worker admission");
+        Assert.AreEqual(before, Snapshot(fixture.State), "detection mutates no ProcessingState observation");
         gate.Decide(false);
 
         Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal, await scheduled.WaitAsync(Bound));
-        Assert.AreEqual(1, gate.CallCount, "one detector invocation per admitted occurrence");
-        Assert.AreEqual(0, fixture.Launcher.CallCount, "no child launch for local no-work");
-        Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "no backend, launcher, executor, or geodata resolution for local no-work");
-        Assert.IsNull(fixture.Reporter.GetFinalizationReceipt(request), "local no-work creates no ProcessingRunResult receipt");
-        Assert.IsNull(fixture.Coordinator.ActiveRequest, "matching local handle is released");
-        Assert.IsFalse(fixture.State.IsRunning, "local no-work reaches idle");
-        Assert.AreEqual(0L, fixture.State.TotalUnprocessed, "local no-work projects zero eligibility");
-        Assert.AreEqual(0, fixture.State.ProcessedThisRun, "local no-work resets processed count");
-        Assert.AreEqual(0, fixture.State.SkippedThisRun, "local no-work resets skipped count");
-        Assert.AreEqual(0, fixture.State.ErrorsThisRun, "local no-work resets error count");
-        Assert.IsNull(fixture.State.LastError, "local no-work clears last error");
-        Assert.IsNotNull(fixture.State.LastRunStarted, "local no-work records a start timestamp");
-        Assert.IsNotNull(fixture.State.LastRunCompleted, "local no-work records a completion timestamp");
-        CollectionAssert.AreEqual(
-            new[]
-            {
-                "Run started — nothing to process, all assets already have location data.",
-                "Run complete. Processed=0 Skipped=0 Errors=0"
-            },
-            LogMessages(fixture.State),
-            "local no-work presentation order");
-        AssertNoChildBoundary(fixture, "local-no-work");
+        Assert.AreEqual(1, gate.CallCount);
+        Assert.AreEqual(before, Snapshot(fixture.State), "normal no-work leaves ProcessingState unchanged");
+        Assert.AreEqual(0, fixture.Launcher.CallCount);
+        Assert.AreEqual(0, fixture.ForbiddenResolutionCount);
+        AssertNoChildBoundary(fixture, "detector-no-work");
     }
 
     [TestMethod]
@@ -110,44 +59,25 @@ public sealed class CoordinatorScheduledGateTests
     }
 
     [TestMethod]
-    public async Task ScheduledCaller_CancellationWaitsForBlockedGateLocalCleanupBeforeReleasingAdmission()
+    public async Task ScheduledDetector_MatchingCancellationCreatesNoIdentityAdmissionOrStateLifecycle()
     {
         var gate = new SignalGate();
         await using var fixture = ScheduledCoordinatorFixture.Create(gate);
         using var callerCancellation = new CancellationTokenSource();
 
         Task<ScheduledTriggerResult> scheduled = fixture.TriggerScheduledAsync(callerCancellation.Token);
-        try
-        {
-            await gate.Entered.Task.WaitAsync(Bound);
-            ProcessingRunRequest request = fixture.Coordinator.ActiveRequest
-                ?? throw new AssertFailedException("blocked gate request was not active");
+        ProcessingStateSnapshot before = Snapshot(fixture.State);
+        await gate.Entered.Task.WaitAsync(Bound);
+        callerCancellation.Cancel();
+        gate.Fail(new OperationCanceledException(callerCancellation.Token));
 
-            callerCancellation.Cancel();
-            await Task.Yield();
-            Assert.IsFalse(scheduled.IsCompleted, "caller cancellation cannot release admission while the gate remains blocked");
-            Assert.AreSame(request, fixture.Coordinator.ActiveRequest, "blocked gate retains its exact admission handle");
-        }
-        finally
-        {
-            gate.Decide(false);
-            try
-            {
-                await scheduled.WaitAsync(Bound);
-            }
-            catch (OperationCanceledException)
-            {
-                // The public scheduled trigger may preserve caller cancellation after it has awaited cleanup.
-            }
-        }
-
-        Assert.IsNull(fixture.Coordinator.ActiveRequest, "caller cancellation releases only after local cleanup");
-        Assert.IsFalse(fixture.State.IsRunning, "caller cancellation leaves the local state idle");
-        Assert.IsNull(fixture.State.LastError, "matching detector cancellation does not project an error");
-        CollectionAssert.Contains(LogMessages(fixture.State), "Run cancelled.", "matching detector cancellation presentation");
-        Assert.AreEqual(0, fixture.Launcher.CallCount, "blocked cancellation never dispatches a child");
-        Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "blocked cancellation resolves no forbidden graph");
-        AssertNoChildBoundary(fixture, "blocked-caller-cancellation");
+        OperationCanceledException failure = await Assert.ThrowsExactlyAsync<OperationCanceledException>(
+            () => scheduled.WaitAsync(Bound));
+        Assert.AreEqual(callerCancellation.Token, failure.CancellationToken);
+        Assert.IsNull(fixture.Coordinator.ActiveRequest);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.AreEqual(before, Snapshot(fixture.State));
+        AssertNoChildBoundary(fixture, "detector-cancellation");
     }
 
     [TestMethod]
@@ -160,64 +90,16 @@ public sealed class CoordinatorScheduledGateTests
 
         Task<ScheduledTriggerResult> scheduled = fixture.TriggerScheduledAsync();
         await gate.Entered.Task.WaitAsync(Bound);
-        ProcessingRunRequest request = fixture.Coordinator.ActiveRequest
-            ?? throw new AssertFailedException("foreign cancellation request was not active");
-        Assert.IsTrue(fixture.Reporter.IsArmed(request), "foreign cancellation request is armed before its gate failure");
+        ProcessingStateSnapshot before = Snapshot(fixture.State);
         gate.Fail(new OperationCanceledException("db-password=not-for-ui", foreignCancellation.Token));
 
         Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal, await scheduled.WaitAsync(Bound));
-        Assert.IsNull(fixture.Coordinator.ActiveRequest, "foreign cancellation releases the matching local handle");
-        Assert.IsFalse(fixture.State.IsRunning, "foreign cancellation returns the state to idle");
-        Assert.AreEqual("Fatal: Scheduled work detection failed.", fixture.State.LastError, "foreign cancellation uses bounded safe detail");
-        Assert.IsFalse(LogMessages(fixture.State).Any(line => line.Contains("db-password", StringComparison.Ordinal)), "foreign cancellation detail never reaches the UI log");
-        Assert.IsNull(fixture.Reporter.GetFinalizationReceipt(request), "foreign cancellation creates no worker finalization receipt");
+        Assert.IsNull(fixture.Coordinator.ActiveRequest);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.AreEqual(before, Snapshot(fixture.State));
         Assert.AreEqual(0, fixture.Launcher.CallCount, "foreign cancellation does not launch a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "foreign cancellation resolves no forbidden graph");
         AssertNoChildBoundary(fixture, "foreign-cancellation");
-    }
-
-    [TestMethod]
-    public async Task ScheduledGate_ActiveCancellationClassifiesAForeignTokenCancellationAsCancelled()
-    {
-        using var foreignCancellation = new CancellationTokenSource();
-        foreignCancellation.Cancel();
-        var gate = new SignalGate();
-        await using var fixture = ScheduledCoordinatorFixture.Create(gate);
-        Task<ScheduledTriggerResult> scheduled = fixture.TriggerScheduledAsync();
-        ScheduledTriggerResult result = default;
-        ProcessingRunRequest? request = null;
-
-        try
-        {
-            await gate.Entered.Task.WaitAsync(Bound);
-            request = fixture.Coordinator.ActiveRequest
-                ?? throw new AssertFailedException("active cancellation request was not published before detection");
-            Assert.IsTrue(fixture.Reporter.IsArmed(request), "active cancellation request is armed before the gate fault");
-            Assert.IsTrue(fixture.Coordinator.CancelActiveRun(), "active cancellation claims the admitted scheduled handle");
-        }
-        finally
-        {
-            gate.Fail(new OperationCanceledException("foreign-token", foreignCancellation.Token));
-            result = await scheduled.WaitAsync(Bound);
-        }
-
-        Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal, result, "active cancellation closes the accepted scheduled occurrence");
-        Assert.IsNotNull(request, "the exact admitted request was captured");
-        Assert.IsNull(fixture.Coordinator.ActiveRequest, "active cancellation releases the matching handle");
-        Assert.IsFalse(fixture.State.IsRunning, "active cancellation returns state to idle");
-        Assert.IsNull(fixture.State.LastError, "active cancellation adds no detector failure error");
-        CollectionAssert.AreEqual(
-            new[]
-            {
-                "Run cancelled.",
-                "Run complete. Processed=0 Skipped=0 Errors=0"
-            },
-            LogMessages(fixture.State),
-            "active cancellation uses the pre-eligibility cancellation presentation");
-        Assert.IsNull(fixture.Reporter.GetFinalizationReceipt(request!), "active cancellation creates no worker finalization receipt");
-        Assert.AreEqual(0, fixture.Launcher.CallCount, "active cancellation does not launch a child");
-        Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "active cancellation resolves no forbidden graph");
-        AssertNoChildBoundary(fixture, "active-cancellation");
     }
 
     [TestMethod]
@@ -228,17 +110,13 @@ public sealed class CoordinatorScheduledGateTests
 
         Task<ScheduledTriggerResult> scheduled = fixture.TriggerScheduledAsync();
         await gate.Entered.Task.WaitAsync(Bound);
-        ProcessingRunRequest request = fixture.Coordinator.ActiveRequest
-            ?? throw new AssertFailedException("unexpected failure request was not active");
-        Assert.IsTrue(fixture.Reporter.IsArmed(request), "unexpected failure request is armed before its gate failure");
+        ProcessingStateSnapshot before = Snapshot(fixture.State);
         gate.Fail(new InvalidOperationException("database connection password=not-for-ui"));
 
         Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal, await scheduled.WaitAsync(Bound));
-        Assert.IsNull(fixture.Coordinator.ActiveRequest, "unexpected failure releases the matching local handle");
-        Assert.IsFalse(fixture.State.IsRunning, "unexpected failure returns the state to idle");
-        Assert.AreEqual("Fatal: Scheduled work detection failed.", fixture.State.LastError, "unexpected failure uses the same bounded safe detail");
-        Assert.IsFalse(LogMessages(fixture.State).Any(line => line.Contains("password", StringComparison.Ordinal)), "unexpected failure detail never reaches the UI log");
-        Assert.IsNull(fixture.Reporter.GetFinalizationReceipt(request), "unexpected failure creates no worker finalization receipt");
+        Assert.IsNull(fixture.Coordinator.ActiveRequest);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.AreEqual(before, Snapshot(fixture.State));
         Assert.AreEqual(0, fixture.Launcher.CallCount, "unexpected failure does not launch a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "unexpected failure resolves no forbidden graph");
         AssertNoChildBoundary(fixture, "unexpected-detector-failure");
@@ -358,6 +236,30 @@ public sealed class CoordinatorScheduledGateTests
         Assert.AreEqual(0, fixture.ChildScopeDisposeAttempts, scenario + "-no-child-scope-disposal");
     }
 
+    private static ProcessingStateSnapshot Snapshot(ProcessingState state) => new(
+        state.IsRunning,
+        state.TotalUnprocessed,
+        state.ProcessedThisRun,
+        state.SkippedThisRun,
+        state.ErrorsThisRun,
+        state.LastError,
+        state.CurrentActivity,
+        state.LastRunStarted,
+        state.LastRunCompleted,
+        string.Join("\n", state.GetRecentLog()));
+
+    private sealed record ProcessingStateSnapshot(
+        bool IsRunning,
+        long TotalUnprocessed,
+        long Processed,
+        long Skipped,
+        long Errors,
+        string? LastError,
+        string? CurrentActivity,
+        DateTime? LastRunStarted,
+        DateTime? LastRunCompleted,
+        string Logs);
+
     internal sealed record ProcessFixturePlan(string Scenario, bool Capture, string[] Options)
     {
         internal static ProcessFixturePlan NoWork { get; } = new("no-work", true, Array.Empty<string>());
@@ -381,6 +283,7 @@ public sealed class CoordinatorScheduledGateTests
             Launcher = launcher;
             Guard = guard;
             Coordinator = coordinator;
+            WorkerCoordinator = provider.GetRequiredService<WorkerJobCoordinator>();
             ChildBoundary = childBoundary;
             Reporter = provider.GetRequiredService<ProcessingStateEventReporter>();
             State = provider.GetRequiredService<ProcessingState>();
@@ -395,6 +298,7 @@ public sealed class CoordinatorScheduledGateTests
         internal int ChildBackendResolutionAttempts => ChildBoundary.BackendResolutionAttempts;
         internal int ChildScopeDisposeAttempts => ChildBoundary.ScopeDisposeAttempts;
         internal ProcessingRunCoordinator Coordinator { get; }
+        internal WorkerJobCoordinator WorkerCoordinator { get; }
         internal ProcessingStateEventReporter Reporter { get; }
         internal ProcessingState State { get; }
         internal IScheduledRunTrigger Trigger { get; }
@@ -455,7 +359,8 @@ public sealed class CoordinatorScheduledGateTests
                         childBoundary,
                         Microsoft.Extensions.Logging.Abstractions.NullLogger<ProcessingRunCoordinator>.Instance,
                         Guid.NewGuid,
-                        observer);
+                        observer,
+                        sp.GetRequiredService<WorkerJobCoordinator>());
                 });
                 var provider = services.BuildServiceProvider(validateScopes: true);
                 var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();

@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -93,6 +94,7 @@ public class RealHostShutdownTests
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 Guid.NewGuid,
                 observer: null,
+                workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
                 applicationLifetime: sp.GetRequiredService<IHostApplicationLifetime>(),
                 timeProvider: TimeProvider.System));
             services.AddHostedService(sp => sp.GetRequiredService<ProcessingRunCoordinator>());

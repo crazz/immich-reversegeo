@@ -14,7 +14,9 @@ internal abstract record CoordinateLookupWorkerStartResult
     {
     }
 
-    internal sealed record Started(ICoordinateLookupWorkerSession Session) :
+    internal sealed record Started(
+        ICoordinateLookupWorkerSession Session,
+        int? ChildProcessId = null) :
         CoordinateLookupWorkerStartResult;
     internal sealed record Unavailable(string Code, string Message) :
         CoordinateLookupWorkerStartResult;
@@ -110,7 +112,8 @@ internal sealed class CoordinateLookupWorkerClient(
         }
 
         return new CoordinateLookupWorkerStartResult.Started(
-            new Session(started.Session, admission.Context));
+            new Session(started.Session, admission.Context),
+            started.Session.ProcessId);
     }
 
     private static CoordinateLookupWorkerStartResult.Unavailable Unavailable(string code)

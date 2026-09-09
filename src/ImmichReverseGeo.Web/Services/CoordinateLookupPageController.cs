@@ -369,6 +369,17 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
 
             lease = ((WorkerJobAdmissionResult.Admitted)admission).Lease;
             active = new ActiveOperation(generation, lease);
+            if (!lease.TryBindOwnerStop(lease.Context, active.RequestStopAsync)
+                || !lease.TryAdvance(lease.Context, WorkerJobLifecycle.Starting))
+            {
+                active.CompleteWithoutSession();
+                SetUnavailable(
+                    generation,
+                    "The lookup worker became unavailable while the application was stopping.",
+                    retainResult: true);
+                return;
+            }
+
             if (!SetStarting(generation, active))
             {
                 return;
@@ -387,7 +398,17 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                 return;
             }
 
-            session = ((CoordinateLookupWorkerStartResult.Started)start).Session;
+            CoordinateLookupWorkerStartResult.Started started =
+                (CoordinateLookupWorkerStartResult.Started)start;
+            session = started.Session;
+            if (started.ChildProcessId is not null)
+            {
+                lease.TryAdvance(
+                    lease.Context,
+                    WorkerJobLifecycle.Running,
+                    started.ChildProcessId);
+            }
+
             if (session.JobId != lease.Context.JobId
                 || session.JobKind != WorkerJobKind.CoordinateLookup
                 || session.ProtocolVersion != InternalWorkerProtocolVersion.V2)
@@ -424,6 +445,11 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
         }
         finally
         {
+            if (lease is not null)
+            {
+                lease.TryAdvance(lease.Context, WorkerJobLifecycle.Finalizing);
+            }
+
             if (session is not null)
             {
                 await DisposeSafelyAsync(session).ConfigureAwait(false);
@@ -815,6 +841,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
 
         internal Task RequestStopAsync()
         {
+            Lease.TryAdvance(Lease.Context, WorkerJobLifecycle.Stopping);
             lock (_gate)
             {
                 _stopTask ??= StopAsync();

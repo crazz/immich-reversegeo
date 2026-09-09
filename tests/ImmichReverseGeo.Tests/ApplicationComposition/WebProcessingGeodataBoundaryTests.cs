@@ -89,6 +89,30 @@ public sealed class WebProcessingGeodataBoundaryTests
     }
 
     [TestMethod]
+    [TestCategory("Change50")]
+    public async Task ArbitrationDiagnosticsResolution_IsReadOnlyAndStartsNoWorkerOrGeodata()
+    {
+        await using var fixture = WebBoundaryFixture.Create(0);
+
+        IWorkerJobArbitrationDiagnostics diagnostics =
+            fixture.Provider.GetRequiredService<IWorkerJobArbitrationDiagnostics>();
+        WorkerJobArbitrationDiagnosticSnapshot snapshot = diagnostics.Snapshot;
+
+        Assert.IsTrue(snapshot.IsAccepting);
+        Assert.IsNull(snapshot.ActiveJob);
+        CollectionAssert.AreEquivalent(
+            new[] { "add_Changed", "get_Snapshot", "remove_Changed" },
+            typeof(IWorkerJobArbitrationDiagnostics).GetMethods()
+                .Select(static method => method.Name)
+                .ToArray(),
+            "generic observers expose no admission, cancellation, or release operation");
+        Assert.AreEqual(0, fixture.Boundary.InvocationCount, "diagnostic resolution starts no child boundary");
+        Assert.AreEqual(0, fixture.CountRepository.Calls, "diagnostic resolution runs no scheduled detector");
+        Assert.AreEqual(0, fixture.Forbidden.TotalResolutionCount, "diagnostic resolution activates no heavy Web service");
+        Assert.AreEqual(0, fixture.IndexObserver.Calls, "diagnostic resolution loads no country index");
+    }
+
+    [TestMethod]
     public async Task ProductionWebManualRoute_DelegatesOnceWithoutGeodataOrExecutorResolution()
     {
         var fixture = WebBoundaryFixture.Create(1);

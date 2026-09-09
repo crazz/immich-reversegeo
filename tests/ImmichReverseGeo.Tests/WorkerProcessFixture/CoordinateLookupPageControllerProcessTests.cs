@@ -85,7 +85,7 @@ public sealed class CoordinateLookupPageControllerProcessTests
     {
         await using var fixture = new WorkerProcessFixtureLease();
         var events = new RecordingSink();
-        await using var admission = new TemporaryCoordinateLookupAdmissionGate();
+        await using var admission = CreateAdmission();
         await using var controller = CreateController(
             fixture,
             "real-coordinate-output-failure",
@@ -131,7 +131,7 @@ public sealed class CoordinateLookupPageControllerProcessTests
     {
         await using var fixture = new WorkerProcessFixtureLease();
         var events = new RecordingSink();
-        await using var admission = new TemporaryCoordinateLookupAdmissionGate();
+        await using var admission = CreateAdmission();
         await using var controller = CreateController(
             fixture,
             "real-coordinate-startup-failure",
@@ -208,7 +208,7 @@ public sealed class CoordinateLookupPageControllerProcessTests
         RecordingSink events,
         IWorkerJobAdmissionGate? admission = null)
     {
-        admission ??= new TemporaryCoordinateLookupAdmissionGate();
+        admission ??= CreateAdmission();
         var client = new CoordinateLookupWorkerClient(
             new V2InvocationBuilder(),
             new FixtureLauncher(fixture, scenario, events),
@@ -223,6 +223,9 @@ public sealed class CoordinateLookupPageControllerProcessTests
 
     private static CoordinateLookupSubmission Submission() =>
         new(47.6062, -122.3321, true, true, true);
+
+    private static WorkerJobCoordinator CreateAdmission() => new(
+        [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
 
     private static CoordinateLookupRequest Request() =>
         new(

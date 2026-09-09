@@ -17,11 +17,48 @@ public sealed class CoordinateLookupDrainFinalityTests
         Guid.Parse("11111111-2222-3333-4444-555555555555");
 
     [TestMethod]
+    public async Task DecoratedLease_ForwardsShutdownStopBindingAndRelease()
+    {
+        await using var innerAdmission = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
+        var admission = new RecordingAdmissionGate(innerAdmission);
+        var admitted = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Admitted>(
+            admission.TryAdmit(new CoordinateLookupWorkerJobDispatch(JobId, Request())));
+        var stopObserved = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        int stopCalls = 0;
+        Assert.IsTrue(admitted.Lease.TryBindOwnerStop(
+            admitted.Lease.Context,
+            () =>
+            {
+                Interlocked.Increment(ref stopCalls);
+                stopObserved.TrySetResult();
+                return Task.CompletedTask;
+            }));
+
+        Task shutdown = innerAdmission.BeginShutdown();
+        try
+        {
+            await stopObserved.Task.WaitAsync(Bound);
+            Assert.IsFalse(shutdown.IsCompleted, "shared shutdown joins the decorated lease release");
+            Assert.AreEqual(1, stopCalls);
+        }
+        finally
+        {
+            await admitted.Lease.DisposeAsync();
+            await shutdown.WaitAsync(Bound);
+        }
+
+        Assert.AreEqual(1, admission.LeaseDisposeCount);
+    }
+
+    [TestMethod]
     public async Task ActualSession_TerminalThenCancelAndDisposeHoldAdmissionUntilDrain()
     {
         var process = new ControlledProcess();
         var factory = new ControlledProcessFactory(process);
-        await using var innerAdmission = new TemporaryCoordinateLookupAdmissionGate();
+        await using var innerAdmission = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
         var admission = new RecordingAdmissionGate(innerAdmission);
         var worker = new ObservingWorkerClient(new CoordinateLookupWorkerClient(
             new V2InvocationBuilder(),
@@ -150,7 +187,8 @@ public sealed class CoordinateLookupDrainFinalityTests
     {
         var process = new ControlledProcess();
         var factory = new ControlledProcessFactory(process);
-        await using var admission = new TemporaryCoordinateLookupAdmissionGate();
+        await using var admission = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
         var readySeen = new TaskCompletionSource(
             TaskCreationOptions.RunContinuationsAsynchronously);
         CoordinateLookupPageController? controller = null;
@@ -223,7 +261,8 @@ public sealed class CoordinateLookupDrainFinalityTests
             ChildProcessKillOutcome.Requested,
             exitOnKill: true);
         var factory = new ControlledProcessFactory(process);
-        await using var innerAdmission = new TemporaryCoordinateLookupAdmissionGate();
+        await using var innerAdmission = new WorkerJobCoordinator(
+            [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
         var admission = new RecordingAdmissionGate(innerAdmission);
         var worker = new ObservingWorkerClient(new CoordinateLookupWorkerClient(
             new V2InvocationBuilder(),
@@ -618,7 +657,19 @@ public sealed class CoordinateLookupDrainFinalityTests
     {
         public WorkerJobContext Context => inner.Context;
         public WorkerJobDescriptor Descriptor => inner.Descriptor;
+        public bool IsStopRequested => inner.IsStopRequested;
         internal int DisposeCount { get; private set; }
+
+        public bool TryBindOwnerStop(
+            WorkerJobContext context,
+            Func<Task> requestStopAsync) =>
+            inner.TryBindOwnerStop(context, requestStopAsync);
+
+        public bool TryAdvance(
+            WorkerJobContext context,
+            WorkerJobLifecycle lifecycle,
+            int? childProcessId = null) =>
+            inner.TryAdvance(context, lifecycle, childProcessId);
 
         public async ValueTask DisposeAsync()
         {

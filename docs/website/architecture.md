@@ -37,6 +37,12 @@ The background processor:
 4. optionally queries bundled airport infrastructure
 5. writes city/state/country back to immich when a complete result is available
 
+### Worker jobs and multiple containers
+
+Heavy jobs such as asset processing and coordinate Lookup run in an isolated child process. Within one Immich ReverseGeo web container, they share one local slot, so only one of these jobs runs at a time. A busy request is rejected immediately and can be tried again after the active job finishes.
+
+This slot is local to each web container. If you run multiple web containers, each container has its own slot and its status describes only work in that container. Lookup and future cache maintenance can therefore overlap each other or asset processing in another container. Asset processing also keeps its PostgreSQL advisory lock, which prevents two processing workers from updating Immich at the same time across containers. Run one interactive web container if you need strict exclusion across all heavy jobs.
+
 ### Active data sources
 
 <div class="feature-grid">

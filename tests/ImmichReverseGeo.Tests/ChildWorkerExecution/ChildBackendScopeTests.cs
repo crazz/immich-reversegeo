@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -144,7 +145,8 @@ public sealed class ChildBackendScopeTests
             global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance,
             provider.GetRequiredService<IServiceScopeFactory>(),
             NullLogger<ProcessingRunCoordinator>.Instance,
-            createRunId);
+            createRunId,
+            workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered));
     }
 
     private sealed class ScopeActivationCounters

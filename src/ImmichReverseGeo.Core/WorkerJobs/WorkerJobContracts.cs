@@ -1,6 +1,5 @@
 using System;
 using System.Collections.Generic;
-using System.Collections.ObjectModel;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
@@ -183,6 +182,9 @@ public static class WorkerJobDescriptors
             IsHeavy: true,
             IsCancellable: true,
             IsGeodataBearing: true));
+
+    public static IReadOnlyList<WorkerJobDescriptor> Registered { get; } =
+        Array.AsReadOnly([ProcessAssets, CoordinateLookup]);
 
     public static WorkerJobKind CacheMutation => WorkerJobKind.CacheMutation;
 }

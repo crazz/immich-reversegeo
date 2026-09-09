@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Reflection;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -428,7 +429,8 @@ public sealed class ProcessingScheduleChange12Tests
                 AlwaysHasWorkScheduledRunGate.Instance,
                 ProcessingRunBackendTestScopeFactory.Create(executor),
                 NullLogger<ProcessingRunCoordinator>.Instance,
-                Guid.NewGuid);
+                Guid.NewGuid,
+                workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered));
         }
     }
 

@@ -175,6 +175,7 @@ public class WorkerRunControlPlaneTests
                 NextId,
                 Cancellations,
                 null,
+                workerCoordinator: new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
                 timeProvider: TimeProvider.System);
             ControlPlane = new WorkerRunControlPlane(Builder, Launcher, Reporter, TimeProvider.System);
             Executor.Configure(ControlPlane, Coordinator);

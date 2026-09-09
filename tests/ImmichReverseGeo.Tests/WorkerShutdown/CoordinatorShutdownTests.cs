@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -287,6 +288,7 @@ public sealed class CoordinatorShutdownTests
                 NullLogger<ProcessingRunCoordinator>.Instance,
                 CreateRunId,
                 observer,
+                new WorkerJobCoordinator(WorkerJobDescriptors.Registered),
                 lifetime);
         }
 

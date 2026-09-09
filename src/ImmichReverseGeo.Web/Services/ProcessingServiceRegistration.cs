@@ -37,6 +37,9 @@ internal static class ProcessingServiceRegistration
         services.AddOptions<HostOptions>()
             .Validate(WorkerHostShutdownBudget.IsValid, WorkerHostShutdownBudget.ValidationMessage);
         services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton(sp => new WorkerJobCoordinator(
+            ImmichReverseGeo.Core.WorkerJobs.WorkerJobDescriptors.Registered,
+            timeProvider: sp.GetRequiredService<TimeProvider>()));
         services.AddSingleton<ProcessingState>();
         services.AddSingleton<ProcessingStateEventReporter>();
         services.AddSingleton(sp => new ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridgeFactory(
@@ -66,6 +69,7 @@ internal static class ProcessingServiceRegistration
                     logger,
                     Guid.NewGuid,
                     observer,
+                    sp.GetRequiredService<WorkerJobCoordinator>(),
                     lifetime,
                     timeProvider)
                 : ProcessingRunCoordinator.CreateManualOnly(
@@ -75,6 +79,7 @@ internal static class ProcessingServiceRegistration
                     logger,
                     Guid.NewGuid,
                     observer,
+                    sp.GetRequiredService<WorkerJobCoordinator>(),
                     lifetime,
                     timeProvider);
         });

@@ -3,6 +3,7 @@ using System.Runtime.ExceptionServices;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using WorkerStateBridge = ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridge;
@@ -72,9 +73,13 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private readonly IProcessingRunCancellationFactory _cancellationFactory;
     private readonly IProcessingRunCoordinatorObserver? _observer;
     private readonly TimeProvider _timeProvider;
+    private readonly WorkerJobCoordinator _workerCoordinator;
     private readonly TaskCompletionSource _applicationStoppingRegistrationReady =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly CancellationTokenSource _scheduledPreflightStopping = new();
     private readonly CancellationTokenRegistration _applicationStoppingRegistration;
+    private TaskCompletionSource _scheduledPreflightDrained = CompletedSignal();
+    private int _scheduledPreflightCount;
     private ActiveRun? _active;
     private Task? _shutdownTask;
     private bool _admissionOpen = true;
@@ -85,6 +90,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         IScheduledRunWorkGate scheduledRunWorkGate,
         IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
+        WorkerJobCoordinator workerCoordinator,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
         : this(
@@ -96,6 +102,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             Guid.NewGuid,
             new ProcessingRunCancellationFactory(),
             null,
+            workerCoordinator,
             applicationLifetime,
             timeProvider)
     {
@@ -108,6 +115,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
+        WorkerJobCoordinator workerCoordinator,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
         : this(
@@ -119,6 +127,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             createRunId,
             new ProcessingRunCancellationFactory(),
             null,
+            workerCoordinator,
             applicationLifetime,
             timeProvider)
     {
@@ -132,6 +141,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IProcessingRunCoordinatorObserver? observer,
+        WorkerJobCoordinator workerCoordinator,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
         : this(
@@ -143,6 +153,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             createRunId,
             new ProcessingRunCancellationFactory(),
             observer,
+            workerCoordinator,
             applicationLifetime,
             timeProvider)
     {
@@ -157,6 +168,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         Func<Guid> createRunId,
         IProcessingRunCancellationFactory cancellationFactory,
         IProcessingRunCoordinatorObserver? observer,
+        WorkerJobCoordinator workerCoordinator,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
         : this(
@@ -168,6 +180,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             createRunId,
             cancellationFactory,
             observer,
+            workerCoordinator,
             applicationLifetime,
             timeProvider,
             scheduledRunsSupported: true)
@@ -183,6 +196,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         Func<Guid> createRunId,
         IProcessingRunCancellationFactory cancellationFactory,
         IProcessingRunCoordinatorObserver? observer,
+        WorkerJobCoordinator workerCoordinator,
         IHostApplicationLifetime? applicationLifetime,
         TimeProvider? timeProvider,
         bool scheduledRunsSupported)
@@ -203,6 +217,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(createRunId);
         ArgumentNullException.ThrowIfNull(cancellationFactory);
+        ArgumentNullException.ThrowIfNull(workerCoordinator);
 
         _state = state;
         _reporter = reporter;
@@ -213,6 +228,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         _cancellationFactory = cancellationFactory;
         _observer = observer;
         _timeProvider = timeProvider ?? TimeProvider.System;
+        _workerCoordinator = workerCoordinator;
         try
         {
             _applicationStoppingRegistration = applicationLifetime?.ApplicationStopping.Register(BeginShutdownFromApplicationStopping)
@@ -231,6 +247,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
         IProcessingRunCoordinatorObserver? observer,
+        WorkerJobCoordinator workerCoordinator,
         IHostApplicationLifetime? applicationLifetime = null,
         TimeProvider? timeProvider = null)
     {
@@ -243,6 +260,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             createRunId,
             new ProcessingRunCancellationFactory(),
             observer,
+            workerCoordinator,
             applicationLifetime,
             timeProvider,
             scheduledRunsSupported: false);
@@ -251,7 +269,9 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     public async Task<ProcessingRunAdmissionResult> TriggerManualAsync()
     {
         await BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt.Manual).ConfigureAwait(false);
-        var reservation = Reserve(ProcessingRunTrigger.Manual, CancellationToken.None);
+        var reservation = await ReserveAsync(
+            ProcessingRunTrigger.Manual,
+            CancellationToken.None).ConfigureAwait(false);
         if (reservation.Result != ProcessingRunAdmissionResult.Accepted)
         {
             return reservation.Result;
@@ -268,13 +288,58 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             throw new InvalidOperationException("Scheduled processing is not available in this deployment mode.");
         }
 
+        CancellationTokenSource? preflight = BeginScheduledPreflight(stoppingToken);
+        if (preflight is null)
+        {
+            return ScheduledTriggerResult.RejectedAlreadyRunning;
+        }
+
+        bool hasWork;
+        try
+        {
+            hasWork = await _scheduledRunWorkGate.HasWorkAsync(preflight.Token).ConfigureAwait(false);
+            preflight.Token.ThrowIfCancellationRequested();
+        }
+        catch (OperationCanceledException cancellation)
+            when (preflight.Token.IsCancellationRequested
+                && (cancellation.CancellationToken == preflight.Token
+                    || cancellation.CancellationToken == stoppingToken))
+        {
+            EndScheduledPreflight(preflight);
+            if (stoppingToken.IsCancellationRequested)
+            {
+                throw new OperationCanceledException(cancellation.Message, cancellation, stoppingToken);
+            }
+
+            throw;
+        }
+        catch (Exception failure)
+        {
+            EndScheduledPreflight(preflight);
+            _logger.LogError(failure, ScheduledWorkDetectionFailureMessage);
+            return ScheduledTriggerResult.AcceptedAfterTerminal;
+        }
+
+        EndScheduledPreflight(preflight);
+        if (!hasWork)
+        {
+            _logger.LogInformation("Scheduled run skipped because no eligible work was detected.");
+            return ScheduledTriggerResult.AcceptedAfterTerminal;
+        }
+
         await BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt.Scheduled).ConfigureAwait(false);
-        var reservation = Reserve(ProcessingRunTrigger.Scheduled, stoppingToken);
+        var reservation = await ReserveAsync(
+            ProcessingRunTrigger.Scheduled,
+            stoppingToken).ConfigureAwait(false);
         if (reservation.Result != ProcessingRunAdmissionResult.Accepted)
         {
             if (reservation.Result == ProcessingRunAdmissionResult.AlreadyRunning)
             {
-                _state.AppendLog("Scheduled run skipped because a processing pass is already in progress.");
+                string message = reservation.Busy is null
+                    || reservation.Busy.CapabilityFamily == WorkerJobCapabilityFamily.Processing
+                    ? "Scheduled run skipped because a processing pass is already in progress."
+                    : "Scheduled run skipped because another background job is already using the heavy worker.";
+                _state.AppendLog(message);
             }
 
             return ScheduledTriggerResult.RejectedAlreadyRunning;
@@ -320,12 +385,9 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 _timeProvider,
                 ChildWorkerTerminationIntent.Stop,
                 trackCancellationDispatch: false);
-            if (claim.IsFirst)
-            {
-                handle.ObserveWorkerCancellation();
-            }
         }
 
+        PublishFirstStopClaim(handle, claim);
         if (claim.IsFirst)
         {
             StartAttachedTermination(handle);
@@ -412,6 +474,11 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             }
         }
 
+        handle.Lease.TryAdvance(
+            handle.Lease.Context,
+            WorkerJobLifecycle.Running,
+            session.ProcessId);
+
         if (attachment!.Finalizer is not null)
         {
             try
@@ -454,6 +521,36 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         handle.StartAttachedTermination(allowFaultContainment);
     }
 
+    private void PublishFirstStopClaim(
+        ActiveRun handle,
+        ActiveRun.StopClaim claim)
+    {
+        if (!claim.IsFirst)
+        {
+            return;
+        }
+
+        handle.ObserveWorkerCancellation();
+        try
+        {
+            if (!handle.Lease.TryAdvance(
+                    handle.Lease.Context,
+                    WorkerJobLifecycle.Stopping))
+            {
+                _logger.LogError(
+                    "Processing run {RunId} could not publish its shared Stopping lifecycle",
+                    handle.Request.RunId);
+            }
+        }
+        catch (Exception failure)
+        {
+            _logger.LogError(
+                failure,
+                "Processing run {RunId} shared Stopping lifecycle publication faulted",
+                handle.Request.RunId);
+        }
+    }
+
     private void RequestFaultContainment(
         ActiveRun handle,
         ChildWorkerTerminalPreventingObservation observation)
@@ -490,12 +587,9 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 _timeProvider,
                 ChildWorkerTerminationIntent.Stop,
                 trackCancellationDispatch: true);
-            if (claim.IsFirst)
-            {
-                handle.ObserveWorkerCancellation();
-            }
         }
 
+        PublishFirstStopClaim(handle, claim);
         if (claim.IsFirst)
         {
             try
@@ -543,7 +637,12 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal Task BeginShutdown()
     {
         TaskCompletionSource start;
+        TaskCompletionSource<Task> workerShutdownReady;
+        TaskCompletionSource<Task> preflightStopReady;
+        Task scheduledPreflightDrained;
         Task shutdown;
+        ActiveRun? handle;
+        ActiveRun.StopClaim? stopClaim;
         lock (_admissionGate)
         {
             if (_shutdownTask is not null)
@@ -552,28 +651,105 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             }
 
             _admissionOpen = false;
-            var handle = _active;
+            scheduledPreflightDrained = _scheduledPreflightDrained.Task;
+            handle = _active;
             handle?.MarkShutdownRequested();
-            ActiveRun.StopClaim? stopClaim = handle?.ClaimStop(
+            stopClaim = handle?.ClaimStop(
                 _timeProvider,
                 ChildWorkerTerminationIntent.Shutdown,
                 trackCancellationDispatch: true);
-            if (stopClaim is { IsFirst: true })
-            {
-                handle!.ObserveWorkerCancellation();
-            }
             start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
-            shutdown = CompleteShutdownAsync(handle, stopClaim, start.Task);
+            workerShutdownReady = new TaskCompletionSource<Task>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            preflightStopReady = new TaskCompletionSource<Task>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            shutdown = CompleteShutdownAsync(
+                handle,
+                stopClaim,
+                workerShutdownReady.Task,
+                preflightStopReady.Task,
+                scheduledPreflightDrained,
+                start.Task);
             _shutdownTask = shutdown;
         }
 
-        start.TrySetResult();
+        try
+        {
+            workerShutdownReady.TrySetResult(_workerCoordinator.BeginShutdown());
+        }
+        catch (Exception failure)
+        {
+            workerShutdownReady.TrySetResult(Task.FromException(failure));
+        }
+
+        if (handle is not null && stopClaim is not null)
+        {
+            PublishFirstStopClaim(handle, stopClaim.Value);
+        }
+
+        try
+        {
+            _scheduledPreflightStopping.Cancel();
+            preflightStopReady.TrySetResult(Task.CompletedTask);
+        }
+        catch (Exception failure)
+        {
+            preflightStopReady.TrySetResult(Task.FromException(failure));
+        }
+        finally
+        {
+            start.TrySetResult();
+        }
+
         return shutdown;
     }
 
     private ValueTask BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt attempt)
     {
         return _observer?.BeforeAdmissionGateAsync(attempt) ?? ValueTask.CompletedTask;
+    }
+
+    private CancellationTokenSource? BeginScheduledPreflight(CancellationToken callerToken)
+    {
+        lock (_admissionGate)
+        {
+            if (!_admissionOpen)
+            {
+                return null;
+            }
+
+            if (_scheduledPreflightCount++ == 0)
+            {
+                _scheduledPreflightDrained = new TaskCompletionSource(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
+            }
+
+            return CancellationTokenSource.CreateLinkedTokenSource(
+                callerToken,
+                _scheduledPreflightStopping.Token);
+        }
+    }
+
+    private void EndScheduledPreflight(CancellationTokenSource preflight)
+    {
+        preflight.Dispose();
+        TaskCompletionSource? drained = null;
+        lock (_admissionGate)
+        {
+            if (--_scheduledPreflightCount == 0)
+            {
+                drained = _scheduledPreflightDrained;
+            }
+        }
+
+        drained?.TrySetResult();
+    }
+
+    private static TaskCompletionSource CompletedSignal()
+    {
+        var signal = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        signal.TrySetResult();
+        return signal;
     }
 
     internal Task WaitForActiveRunAsync()
@@ -595,7 +771,10 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
     }
 
-    private (ProcessingRunAdmissionResult Result, ActiveRun? Handle) Reserve(
+    private async ValueTask<(
+        ProcessingRunAdmissionResult Result,
+        ActiveRun? Handle,
+        WorkerJobBusyMetadata? Busy)> ReserveAsync(
         ProcessingRunTrigger trigger,
         CancellationToken linkedCancellationToken)
     {
@@ -603,25 +782,225 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         {
             if (!_admissionOpen)
             {
-                return (ProcessingRunAdmissionResult.Stopping, null);
+                return (ProcessingRunAdmissionResult.Stopping, null, null);
             }
 
             if (_active is not null)
             {
-                return (ProcessingRunAdmissionResult.AlreadyRunning, null);
+                return (ProcessingRunAdmissionResult.AlreadyRunning, null, null);
+            }
+        }
+
+        var request = new ProcessingRunRequest(_createRunId(), trigger);
+        var dispatch = new ProcessAssetsWorkerJobDispatch(request);
+        WorkerJobAdmissionResult admission = _workerCoordinator.TryAdmit(dispatch);
+        if (admission is WorkerJobAdmissionResult.Busy busy)
+        {
+            return (ProcessingRunAdmissionResult.AlreadyRunning, null, busy.ActiveJob);
+        }
+
+        if (admission is WorkerJobAdmissionResult.Unavailable)
+        {
+            return (ProcessingRunAdmissionResult.Stopping, null, null);
+        }
+
+        IWorkerJobAdmissionLease lease =
+            ((WorkerJobAdmissionResult.Admitted)admission).Lease;
+        var transaction = new ProcessingAdmissionTransaction(
+            this,
+            request,
+            lease,
+            trigger,
+            linkedCancellationToken);
+        return await transaction.TryCommitAsync().ConfigureAwait(false);
+    }
+
+    private sealed class ProcessingAdmissionTransaction
+    {
+        private readonly ProcessingRunCoordinator _owner;
+        private readonly ProcessingRunRequest _request;
+        private readonly IWorkerJobAdmissionLease _lease;
+        private readonly ProcessingRunTrigger _trigger;
+        private readonly CancellationToken _linkedCancellationToken;
+        private IProcessingRunCancellation? _cancellation;
+        private ActiveRun? _handle;
+        private int _published;
+        private int _rollbackStarted;
+
+        internal ProcessingAdmissionTransaction(
+            ProcessingRunCoordinator owner,
+            ProcessingRunRequest request,
+            IWorkerJobAdmissionLease lease,
+            ProcessingRunTrigger trigger,
+            CancellationToken linkedCancellationToken)
+        {
+            _owner = owner;
+            _request = request;
+            _lease = lease;
+            _trigger = trigger;
+            _linkedCancellationToken = linkedCancellationToken;
+        }
+
+        internal async ValueTask<(
+            ProcessingRunAdmissionResult Result,
+            ActiveRun? Handle,
+            WorkerJobBusyMetadata? Busy)> TryCommitAsync()
+        {
+            try
+            {
+                _cancellation = _owner._cancellationFactory.Create(
+                    _request,
+                    _linkedCancellationToken);
+                var createdHandle = new ActiveRun(_request, _cancellation, _lease);
+                _handle = createdHandle;
+                if (_trigger == ProcessingRunTrigger.Scheduled)
+                {
+                    createdHandle.RegisterScheduledCancellation(
+                        () => _owner.RequestScheduledChildTermination(createdHandle));
+                }
+
+                ProcessingRunAdmissionResult? rejected = TryPublish();
+                if (rejected is not null)
+                {
+                    await RollbackAsync().ConfigureAwait(false);
+                    return (rejected.Value, null, null);
+                }
+
+                if (!_lease.TryBindOwnerStop(
+                        _lease.Context,
+                        () => _owner.RequestWorkerCoordinatorStopAsync(createdHandle)))
+                {
+                    await RollbackAsync().ConfigureAwait(false);
+                    return (ProcessingRunAdmissionResult.Stopping, null, null);
+                }
+
+                return (ProcessingRunAdmissionResult.Accepted, createdHandle, null);
+            }
+            catch (Exception startupFailure)
+            {
+                ExceptionDispatchInfo captured = ExceptionDispatchInfo.Capture(startupFailure);
+                try
+                {
+                    await RollbackAsync().ConfigureAwait(false);
+                }
+                catch (Exception rollbackFailure)
+                {
+                    _owner._logger.LogError(
+                        rollbackFailure,
+                        "Processing run {RunId} admission rollback faulted",
+                        _request.RunId);
+                }
+
+                captured.Throw();
+                throw;
+            }
+        }
+
+        private ProcessingRunAdmissionResult? TryPublish()
+        {
+            lock (_owner._admissionGate)
+            {
+                if (!_owner._admissionOpen)
+                {
+                    return ProcessingRunAdmissionResult.Stopping;
+                }
+
+                if (_owner._active is not null)
+                {
+                    return ProcessingRunAdmissionResult.AlreadyRunning;
+                }
+
+                _owner._active = _handle!;
+                Volatile.Write(ref _published, 1);
+                return null;
+            }
+        }
+
+        private async ValueTask RollbackAsync()
+        {
+            if (Interlocked.Exchange(ref _rollbackStarted, 1) != 0)
+            {
+                return;
             }
 
-            var request = new ProcessingRunRequest(_createRunId(), trigger);
-            var cancellation = _cancellationFactory.Create(request, linkedCancellationToken);
-            var handle = new ActiveRun(request, cancellation);
-            if (trigger == ProcessingRunTrigger.Scheduled)
+            if (Interlocked.Exchange(ref _published, 0) != 0)
             {
-                handle.RegisterScheduledCancellation(
-                    () => RequestScheduledChildTermination(handle));
+                lock (_owner._admissionGate)
+                {
+                    if (ReferenceEquals(_owner._active, _handle))
+                    {
+                        _owner._active = null;
+                    }
+                }
             }
-            _active = handle;
-            return (ProcessingRunAdmissionResult.Accepted, handle);
+
+            ExceptionDispatchInfo? firstFailure = null;
+            async ValueTask AttemptAsync(Func<ValueTask> operation)
+            {
+                try
+                {
+                    await operation().ConfigureAwait(false);
+                }
+                catch (Exception failure)
+                {
+                    firstFailure ??= ExceptionDispatchInfo.Capture(failure);
+                }
+            }
+
+            ActiveRun? handle = _handle;
+            if (handle is not null)
+            {
+                await AttemptAsync(
+                    handle.DisposeScheduledCancellationRegistrationAsync).ConfigureAwait(false);
+                await AttemptAsync(
+                    () => new ValueTask(handle.DisposeCancellationAsync())).ConfigureAwait(false);
+            }
+            else if (_cancellation is not null)
+            {
+                await AttemptAsync(() =>
+                {
+                    _cancellation.Dispose();
+                    return ValueTask.CompletedTask;
+                }).ConfigureAwait(false);
+            }
+
+            await AttemptAsync(_lease.DisposeAsync).ConfigureAwait(false);
+            firstFailure?.Throw();
         }
+    }
+
+    private Task RequestWorkerCoordinatorStopAsync(ActiveRun handle)
+    {
+        ActiveRun.StopClaim claim;
+        lock (_admissionGate)
+        {
+            if (!ReferenceEquals(_active, handle)
+                || !ReferenceEquals(_active.Request, handle.Request))
+            {
+                return Task.CompletedTask;
+            }
+
+            handle.MarkShutdownRequested();
+            claim = handle.ClaimStop(
+                _timeProvider,
+                ChildWorkerTerminationIntent.Shutdown,
+                trackCancellationDispatch: true);
+        }
+
+        PublishFirstStopClaim(handle, claim);
+        if (claim.IsFirst)
+        {
+            try
+            {
+                DispatchCancellation(handle, claim.CancellationDispatch!);
+            }
+            finally
+            {
+                StartAttachedTermination(handle);
+            }
+        }
+
+        return Task.CompletedTask;
     }
 
     private void RequestScheduledChildTermination(ActiveRun handle)
@@ -630,9 +1009,9 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             _timeProvider,
             ChildWorkerTerminationIntent.Stop,
             trackCancellationDispatch: false);
+        PublishFirstStopClaim(handle, claim);
         if (claim.IsFirst)
         {
-            handle.ObserveWorkerCancellation();
             StartAttachedTermination(handle);
         }
     }
@@ -642,6 +1021,13 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         try
         {
             ThrowIfShutdownCancellationRequested(handle);
+            if (!handle.Lease.TryAdvance(
+                    handle.Lease.Context,
+                    WorkerJobLifecycle.Starting))
+            {
+                throw new OperationCanceledException(handle.Cancellation.Token);
+            }
+
             _state.MarkPending();
             ThrowIfShutdownCancellationRequested(handle);
             if (!_reporter.Arm(handle.Request))
@@ -649,26 +1035,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 throw new InvalidOperationException("Processing event reporter is already armed.");
             }
 
-            if (handle.Request.Trigger == ProcessingRunTrigger.Scheduled)
-            {
-                if (!await PrepareScheduledDispatchAsync(handle).ConfigureAwait(false))
-                {
-                    return;
-                }
-
-                if (handle.Cancellation.Token.IsCancellationRequested)
-                {
-                    await FinalizePredispatchAsync(
-                        handle,
-                        ProcessingRunOutcome.Cancelled,
-                        safeFailureMessage: null).ConfigureAwait(false);
-                    return;
-                }
-            }
-            else
-            {
-                ThrowIfShutdownCancellationRequested(handle);
-            }
+            ThrowIfShutdownCancellationRequested(handle);
 
             if (_observer is not null)
             {
@@ -731,45 +1098,6 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
             return handle.TryClaimChildDispatch();
         }
-    }
-
-    private async Task<bool> PrepareScheduledDispatchAsync(ActiveRun handle)
-    {
-        bool hasWork;
-        try
-        {
-            ThrowIfShutdownCancellationRequested(handle);
-            hasWork = await _scheduledRunWorkGate!.HasWorkAsync(handle.Cancellation.Token).ConfigureAwait(false);
-            handle.Cancellation.Token.ThrowIfCancellationRequested();
-        }
-        catch (OperationCanceledException) when (handle.Cancellation.Token.IsCancellationRequested)
-        {
-            await FinalizePredispatchAsync(
-                handle,
-                ProcessingRunOutcome.Cancelled,
-                safeFailureMessage: null).ConfigureAwait(false);
-            return false;
-        }
-        catch (Exception failure)
-        {
-            ObserveRunFailure(handle, failure);
-            await FinalizePredispatchAsync(
-                handle,
-                ProcessingRunOutcome.Failed,
-                ScheduledWorkDetectionFailureMessage).ConfigureAwait(false);
-            return false;
-        }
-
-        if (hasWork)
-        {
-            return true;
-        }
-
-        await FinalizePredispatchAsync(
-            handle,
-            ProcessingRunOutcome.Completed,
-            safeFailureMessage: null).ConfigureAwait(false);
-        return false;
     }
 
     private async Task FinalizePredispatchAsync(
@@ -975,6 +1303,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     {
         ExceptionDispatchInfo? cleanupFailure = null;
         handle.CloseControlPlaneForCleanup();
+        handle.Lease.TryAdvance(handle.Lease.Context, WorkerJobLifecycle.Finalizing);
         try
         {
             await handle.WaitForCancellationDispatchAsync().ConfigureAwait(false);
@@ -1070,6 +1399,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         }
         finally
         {
+            bool releaseAdmission = false;
             lock (_admissionGate)
             {
                 if (ReferenceEquals(_active, handle)
@@ -1077,8 +1407,23 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 {
                     _active = null;
                     handle.MarkFinalizerReleased();
+                    releaseAdmission = true;
                 }
             }
+
+            if (releaseAdmission)
+            {
+                try
+                {
+                    await handle.Lease.DisposeAsync().ConfigureAwait(false);
+                }
+                catch (Exception failure)
+                {
+                    cleanupFailure ??= ExceptionDispatchInfo.Capture(failure);
+                    ObserveCleanupFailure(handle, failure);
+                }
+            }
+
             handle.ExecutionFailure = primaryFailure ?? cleanupFailure;
             handle.CleanupCompleted.TrySetResult();
         }
@@ -1137,6 +1482,9 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private async Task CompleteShutdownAsync(
         ActiveRun? handle,
         ActiveRun.StopClaim? stopClaim,
+        Task<Task> workerShutdownReady,
+        Task<Task> preflightStopReady,
+        Task scheduledPreflightDrained,
         Task start)
     {
         await start.ConfigureAwait(false);
@@ -1168,6 +1516,13 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
             await AttemptAsync(() => StartOrJoinShutdownStop(handle, stopClaim.Value)).ConfigureAwait(false);
         }
 
+        await AttemptAsync(async () =>
+            await await workerShutdownReady.ConfigureAwait(false)).ConfigureAwait(false);
+        await AttemptAsync(async () =>
+            await scheduledPreflightDrained.ConfigureAwait(false)).ConfigureAwait(false);
+        await AttemptAsync(async () =>
+            await await preflightStopReady.ConfigureAwait(false)).ConfigureAwait(false);
+
         await AttemptAsync(() =>
         {
             _observer?.CoordinatorStopped();
@@ -1177,6 +1532,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         {
             await _applicationStoppingRegistrationReady.Task.ConfigureAwait(false);
             await _applicationStoppingRegistration.DisposeAsync().ConfigureAwait(false);
+            _scheduledPreflightStopping.Dispose();
         }).ConfigureAwait(false);
 
         firstFailure?.Throw();
@@ -1332,14 +1688,17 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
 
         public ActiveRun(
             ProcessingRunRequest request,
-            IProcessingRunCancellation cancellation)
+            IProcessingRunCancellation cancellation,
+            IWorkerJobAdmissionLease lease)
         {
             Request = request;
             Cancellation = cancellation;
+            Lease = lease;
         }
 
         public ProcessingRunRequest Request { get; }
         public IProcessingRunCancellation Cancellation { get; }
+        public IWorkerJobAdmissionLease Lease { get; }
         public TaskCompletionSource PreparationCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public TaskCompletionSource CleanupCompleted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         public ExceptionDispatchInfo? ExecutionFailure { get; set; }

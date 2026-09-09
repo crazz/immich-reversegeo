@@ -811,11 +811,13 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertSingletonAliasDescriptors<WorkerCommandAmbientRuntimeObservationSource, IWorkerCommandRuntimeObservationSource>(descriptors);
         AssertSingletonAliasDescriptors<WorkerCommandRuntimeFactsCapture, IWorkerCommandRuntimeFactsCapture>(descriptors);
         AssertSingletonAliasDescriptors<WorkerCommandInvocationBuilder, IWorkerCommandInvocationBuilder>(descriptors);
-        AssertSingletonAliasDescriptors<TemporaryCoordinateLookupAdmissionGate, IWorkerJobAdmissionGate>(descriptors);
+        AssertSingletonAliasDescriptors<WorkerJobCoordinator, IWorkerJobAdmissionGate>(descriptors);
+        AssertSingletonAliasDescriptors<WorkerJobCoordinator, IWorkerJobArbitrationDiagnostics>(descriptors);
+        AssertSingletonHostedAliasDescriptor<WorkerJobCoordinator>(descriptors);
         AssertSingletonAliasDescriptors<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(descriptors);
         AssertSingletonAliasDescriptors<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(descriptors);
         AssertSingletonHostedAliasDescriptor<CoordinateLookupPageControllerHostLifetime>(descriptors);
-        Assert.AreEqual(scheduler ? 5 : 4, descriptors.Count(descriptor => descriptor.ServiceType == typeof(IHostedService)), "web-hosted-alias-count");
+        Assert.AreEqual(scheduler ? 6 : 5, descriptors.Count(descriptor => descriptor.ServiceType == typeof(IHostedService)), "web-hosted-alias-count");
         Assert.AreEqual(scheduler ? 1 : 0, descriptors.Count(descriptor => descriptor.ServiceType == typeof(ProcessingBackgroundService)), "scheduler-descriptor");
         Assert.AreEqual(scheduler ? 1 : 0, descriptors.Count(descriptor => descriptor.ServiceType == typeof(IScheduledRunTrigger)), "scheduled-trigger-descriptor");
         if (scheduler)
@@ -855,7 +857,9 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertAlias<WorkerCommandAmbientRuntimeObservationSource, IWorkerCommandRuntimeObservationSource>(provider);
         AssertAlias<WorkerCommandRuntimeFactsCapture, IWorkerCommandRuntimeFactsCapture>(provider);
         AssertAlias<WorkerCommandInvocationBuilder, IWorkerCommandInvocationBuilder>(provider);
-        AssertAlias<TemporaryCoordinateLookupAdmissionGate, IWorkerJobAdmissionGate>(provider);
+        AssertAlias<WorkerJobCoordinator, IWorkerJobAdmissionGate>(provider);
+        AssertAlias<WorkerJobCoordinator, IWorkerJobArbitrationDiagnostics>(provider);
+        AssertHostedAlias<WorkerJobCoordinator>(provider);
         AssertAlias<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(provider);
         AssertAlias<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(provider);
         AssertHostedAlias<ProcessingRunCoordinator>(provider);
@@ -927,8 +931,9 @@ public sealed class DeploymentModeCompositionMatrixTests
             typeof(IScheduledRunWorkCounter), typeof(WorkerCommandAmbientRuntimeObservationSource),
             typeof(IWorkerCommandRuntimeObservationSource), typeof(WorkerCommandRuntimeFactsCapture),
             typeof(IWorkerCommandRuntimeFactsCapture), typeof(WorkerCommandInvocationBuilder),
-            typeof(IWorkerCommandInvocationBuilder), typeof(TemporaryCoordinateLookupAdmissionGate),
-            typeof(IWorkerJobAdmissionGate), typeof(ConfigCoordinateLookupSettingsSnapshotProvider),
+            typeof(IWorkerCommandInvocationBuilder), typeof(WorkerJobCoordinator),
+            typeof(IWorkerJobAdmissionGate), typeof(IWorkerJobArbitrationDiagnostics),
+            typeof(ConfigCoordinateLookupSettingsSnapshotProvider),
             typeof(ICoordinateLookupSettingsSnapshotProvider), typeof(CoordinateLookupWorkerClient),
             typeof(ICoordinateLookupWorkerClient), typeof(CoordinateLookupPageControllerHostLifetime),
             typeof(CoordinateLookupPageControllerFactory)
