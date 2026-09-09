@@ -350,10 +350,15 @@ public sealed class WorkerJobCoordinatorTests
     }
 
     [TestMethod]
-    public void RegisteredDescriptors_AreTheImmutableProcessAndLookupSet()
+    public void RegisteredDescriptors_AreTheImmutableProcessLookupAndCacheSet()
     {
         CollectionAssert.AreEqual(
-            new[] { WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup },
+            new[]
+            {
+                WorkerJobDescriptors.ProcessAssets,
+                WorkerJobDescriptors.CoordinateLookup,
+                WorkerJobDescriptors.CacheMutation
+            },
             WorkerJobDescriptors.Registered.ToArray());
         ICollection<WorkerJobDescriptor> collection =
             Assert.IsInstanceOfType<ICollection<WorkerJobDescriptor>>(WorkerJobDescriptors.Registered);

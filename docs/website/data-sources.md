@@ -243,9 +243,15 @@ The recommended workflow is:
 - larger countries can use hundreds of megabytes of local storage per cached country
 - Lookup runs these source operations in a temporary isolated worker in both Standard and Web-only mode; it does not load the source services in the interactive page or write Immich asset metadata
 
+On the Administrative Areas page, `Re-download` uses a temporary worker to build and validate a complete replacement before publishing it. The current valid cache stays available if download, export, validation, or publication preparation fails, or if you cancel before publication. If cancellation arrives after publication, the new valid cache can remain visible when the page reloads the actual cache status, even though that attempt is reported as cancelled.
+
+Processing, Lookup, and cache refreshes share one heavy-work slot in each running Immich ReverseGeo Web process. A `Busy` refresh is not queued; retry after the active operation and its cleanup finish. If the worker is `Unavailable`, resolve the displayed availability problem before retrying.
+
 A source marked unavailable in a completed Lookup result is separate from a worker failure. The completed result can still show fields resolved by other sources. A worker failure has no completed source result and Lookup does not retry the same work inside the Web service.
 
-The GADM non-commercial notice applies whenever that optional source is selected. A GADM download or query error is a technical availability problem; it does not mean the license caused the error. Review the [official GADM license](https://gadm.org/license.html) before enabling GADM, even when the source is currently unavailable.
+**GADM license:** GADM data is limited to academic and other non-commercial use. Review the [official GADM license](https://gadm.org/license.html) before enabling GADM.
+
+**Technical errors:** A GADM download or query error is an availability problem; it does not change or replace the license notice above.
 
 ## Notes
 

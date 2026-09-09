@@ -122,6 +122,13 @@ internal static class WebServiceCollectionExtensions
         services.AddHostedService(sp =>
             sp.GetRequiredService<CoordinateLookupPageControllerHostLifetime>());
         services.AddSingleton<CoordinateLookupPageControllerFactory>();
+        services.AddSingleton<CacheMutationWorkerClient>();
+        services.AddSingleton<ICacheMutationWorkerClient>(sp =>
+            sp.GetRequiredService<CacheMutationWorkerClient>());
+        services.AddSingleton<CacheMutationPageControllerHostLifetime>();
+        services.AddHostedService(sp =>
+            sp.GetRequiredService<CacheMutationPageControllerHostLifetime>());
+        services.AddSingleton<CacheMutationPageControllerFactory>();
         services.AddSingleton(sp => new ImmichReverseGeo.Web.WorkerFailureRecovery.WorkerRunControlPlane(
             sp.GetRequiredService<IWorkerCommandInvocationBuilder>(),
             sp.GetRequiredService<IChildWorkerLauncher>(),

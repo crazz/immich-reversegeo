@@ -42,13 +42,11 @@ internal static class ProductionCoordinateHostFixture
 
         if (options.Scenario == FixtureScenario.RealCoordinateOutputFailure)
         {
-            var outputFailure = new OutputFailureSynchronization(options.ResourceRoot);
-            builder.Services.RemoveAll<IWorkerStandardInputStreamFactory>();
-            builder.Services.AddSingleton<IWorkerStandardInputStreamFactory>(
-                new ObservedStandardInputFactory(outputFailure));
-            builder.Services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
-            builder.Services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(
-                new FailAfterReadyOutputFactory(options.ResourceRoot, outputFailure));
+            ConfigureManagedOutputFailure(
+                builder.Services,
+                options.ResourceRoot,
+                WorkerJobKind.CoordinateLookup,
+                "coordinate-job-started");
         }
 
         if (options.Scenario == FixtureScenario.RealCoordinateStartupFailure)
@@ -61,6 +59,25 @@ internal static class ProductionCoordinateHostFixture
         return await InternalWorkerHost.RunHostAsync(
             builder.Build(),
             outcomes).ConfigureAwait(false);
+    }
+
+    internal static void ConfigureManagedOutputFailure(
+        IServiceCollection services,
+        string root,
+        WorkerJobKind expectedJobKind,
+        string markerValue)
+    {
+        var outputFailure = new OutputFailureSynchronization(root);
+        services.RemoveAll<IWorkerStandardInputStreamFactory>();
+        services.AddSingleton<IWorkerStandardInputStreamFactory>(
+            new ObservedStandardInputFactory(outputFailure));
+        services.RemoveAll<IWorkerNdjsonOutputStreamFactory>();
+        services.AddSingleton<IWorkerNdjsonOutputStreamFactory>(
+            new FailAfterReadyOutputFactory(
+                root,
+                outputFailure,
+                expectedJobKind,
+                markerValue));
     }
 
     private static void AddForbiddenPersistenceSentinels(
@@ -339,19 +356,25 @@ internal static class ProductionCoordinateHostFixture
 
     private sealed class FailAfterReadyOutputFactory(
         string root,
-        OutputFailureSynchronization synchronization) : IWorkerNdjsonOutputStreamFactory
+        OutputFailureSynchronization synchronization,
+        WorkerJobKind expectedJobKind,
+        string markerValue) : IWorkerNdjsonOutputStreamFactory
     {
         public Stream OpenStandardOutput() =>
             new FailAfterFirstFrameStream(
                 new WorkerNdjsonStandardOutputStreamFactory().OpenStandardOutput(),
                 root,
-                synchronization);
+                synchronization,
+                expectedJobKind,
+                markerValue);
     }
 
     private sealed class FailAfterFirstFrameStream(
         Stream inner,
         string root,
-        OutputFailureSynchronization synchronization) : Stream
+        OutputFailureSynchronization synchronization,
+        WorkerJobKind expectedJobKind,
+        string markerValue) : Stream
     {
         private int _writes;
 
@@ -383,9 +406,9 @@ internal static class ProductionCoordinateHostFixture
                         "\"type\":\"job-started\"",
                         StringComparison.Ordinal)
                     && frame.Contains(
-                        "\"jobKind\":\"CoordinateLookup\"",
+                        $"\"jobKind\":\"{expectedJobKind}\"",
                         StringComparison.Ordinal)
-                        ? "coordinate-job-started"
+                        ? markerValue
                         : "unexpected-second-write";
                 File.WriteAllText(Path.Combine(root, "output-fault-injected.marker"), reached);
                 throw new IOException("fixture output failure");

@@ -6,6 +6,7 @@ namespace ImmichReverseGeo.Tests.WorkerJobArbitration;
 
 [TestClass]
 [TestCategory("Change50")]
+[TestCategory("Change51")]
 public sealed class WorkerJobCoordinatorContractTests
 {
     [TestMethod]
@@ -75,6 +76,57 @@ public sealed class WorkerJobCoordinatorContractTests
             {
                 await admitted.Lease.DisposeAsync();
             }
+        }
+
+        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+    }
+
+    [TestMethod]
+    [DataRow(WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup)]
+    [DataRow(WorkerJobKind.ProcessAssets, WorkerJobKind.CacheMutation)]
+    [DataRow(WorkerJobKind.CoordinateLookup, WorkerJobKind.ProcessAssets)]
+    [DataRow(WorkerJobKind.CoordinateLookup, WorkerJobKind.CacheMutation)]
+    [DataRow(WorkerJobKind.CacheMutation, WorkerJobKind.ProcessAssets)]
+    [DataRow(WorkerJobKind.CacheMutation, WorkerJobKind.CoordinateLookup)]
+    public async Task CanonicalExclusiveWorkerDescriptors_BlockEveryCrossKindPairAndReuse(
+        WorkerJobKind ownerKind,
+        WorkerJobKind contenderKind)
+    {
+        await using WorkerJobCoordinator coordinator =
+            new(WorkerJobDescriptors.Registered);
+        WorkerJobDispatch ownerDispatch = DispatchFor(ownerKind);
+        WorkerJobDispatch contenderDispatch = DispatchFor(contenderKind);
+        WorkerJobAdmissionResult.Admitted owner = Admit(coordinator, ownerDispatch);
+
+        try
+        {
+            WorkerJobAdmissionResult.Busy busy =
+                Assert.IsInstanceOfType<WorkerJobAdmissionResult.Busy>(
+                    coordinator.TryAdmit(contenderDispatch));
+            Assert.AreEqual(ownerKind, busy.ActiveJob.JobKind);
+            Assert.AreEqual(
+                owner.Lease.Descriptor.Arbitration.CapabilityFamily,
+                busy.ActiveJob.CapabilityFamily);
+            Assert.AreEqual(
+                owner.Lease.Context.Origin,
+                busy.ActiveJob.Origin);
+        }
+        finally
+        {
+            await owner.Lease.DisposeAsync();
+        }
+
+        WorkerJobAdmissionResult.Admitted reused = Admit(
+            coordinator,
+            contenderDispatch);
+        try
+        {
+            Assert.AreEqual(contenderKind, reused.Lease.Context.JobKind);
+            Assert.AreSame(contenderDispatch.Descriptor, reused.Lease.Descriptor);
+        }
+        finally
+        {
+            await reused.Lease.DisposeAsync();
         }
 
         Assert.IsNull(coordinator.Snapshot.ActiveJob);
@@ -381,19 +433,19 @@ public sealed class WorkerJobCoordinatorContractTests
                 new CoordinateLookupCityResolverOverrides(null, [])));
     }
 
-    private static WorkerJobDescriptor CacheMutationDescriptor()
+    private static WorkerJobDispatch DispatchFor(WorkerJobKind kind)
     {
-        return new WorkerJobDescriptor(
-            WorkerJobKind.CacheMutation,
-            typeof(FakeCacheMutationRequest),
-            typeof(FakeCacheMutationResult),
-            new WorkerJobArbitrationMetadata(
-                WorkerJobCapabilityFamily.CacheMaintenance,
-                WorkerJobResourceClass.ExclusiveHeavyWorker,
-                IsHeavy: true,
-                IsCancellable: true,
-                IsGeodataBearing: true));
+        return kind switch
+        {
+            WorkerJobKind.ProcessAssets => ProcessingDispatch(),
+            WorkerJobKind.CoordinateLookup => LookupDispatch(),
+            WorkerJobKind.CacheMutation => CacheDispatch(WorkerJobDescriptors.CacheMutation),
+            _ => throw new ArgumentOutOfRangeException(nameof(kind))
+        };
     }
+
+    private static WorkerJobDescriptor CacheMutationDescriptor() =>
+        WorkerJobDescriptors.CacheMutation;
 
     private static FakeCacheMutationDispatch CacheDispatch(WorkerJobDescriptor descriptor)
     {

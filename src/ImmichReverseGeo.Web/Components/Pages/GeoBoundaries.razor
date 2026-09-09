@@ -1,7 +1,10 @@
 @page "/data/geoboundaries"
 @rendermode InteractiveServer
+@implements IAsyncDisposable
+@using ImmichReverseGeo.Core.WorkerJobs
 @inject GadmDivisionCacheService GadmCache
 @inject OvertureDivisionCacheService OvertureCache
+@inject CacheMutationPageControllerFactory CacheMutations
 
 <h2>Administrative Areas</h2>
 
@@ -10,18 +13,47 @@
     <div class="alert alert-success">@_result</div>
 }
 
+@if (_cacheController is not null && _cacheController.State.Phase != CacheMutationPagePhase.Idle)
+{
+    var mutation = _cacheController.State;
+    <div class="alert @MutationAlertClass">
+        <div>@mutation.Status</div>
+        @if (mutation.Error is not null)
+        {
+            <div>@mutation.Error</div>
+        }
+        @if (mutation.CurrentActivity is not null)
+        {
+            <div>@mutation.CurrentActivity</div>
+        }
+        @if (mutation.BusyJob is not null)
+        {
+            <div>Active: @mutation.BusyJob.CapabilityFamily / @mutation.BusyJob.Origin / @mutation.BusyJob.Lifecycle</div>
+        }
+        @if (mutation.CanCancel)
+        {
+            <button type="button" class="btn btn-secondary" @onclick="CancelCacheMutation">Cancel</button>
+        }
+    </div>
+}
+
+<p class="section-intro">
+    GADM data is available for academic and other non-commercial use.
+    <a href="https://gadm.org/license.html" target="_blank" rel="noopener noreferrer">Review the GADM license</a>.
+</p>
+
 <div class="administrative-cache-page">
 <section class="settings-card wide-card">
     <h3>Administrative Area Caches</h3>
     <p class="section-intro">Downloaded Overture and optional GADM administrative caches are reused for processing and lookup. Use the filters below to inspect one source or search by country code.</p>
     <div class="btn-row">
         <button @onclick="DeleteAllOvertureDivisions"
-                disabled="@_busy"
+                disabled="@MutationControlsDisabled"
                 class="btn btn-danger">
             Delete All Overture Divisions
         </button>
         <button @onclick="DeleteAllGadmDivisions"
-                disabled="@_busy"
+                disabled="@MutationControlsDisabled"
                 class="btn btn-danger">
             Delete All GADM Caches
         </button>
@@ -77,12 +109,12 @@
                         <td>@row.DownloadedAt?.ToString("u")</td>
                         <td class="table-actions-cell">
                             <button @onclick="() => DeleteCache(row)"
-                                    disabled="@_busy"
+                                    disabled="@MutationControlsDisabled"
                                     class="btn btn-danger">
                                 Delete
                             </button>
                             <button @onclick="() => RedownloadCache(row)"
-                                    disabled="@_busy"
+                                    disabled="@MutationControlsDisabled"
                                     class="btn btn-secondary">
                                 Re-download
                             </button>
@@ -100,6 +132,7 @@
     private Dictionary<string, OvertureDivisionStatus> _overtureDivisionStatus = [];
     private Dictionary<string, GadmDivisionStatus> _gadmDivisionStatus = [];
     private bool _busy;
+    private CacheMutationPageController? _cacheController;
     private string? _result;
     private CacheSortColumn _sortColumn = CacheSortColumn.Source;
     private bool _sortAscending = true;
@@ -109,8 +142,25 @@
     protected override Task OnInitializedAsync()
     {
         RefreshState();
+        _cacheController = CacheMutations.Create(
+            () => InvokeAsync(StateHasChanged),
+            () => InvokeAsync(() =>
+            {
+                RefreshState();
+                StateHasChanged();
+            }));
         return Task.CompletedTask;
     }
+
+    private bool MutationControlsDisabled =>
+        _busy || (_cacheController?.State.IsActive ?? false);
+
+    private string MutationAlertClass => _cacheController?.State.Phase switch
+    {
+        CacheMutationPagePhase.Completed => "alert-success",
+        CacheMutationPagePhase.Failed => "alert-error",
+        _ => "alert-info"
+    };
 
     private void RefreshState()
     {
@@ -118,20 +168,11 @@
         _gadmDivisionStatus = GadmCache.GetStatus();
     }
 
-    private async Task RedownloadOvertureDivision(string iso3)
+    private Task RedownloadOvertureDivision(string iso3)
     {
-        _busy = true;
-        try
-        {
-            OvertureCache.DeleteFile(iso3);
-            await OvertureCache.EnsureDataAsync(iso3);
-            _result = $"Re-downloaded Overture divisions for {iso3}.";
-            RefreshState();
-        }
-        finally
-        {
-            _busy = false;
-        }
+        _result = null;
+        return _cacheController?.RefreshAsync(CacheMutationSource.Overture, iso3)
+            ?? Task.CompletedTask;
     }
 
     private Task DeleteOvertureDivision(string iso3)
@@ -171,21 +212,15 @@
         }
     }
 
-    private async Task RedownloadGadmDivision(string iso3)
+    private Task RedownloadGadmDivision(string iso3)
     {
-        _busy = true;
-        try
-        {
-            GadmCache.DeleteFile(iso3);
-            await GadmCache.EnsureDataAsync(iso3);
-            _result = $"Re-downloaded GADM data for {iso3}.";
-            RefreshState();
-        }
-        finally
-        {
-            _busy = false;
-        }
+        _result = null;
+        return _cacheController?.RefreshAsync(CacheMutationSource.Gadm, iso3)
+            ?? Task.CompletedTask;
     }
+
+    private Task CancelCacheMutation() =>
+        _cacheController?.CancelAsync() ?? Task.CompletedTask;
 
     private Task DeleteGadmDivision(string iso3)
     {
@@ -358,6 +393,14 @@
         Version,
         Size,
         DownloadedAt
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        if (_cacheController is not null)
+        {
+            await _cacheController.DisposeAsync();
+        }
     }
 
 }

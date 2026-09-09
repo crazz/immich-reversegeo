@@ -10,6 +10,17 @@ internal static class Program
 
     private static async Task<int> Main(string[] args)
     {
+        if (args.Length == 3
+            && string.Equals(args[0], "--hold-cache-candidate", StringComparison.Ordinal))
+        {
+            using ICacheCandidateLease lease =
+                new CacheCandidateOwnership().Acquire(args[1]);
+            await File.WriteAllTextAsync(args[1], "held candidate").ConfigureAwait(false);
+            await File.WriteAllTextAsync(args[2], "ready").ConfigureAwait(false);
+            await Task.Delay(Timeout.InfiniteTimeSpan).ConfigureAwait(false);
+            return 0;
+        }
+
         var standardError = Console.OpenStandardError();
         if (!FixtureOptions.TryParse(args, out var options, out var error))
         {
@@ -30,6 +41,13 @@ internal static class Program
 
         try
         {
+            if (options!.UsesProductionCacheHost)
+            {
+                return await ProductionCacheHostFixture.RunAsync(
+                    options,
+                    selected.Version).ConfigureAwait(false);
+            }
+
             if (options!.UsesProductionCoordinateHost)
             {
                 return await ProductionCoordinateHostFixture.RunAsync(

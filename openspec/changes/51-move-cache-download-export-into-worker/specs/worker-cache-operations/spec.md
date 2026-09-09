@@ -5,7 +5,7 @@ Runs Overture and GADM administrative cache ensure and refresh operations in tem
 ## ADDED Requirements
 
 ### Requirement: Closed typed CacheMutation contract
-The v2 system SHALL register exactly one `CacheMutation` job kind whose concrete request contains one canonical job identity, a closed source value of `Overture` or `Gadm`, a closed operation value of `Ensure` or `Refresh`, and one canonical ISO 3166-1 alpha-3 country code. It MUST NOT accept a path, URL, release override, arbitrary options, untyped payload, or deletion operation.
+The v2 system SHALL register exactly one `CacheMutation` job kind whose envelope carries the sole canonical `JobId` and whose concrete payload contains a closed source value of `Overture` or `Gadm`, a closed operation value of `Ensure` or `Refresh`, and one canonical ISO 3166-1 alpha-3 country code. The payload MUST NOT carry a second identity, path, URL, release override, arbitrary options, untyped payload, or deletion operation.
 
 #### Scenario: Valid cache mutation is accepted
 - **WHEN** an admitted request contains a supported source, supported operation, and known canonical ISO3 code
@@ -110,10 +110,10 @@ An accepted cache mutation SHALL emit closed discrete progress steps for checkin
 - **THEN** no retry worker starts, no reservation is queued, and Web receives finalized block 50's Busy safe active snapshot
 
 ### Requirement: Exclusive heavy arbitration and worker composition
-The `CacheMutation` descriptor SHALL declare friendly category Cache maintenance, cache-UI origin, cancellable=true, heavy=true, geodata-bearing=true, and finalized block 50's `ExclusiveHeavyGeodata` resource class. Web SHALL create the sole JobId before atomically requesting admission and SHALL receive exactly `Admitted(owner handle)`, `Busy(safe active snapshot)`, or `Unavailable(safe pre-launch reason)`. Admission SHALL be first-successful-request-wins with no waiting, queue, coordinator retry, preemption, priority promotion, fairness, or starvation guarantee. Only an admitted owner MAY launch/cancel/release; Busy and Unavailable SHALL start no process and fabricate no worker exit. The cache worker MUST NOT acquire the processing-only PostgreSQL advisory lock, use exit 3 for local contention, or write Immich asset, EXIF, skipped-asset, configuration, or schema data.
+The `CacheMutation` descriptor SHALL declare landed `CacheMaintenance` capability, `Manual` interactive origin, cancellable=true, heavy=true, geodata-bearing=true, and finalized block 50's `ExclusiveHeavyWorker` resource class, and SHALL be added to immutable `WorkerJobDescriptors.Registered`. Web SHALL create the sole JobId before atomically requesting `IWorkerJobAdmissionGate` admission and SHALL receive exactly `Admitted(IWorkerJobAdmissionLease)`, `Busy(safe active snapshot)`, or `Unavailable(safe pre-launch reason)`. Admission SHALL be first-successful-request-wins with no waiting, queue, coordinator retry, preemption, priority promotion, fairness, or starvation guarantee. Only an admitted lease owner MAY launch/cancel/release; Busy and Unavailable SHALL start no process and fabricate no worker exit. The cache worker MUST NOT acquire the processing-only PostgreSQL advisory lock, use exit 3 for local contention, or write Immich asset, EXIF, skipped-asset, configuration, or schema data.
 
 #### Scenario: Processing, Lookup, or another cache job is active
-- **WHEN** Web requests a CacheMutation while any `ExclusiveHeavyGeodata` owner is active in that Web process
+- **WHEN** Web requests a CacheMutation while any `ExclusiveHeavyWorker` owner is active in that Web process
 - **THEN** it receives Busy with the safe exact active kind/category/origin/lifecycle snapshot, starts no process, touches no cache file, cannot cancel/release the owner, and is not automatically retried
 
 #### Scenario: Coordinator cannot accept pre-launch work
@@ -175,7 +175,7 @@ The Administrative Areas page SHALL route only its existing Overture/GADM **Re-d
 - **THEN** the controller suppresses stale rendering, uses the owner-bound bounded session stop/dispose path, and releases the matching handle exactly once only after classifier and process/stream/protocol/bridge finality
 
 ### Requirement: Deletion and inventory ownership remain separate
-This change SHALL NOT route per-cache deletion or delete-all through `CacheMutation`, alter their semantics, or create block 53's read-only inventory service. It SHALL provide an authoritative mutation-completed signal/reload seam that later inventory invalidation can consume.
+This change SHALL NOT route per-cache deletion or delete-all through `CacheMutation`, alter their semantics, or create block 53's read-only inventory service. It SHALL reload actual status after every admitted attempt reaches owned finalization and SHALL provide a separate authoritative successful mutation-completed signal only for completed/no-op results that later inventory invalidation can consume. Rejected Busy/Unavailable admission SHALL do neither.
 
 #### Scenario: User selects Delete or Delete All
 - **WHEN** a deletion action is invoked

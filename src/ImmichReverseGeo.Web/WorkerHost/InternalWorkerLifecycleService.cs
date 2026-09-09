@@ -398,6 +398,15 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                             null,
                             coordinateLookupResult,
                             null),
+                    CacheMutationResult cacheMutationResult =>
+                        new WorkerJobTerminalPayload(
+                            WorkerJobTerminalOutcome.Completed,
+                            cacheMutationResult.StartedAtUtc,
+                            cacheMutationResult.EndedAtUtc,
+                            null,
+                            null,
+                            cacheMutationResult,
+                            null),
                     _ => throw new InvalidOperationException(
                         "The worker-job handler returned an incompatible result.")
                 };
@@ -468,14 +477,17 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
                     now,
                     null,
                     new WorkerJobSafeError(
-                        context.JobKind == WorkerJobKind.CoordinateLookup
-                            ? "coordinate-lookup-failed"
-                            : "worker-job-infrastructure-failed",
-                        context.JobKind == WorkerJobKind.CoordinateLookup
+                        context.JobKind switch
+                        {
+                            WorkerJobKind.CoordinateLookup => "coordinate-lookup-failed",
+                            WorkerJobKind.CacheMutation => "cache-mutation-failed",
+                            _ => "worker-job-infrastructure-failed"
+                        },
+                        context.JobKind is WorkerJobKind.CoordinateLookup or WorkerJobKind.CacheMutation
                             ? WorkerJobFailureCategory.Domain
                             : WorkerJobFailureCategory.Internal,
                         "The worker job could not be completed."));
-                exitFact = context.JobKind == WorkerJobKind.CoordinateLookup
+                exitFact = context.JobKind is WorkerJobKind.CoordinateLookup or WorkerJobKind.CacheMutation
                     ? WorkerProcessExitFact.ExecutionFailure()
                     : WorkerProcessExitFact.ExecutionInfrastructure();
             }

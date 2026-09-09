@@ -166,6 +166,11 @@ public sealed class WorkerJobControllerInputValidator
             _request = coordinateLookup.Request;
             _descriptor = _supportedDescriptors[message.JobKind];
         }
+        else if (message.Payload is CacheMutationExecutePayload cacheMutation)
+        {
+            _request = cacheMutation.Request;
+            _descriptor = _supportedDescriptors[message.JobKind];
+        }
 
         if (cancelDisposition is
             WorkerJobCancelDisposition.LatchedBeforeInvocation or
@@ -232,6 +237,7 @@ public sealed class WorkerJobOutputStreamValidator
 {
     private readonly Guid _expectedJobId;
     private readonly WorkerJobKind _expectedJobKind;
+    private readonly CacheMutationRequest? _expectedCacheMutation;
     private readonly HashSet<Guid> _activeActivities = [];
     private long _lastSequence;
     private DateTimeOffset? _lastTimestampUtc;
@@ -241,6 +247,14 @@ public sealed class WorkerJobOutputStreamValidator
     private bool _terminalSeen;
 
     public WorkerJobOutputStreamValidator(Guid expectedJobId, WorkerJobKind expectedJobKind)
+        : this(expectedJobId, expectedJobKind, null)
+    {
+    }
+
+    public WorkerJobOutputStreamValidator(
+        Guid expectedJobId,
+        WorkerJobKind expectedJobKind,
+        IWorkerJobRequest? expectedRequest)
     {
         if (expectedJobId == Guid.Empty)
         {
@@ -249,6 +263,16 @@ public sealed class WorkerJobOutputStreamValidator
 
         _expectedJobId = expectedJobId;
         _expectedJobKind = expectedJobKind;
+        _expectedCacheMutation = expectedRequest switch
+        {
+            null => null,
+            CacheMutationRequest request when expectedJobKind == WorkerJobKind.CacheMutation => request,
+            ProcessAssetsRequest when expectedJobKind == WorkerJobKind.ProcessAssets => null,
+            CoordinateLookupRequest when expectedJobKind == WorkerJobKind.CoordinateLookup => null,
+            _ => throw new ArgumentException(
+                "The expected request does not match the worker-job kind.",
+                nameof(expectedRequest))
+        };
     }
 
     public WorkerJobOutputStreamSnapshot Snapshot => new(
@@ -309,6 +333,13 @@ public sealed class WorkerJobOutputStreamValidator
             return Fail(WorkerProtocolFailureCode.InvalidCorrelation, "Output correlation does not match the active job.");
         }
 
+        if (!MatchesExpectedCacheMutation(message.Payload))
+        {
+            return Fail(
+                WorkerProtocolFailureCode.InvalidCorrelation,
+                "Cache mutation output does not match the accepted immutable request.");
+        }
+
         if (!_jobStarted && message.Type != WorkerJobProtocolV2.JobStartedType)
         {
             return Fail(WorkerProtocolFailureCode.InvalidLifecycle, "Job-started must be the first job output.");
@@ -359,6 +390,30 @@ public sealed class WorkerJobOutputStreamValidator
         }
 
         return Commit(message);
+    }
+
+    private bool MatchesExpectedCacheMutation(WorkerJobOutputPayload payload)
+    {
+        if (_expectedCacheMutation is null)
+        {
+            return true;
+        }
+
+        return payload switch
+        {
+            CacheMutationProgressPayload progress =>
+                progress.Source == _expectedCacheMutation.Source
+                && progress.Operation == _expectedCacheMutation.Operation
+                && string.Equals(progress.Iso3, _expectedCacheMutation.Iso3, StringComparison.Ordinal),
+            WorkerJobTerminalPayload { CacheMutationResult: not null } terminal =>
+                terminal.CacheMutationResult.Cache.Source == _expectedCacheMutation.Source
+                && terminal.CacheMutationResult.Cache.Operation == _expectedCacheMutation.Operation
+                && string.Equals(
+                    terminal.CacheMutationResult.Cache.Iso3,
+                    _expectedCacheMutation.Iso3,
+                    StringComparison.Ordinal),
+            _ => true
+        };
     }
 
     public WorkerProtocolFailure? FinalizeOutput(bool hasPartialFrame)

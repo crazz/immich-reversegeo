@@ -620,8 +620,75 @@ public sealed class AdministrativeAreaResolverEventReportingTests
             var constructor = typeof(GadmDivisionCacheService).GetConstructor(System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic, binder: null, new[] { typeof(Microsoft.Extensions.Logging.ILogger<GadmDivisionCacheService>), typeof(string), typeof(Func<string, CancellationToken, Task>) }, modifiers: null)!;
             return (GadmDivisionCacheService)constructor.Invoke(new object[] { NullLogger<GadmDivisionCacheService>.Instance, root, source });
         }
-        private static void CreateOverture(string root) => CreateDb(Path.Combine(root, "overture-divisions/USA.db"), "division_area", "release");
-        private static void CreateGadm(string root) => CreateDb(Path.Combine(root, "gadm-divisions/USA.db"), "gadm_area", "version");
-        private static void CreateDb(string path, string table, string version) { Directory.CreateDirectory(Path.GetDirectoryName(path)!); using var c = new SqliteConnection($"Data Source={path};Pooling=false"); c.Open(); using var cmd = c.CreateCommand(); cmd.CommandText = $"CREATE TABLE IF NOT EXISTS {table} (id TEXT PRIMARY KEY); INSERT OR IGNORE INTO {table} VALUES ('x'); CREATE TABLE IF NOT EXISTS _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT OR REPLACE INTO _meta VALUES ('{version}','test'); INSERT OR REPLACE INTO _meta VALUES ('downloadedAt','2026-01-01T00:00:00Z');"; cmd.ExecuteNonQuery(); }
+        private static void CreateOverture(string root)
+        {
+            string path = Path.Combine(root, "overture-divisions/USA.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var connection = new SqliteConnection($"Data Source={path};Pooling=false");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE IF NOT EXISTS division_area (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    subtype TEXT,
+                    class_name TEXT,
+                    admin_level INTEGER,
+                    country TEXT,
+                    is_land INTEGER NOT NULL,
+                    is_territorial INTEGER NOT NULL,
+                    geom_wkb BLOB,
+                    bbox_xmin REAL,
+                    bbox_ymin REAL,
+                    bbox_xmax REAL,
+                    bbox_ymax REAL
+                );
+                INSERT OR IGNORE INTO division_area VALUES (
+                    'x', 'Fixture', 'region', 'land', 4, 'US', 1, 0,
+                    NULL, 1000, 1000, 1001, 1001
+                );
+                CREATE TABLE IF NOT EXISTS _meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                INSERT OR REPLACE INTO _meta VALUES ('release', 'test');
+                INSERT OR REPLACE INTO _meta VALUES (
+                    'downloadedAt',
+                    '2026-01-01T00:00:00Z'
+                );
+                """;
+            command.ExecuteNonQuery();
+        }
+        private static void CreateGadm(string root)
+        {
+            string path = Path.Combine(root, "gadm-divisions/USA.db");
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            using var connection = new SqliteConnection($"Data Source={path};Pooling=false");
+            connection.Open();
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                CREATE TABLE gadm_area (
+                    id TEXT PRIMARY KEY,
+                    name TEXT NOT NULL,
+                    english_type TEXT,
+                    local_type TEXT,
+                    admin_level INTEGER NOT NULL,
+                    geom_wkb BLOB NOT NULL,
+                    bbox_xmin REAL NOT NULL,
+                    bbox_ymin REAL NOT NULL,
+                    bbox_xmax REAL NOT NULL,
+                    bbox_ymax REAL NOT NULL
+                );
+                INSERT INTO gadm_area VALUES (
+                    'fixture', 'Fixture', 'Region', NULL, 1,
+                    X'010100000000000000000000000000000000000000',
+                    0, 0, 0, 0
+                );
+                CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                INSERT INTO _meta VALUES ('version', 'test');
+                INSERT INTO _meta VALUES ('downloadedAt', '2026-01-01T00:00:00Z');
+                """;
+            command.ExecuteNonQuery();
+        }
     }
 }

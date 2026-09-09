@@ -5,7 +5,7 @@ Overture and GADM cache mutation currently runs behind Web-resolved services and
 ## What Changes
 
 - Add the concrete v2 `CacheMutation` request, progress, result, validation, descriptor, and worker handler for closed `Overture`/`Gadm` sources and `Ensure`/`Refresh` operations.
-- Route the Administrative Areas page's existing **Re-download** action through finalized block 50's atomic first-wins `Admitted(owner handle)` / `Busy(safe active snapshot)` / `Unavailable(safe pre-launch reason)` boundary and one cancellable `ExclusiveHeavyGeodata` worker session; do not add a new download button or move deletion into this change.
+- Route the Administrative Areas page's existing **Re-download** action through finalized block 50's landed `IWorkerJobAdmissionGate` atomic first-wins `Admitted(IWorkerJobAdmissionLease)` / `Busy(safe active snapshot)` / `Unavailable(safe pre-launch reason)` boundary and one cancellable `ExclusiveHeavyWorker` worker session; do not add a new download button or move deletion into this change.
 - Preserve a verified existing cache during refresh, publish only a validated replacement, clean temporary artifacts and SQLite pools on every outcome, and define safe retry/no-op/cancellation behavior.
 - Keep `ProcessAssets` and `CoordinateLookup` cache ensuring inside their already-admitted workers through one shared worker-only mutation core; never launch a nested cache worker.
 - Return bounded typed progress, safe logs/activities, and authoritative terminal cache metadata, including stable GADM attribution and non-commercial-use licensing information.

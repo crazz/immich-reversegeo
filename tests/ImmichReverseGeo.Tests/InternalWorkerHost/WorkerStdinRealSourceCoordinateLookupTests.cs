@@ -76,7 +76,12 @@ public sealed partial class WorkerStdinRealSourceHostTests
                 Enumerable.Range(1, messages.Length).Select(static value => (long)value).ToArray(),
                 messages.Select(static message => message.Sequence).ToArray());
             CollectionAssert.AreEqual(
-                new[] { WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup },
+                new[]
+                {
+                    WorkerJobKind.ProcessAssets,
+                    WorkerJobKind.CoordinateLookup,
+                    WorkerJobKind.CacheMutation
+                },
                 Assert.IsInstanceOfType<WorkerJobReadyPayload>(messages[0].Payload)
                     .SupportedJobKinds.ToArray());
             Assert.AreEqual(WorkerJobProtocolV2.JobStartedType, messages[1].Type);

@@ -65,6 +65,14 @@ The Data area contains maintenance tools that change downloaded caches or Immich
 | `Re-download GADM cache` | Replaces one downloaded GADM country cache with a fresh copy. |
 | `Delete All GADM Caches` | Removes every downloaded GADM cache so they will be fetched again on demand later. |
 
+### Re-downloading an administrative cache
+
+`Re-download` starts a temporary worker that builds and validates a fresh cache before replacing the current one. The page shows named steps such as downloading, exporting, validating, and publishing when they apply. It also shows one `Cancel` action while the refresh can be cancelled. Cache controls stay disabled until the worker has finished and cleanup is complete.
+
+Cache refreshes share one heavy-work slot with processing and Lookup in each running Immich ReverseGeo Web process. If the page reports `Busy`, wait for the active operation to finish, then select `Re-download` again. If it reports `Unavailable`, resolve the displayed worker availability problem and retry. Refresh requests are not queued or replayed automatically.
+
+If download, export, validation, or publication preparation fails, the existing valid cache remains available. Cancelling before publication also keeps that cache. If cancellation arrives just after a validated replacement was published, the refresh can still end as cancelled while the new valid cache appears after the page reloads its actual status. A cancelled attempt is never reported as successful.
+
 The Reset Immich Geo Data page only clears reverse geo values in `asset_exif`. It does not touch any other Immich metadata.
 
 ## Logs

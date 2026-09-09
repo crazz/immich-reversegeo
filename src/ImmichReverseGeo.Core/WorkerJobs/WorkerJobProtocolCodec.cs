@@ -62,6 +62,11 @@ public static class WorkerJobProtocolCodec
                 case CoordinateLookupExecutePayload execute:
                     WriteCoordinateLookupRequest(writer, execute.Request);
                     break;
+                case CacheMutationExecutePayload execute:
+                    writer.WriteString("source", FormatCacheMutationSource(execute.Request.Source));
+                    writer.WriteString("operation", FormatCacheMutationOperation(execute.Request.Operation));
+                    writer.WriteString("iso3", execute.Request.Iso3);
+                    break;
                 case WorkerJobCancelPayload:
                     break;
                 default:
@@ -326,6 +331,17 @@ public static class WorkerJobProtocolCodec
                 {
                     typedPayload = new CoordinateLookupExecutePayload(request!);
                 }
+                else if (jobKind == WorkerJobKind.CacheMutation
+                    && HasExactProperties(payload, "source", "operation", "iso3")
+                    && TryString(payload, "source", out var sourceText)
+                    && TryCacheMutationSource(sourceText, out var source)
+                    && TryString(payload, "operation", out var operationText)
+                    && TryCacheMutationOperation(operationText, out var operation)
+                    && TryString(payload, "iso3", out var iso3))
+                {
+                    typedPayload = new CacheMutationExecutePayload(
+                        new CacheMutationRequest(source, operation, iso3));
+                }
                 else
                 {
                     return WorkerJobControllerParseResult.Failed(
@@ -464,6 +480,33 @@ public static class WorkerJobProtocolCodec
                         progressState,
                         progressCountryCode,
                         progressMessage),
+            WorkerJobProtocolV2.ProgressChangedType when
+                jobKind == WorkerJobKind.CacheMutation
+                && HasExactProperties(
+                    payload,
+                    "step",
+                    "source",
+                    "operation",
+                    "iso3",
+                    "message",
+                    "gadmAttribution")
+                && TryString(payload, "step", out var cacheStepText)
+                && TryCacheMutationProgressStep(cacheStepText, out var cacheStep)
+                && TryString(payload, "source", out var cacheSourceText)
+                && TryCacheMutationSource(cacheSourceText, out var cacheSource)
+                && TryString(payload, "operation", out var cacheOperationText)
+                && TryCacheMutationOperation(cacheOperationText, out var cacheOperation)
+                && TryString(payload, "iso3", out var cacheIso3)
+                && TryString(payload, "message", out var cacheMessage)
+                && payload.TryGetProperty("gadmAttribution", out JsonElement cacheAttributionElement)
+                && TryCacheMutationAttribution(cacheAttributionElement, out var cacheAttribution) =>
+                    new CacheMutationProgressPayload(
+                        cacheStep,
+                        cacheSource,
+                        cacheOperation,
+                        cacheIso3,
+                        cacheMessage,
+                        cacheAttribution),
             WorkerJobProtocolV2.ActivityStartedType when
                 HasExactProperties(payload, "activityId", "label")
                 && TryGuid(payload, "activityId", out var activityId)
@@ -499,6 +542,7 @@ public static class WorkerJobProtocolCodec
 
         ProcessAssetsResult? result = null;
         CoordinateLookupResult? coordinateLookupResult = null;
+        CacheMutationResult? cacheMutationResult = null;
         WorkerJobSafeError? error = null;
         if (resultElement.ValueKind != JsonValueKind.Null)
         {
@@ -531,6 +575,10 @@ public static class WorkerJobProtocolCodec
                 && TryCoordinateLookupResult(resultElement, out coordinateLookupResult))
             {
             }
+            else if (jobKind == WorkerJobKind.CacheMutation
+                && TryCacheMutationResult(resultElement, out cacheMutationResult))
+            {
+            }
             else
             {
                 throw new ArgumentException("The terminal result does not match the job kind.");
@@ -558,6 +606,7 @@ public static class WorkerJobProtocolCodec
             ended,
             result,
             coordinateLookupResult,
+            cacheMutationResult,
             error);
     }
 
@@ -595,6 +644,240 @@ public static class WorkerJobProtocolCodec
 
         writer.WriteEndArray();
         writer.WriteEndObject();
+    }
+
+    private static void WriteCacheMutationResult(
+        Utf8JsonWriter writer,
+        CacheMutationResult result)
+    {
+        CacheMutationSourceResult cache = result.Cache;
+        writer.WriteStartObject();
+        writer.WriteString("startedAtUtc", WorkerJobProtocolV2.FormatTimestamp(result.StartedAtUtc));
+        writer.WriteString("endedAtUtc", WorkerJobProtocolV2.FormatTimestamp(result.EndedAtUtc));
+        writer.WriteString("source", FormatCacheMutationSource(cache.Source));
+        writer.WriteString("operation", FormatCacheMutationOperation(cache.Operation));
+        writer.WriteString("iso3", cache.Iso3);
+        writer.WriteString("disposition", FormatCacheMutationDisposition(cache.Disposition));
+        writer.WriteNumber("rowCount", cache.RowCount);
+        writer.WriteString("downloadedAtUtc", WorkerJobProtocolV2.FormatTimestamp(cache.DownloadedAtUtc));
+        writer.WriteNumber("fileSizeBytes", cache.FileSizeBytes);
+        writer.WriteString("version", cache.Version);
+        writer.WritePropertyName("gadmAttribution");
+        WriteCacheMutationAttribution(writer, cache.GadmAttribution);
+        writer.WriteEndObject();
+    }
+
+    private static void WriteCacheMutationAttribution(
+        Utf8JsonWriter writer,
+        CacheMutationGadmAttribution? attribution)
+    {
+        if (attribution is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            writer.WriteStartObject();
+            writer.WriteString("datasetName", attribution.DatasetName);
+            writer.WriteString("datasetVersion", attribution.DatasetVersion);
+            writer.WriteString("licenseUrl", attribution.LicenseUrl);
+            writer.WriteString("usageNotice", attribution.UsageNotice);
+            writer.WriteEndObject();
+        }
+    }
+
+    private static bool TryCacheMutationResult(
+        JsonElement element,
+        out CacheMutationResult? result)
+    {
+        result = null;
+        if (element.ValueKind != JsonValueKind.Object
+            || !HasExactProperties(
+                element,
+                "startedAtUtc",
+                "endedAtUtc",
+                "source",
+                "operation",
+                "iso3",
+                "disposition",
+                "rowCount",
+                "downloadedAtUtc",
+                "fileSizeBytes",
+                "version",
+                "gadmAttribution")
+            || !TryTimestamp(element, "startedAtUtc", out var started)
+            || !TryTimestamp(element, "endedAtUtc", out var ended)
+            || !TryString(element, "source", out var sourceText)
+            || !TryCacheMutationSource(sourceText, out var source)
+            || !TryString(element, "operation", out var operationText)
+            || !TryCacheMutationOperation(operationText, out var operation)
+            || !TryString(element, "iso3", out var iso3)
+            || !TryString(element, "disposition", out var dispositionText)
+            || !TryCacheMutationDisposition(dispositionText, out var disposition)
+            || !TryInteger(element, "rowCount", out var rowCount)
+            || !TryTimestamp(element, "downloadedAtUtc", out var downloadedAt)
+            || !TryInteger(element, "fileSizeBytes", out var fileSizeBytes)
+            || !TryString(element, "version", out var version)
+            || !element.TryGetProperty("gadmAttribution", out JsonElement attributionElement)
+            || !TryCacheMutationAttribution(attributionElement, out var attribution))
+        {
+            return false;
+        }
+
+        try
+        {
+            result = new CacheMutationResult(
+                started,
+                ended,
+                new CacheMutationSourceResult(
+                    source,
+                    operation,
+                    iso3,
+                    disposition,
+                    rowCount,
+                    downloadedAt,
+                    fileSizeBytes,
+                    version,
+                    attribution));
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static bool TryCacheMutationAttribution(
+        JsonElement element,
+        out CacheMutationGadmAttribution? attribution)
+    {
+        attribution = null;
+        if (element.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.Object
+            || !HasExactProperties(
+                element,
+                "datasetName",
+                "datasetVersion",
+                "licenseUrl",
+                "usageNotice")
+            || !TryString(element, "datasetName", out var datasetName)
+            || !TryString(element, "datasetVersion", out var datasetVersion)
+            || !TryString(element, "licenseUrl", out var licenseUrl)
+            || !TryString(element, "usageNotice", out var usageNotice))
+        {
+            return false;
+        }
+
+        try
+        {
+            attribution = new CacheMutationGadmAttribution(
+                datasetName,
+                datasetVersion,
+                licenseUrl,
+                usageNotice);
+            return true;
+        }
+        catch (ArgumentException)
+        {
+            return false;
+        }
+    }
+
+    private static string FormatCacheMutationSource(CacheMutationSource source) => source switch
+    {
+        CacheMutationSource.Overture => "overture",
+        CacheMutationSource.Gadm => "gadm",
+        _ => throw new ArgumentOutOfRangeException(nameof(source))
+    };
+
+    private static bool TryCacheMutationSource(string value, out CacheMutationSource source)
+    {
+        source = value switch
+        {
+            "overture" => CacheMutationSource.Overture,
+            "gadm" => CacheMutationSource.Gadm,
+            _ => default
+        };
+        return value is "overture" or "gadm";
+    }
+
+    private static string FormatCacheMutationOperation(CacheMutationOperation operation) => operation switch
+    {
+        CacheMutationOperation.Ensure => "ensure",
+        CacheMutationOperation.Refresh => "refresh",
+        _ => throw new ArgumentOutOfRangeException(nameof(operation))
+    };
+
+    private static bool TryCacheMutationOperation(string value, out CacheMutationOperation operation)
+    {
+        operation = value switch
+        {
+            "ensure" => CacheMutationOperation.Ensure,
+            "refresh" => CacheMutationOperation.Refresh,
+            _ => default
+        };
+        return value is "ensure" or "refresh";
+    }
+
+    private static string FormatCacheMutationDisposition(CacheMutationDisposition disposition) => disposition switch
+    {
+        CacheMutationDisposition.AlreadyReady => "already-ready",
+        CacheMutationDisposition.Published => "published",
+        _ => throw new ArgumentOutOfRangeException(nameof(disposition))
+    };
+
+    private static bool TryCacheMutationDisposition(
+        string value,
+        out CacheMutationDisposition disposition)
+    {
+        disposition = value switch
+        {
+            "already-ready" => CacheMutationDisposition.AlreadyReady,
+            "published" => CacheMutationDisposition.Published,
+            _ => default
+        };
+        return value is "already-ready" or "published";
+    }
+
+    private static string FormatCacheMutationProgressStep(CacheMutationProgressStep step) => step switch
+    {
+        CacheMutationProgressStep.CheckingExisting => "checking-existing",
+        CacheMutationProgressStep.PreparingSource => "preparing-source",
+        CacheMutationProgressStep.Downloading => "downloading",
+        CacheMutationProgressStep.Exporting => "exporting",
+        CacheMutationProgressStep.ValidatingCandidate => "validating-candidate",
+        CacheMutationProgressStep.Publishing => "publishing",
+        CacheMutationProgressStep.Completed => "completed",
+        _ => throw new ArgumentOutOfRangeException(nameof(step))
+    };
+
+    private static bool TryCacheMutationProgressStep(
+        string value,
+        out CacheMutationProgressStep step)
+    {
+        step = value switch
+        {
+            "checking-existing" => CacheMutationProgressStep.CheckingExisting,
+            "preparing-source" => CacheMutationProgressStep.PreparingSource,
+            "downloading" => CacheMutationProgressStep.Downloading,
+            "exporting" => CacheMutationProgressStep.Exporting,
+            "validating-candidate" => CacheMutationProgressStep.ValidatingCandidate,
+            "publishing" => CacheMutationProgressStep.Publishing,
+            "completed" => CacheMutationProgressStep.Completed,
+            _ => default
+        };
+        return value is
+            "checking-existing" or
+            "preparing-source" or
+            "downloading" or
+            "exporting" or
+            "validating-candidate" or
+            "publishing" or
+            "completed";
     }
 
     private static void WriteCoordinateLookupCityProfile(
@@ -1064,6 +1347,15 @@ public static class WorkerJobProtocolCodec
                 WriteOptionalString(writer, "countryCode", progress.CountryCode);
                 writer.WriteString("message", progress.Message);
                 break;
+            case CacheMutationProgressPayload progress:
+                writer.WriteString("step", FormatCacheMutationProgressStep(progress.Step));
+                writer.WriteString("source", FormatCacheMutationSource(progress.Source));
+                writer.WriteString("operation", FormatCacheMutationOperation(progress.Operation));
+                writer.WriteString("iso3", progress.Iso3);
+                writer.WriteString("message", progress.Message);
+                writer.WritePropertyName("gadmAttribution");
+                WriteCacheMutationAttribution(writer, progress.GadmAttribution);
+                break;
             case WorkerJobActivityStartedPayload activityStarted:
                 writer.WriteString("activityId", activityStarted.ActivityId.ToString("D"));
                 writer.WriteString("label", activityStarted.Label);
@@ -1091,7 +1383,9 @@ public static class WorkerJobProtocolCodec
         writer.WriteString("startedAtUtc", WorkerJobProtocolV2.FormatTimestamp(terminal.StartedAtUtc));
         writer.WriteString("endedAtUtc", WorkerJobProtocolV2.FormatTimestamp(terminal.EndedAtUtc));
         writer.WritePropertyName("result");
-        if (terminal.ProcessAssetsResult is null && terminal.CoordinateLookupResult is null)
+        if (terminal.ProcessAssetsResult is null
+            && terminal.CoordinateLookupResult is null
+            && terminal.CacheMutationResult is null)
         {
             writer.WriteNullValue();
         }
@@ -1106,9 +1400,13 @@ public static class WorkerJobProtocolCodec
                 WriteCounts(writer, result.ProcessedCount, result.UpdatedCount, result.SkippedCount, result.FailedCount);
                 writer.WriteEndObject();
             }
-            else
+            else if (terminal.CoordinateLookupResult is not null)
             {
                 WriteCoordinateLookupResult(writer, terminal.CoordinateLookupResult!);
+            }
+            else
+            {
+                WriteCacheMutationResult(writer, terminal.CacheMutationResult!);
             }
         }
 

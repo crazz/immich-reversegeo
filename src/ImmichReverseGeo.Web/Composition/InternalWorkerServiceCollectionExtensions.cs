@@ -2,6 +2,8 @@ using System;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
+using ImmichReverseGeo.Gadm.Services;
+using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.ProcessingRunLocking;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerHost;
@@ -59,6 +61,13 @@ internal static class InternalWorkerServiceCollectionExtensions
         services.AddSingleton<IWorkerStandardInputStreamFactory, WorkerStandardInputStreamFactory>();
         if (protocolVersion == InternalWorkerProtocolVersion.V2)
         {
+            services.AddSingleton<ICacheMutationSourceOperation>(sp =>
+                sp.GetRequiredService<OvertureDivisionCacheService>());
+            services.AddSingleton<ICacheMutationSourceOperation>(sp =>
+                sp.GetRequiredService<GadmDivisionCacheService>());
+            services.AddSingleton<IWorkerCacheMutationOperation>(sp =>
+                new WorkerCacheMutationOperation(
+                    sp.GetServices<ICacheMutationSourceOperation>()));
             services.AddSingleton(sp => new ProcessAssetsWorkerJobHandler(
                 sp.GetRequiredService<IWorkerStartupInitializer>(),
                 sp.GetRequiredService<IProcessingRunExecutor>(),
@@ -74,6 +83,16 @@ internal static class InternalWorkerServiceCollectionExtensions
                 new WorkerJobHandlerRegistration<CoordinateLookupRequest, CoordinateLookupResult>(
                     WorkerJobDescriptors.CoordinateLookup,
                     sp => sp.GetRequiredService<CoordinateLookupWorkerJobHandler>()));
+            services.AddSingleton(sp => new CacheMutationWorkerJobHandler(
+                sp.GetRequiredService<IWorkerCacheMutationOperation>(),
+                sp.GetRequiredService<TimeProvider>()));
+            services.AddSingleton<IWorkerJobHandlerRegistration>(
+                new WorkerJobHandlerRegistration<CacheMutationRequest, CacheMutationResult>(
+                    WorkerJobDescriptors.CacheMutation,
+                    sp => sp.GetRequiredService<CacheMutationWorkerJobHandler>()));
+            services.AddSingleton<IWorkerJobRequestSemanticValidator>(sp =>
+                new CacheMutationRequestSemanticValidator(
+                    sp.GetRequiredService<CountryCodeService>()));
             services.AddSingleton(sp => new WorkerJobHandlerRegistry(
                 sp.GetServices<IWorkerJobHandlerRegistration>()));
         }
@@ -87,7 +106,10 @@ internal static class InternalWorkerServiceCollectionExtensions
                 sp.GetRequiredService<IWorkerStandardInputStreamFactory>(),
                 sp.GetRequiredService<ILogger<WorkerStdinRequestSource>>(),
                 protocolVersion,
-                registry?.SupportedJobDescriptors);
+                registry?.SupportedJobDescriptors,
+                protocolVersion == InternalWorkerProtocolVersion.V2
+                    ? sp.GetRequiredService<IWorkerJobRequestSemanticValidator>()
+                    : null);
         });
         services.AddSingleton<IInitialProcessingRunAcquirer>(sp => sp.GetRequiredService<WorkerStdinRequestSource>());
         services.AddSingleton<WorkerStdinAcceptedRunFinality>();

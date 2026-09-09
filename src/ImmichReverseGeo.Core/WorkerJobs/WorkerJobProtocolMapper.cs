@@ -49,6 +49,8 @@ public static class WorkerJobProtocolMapper
                 (WorkerJobProtocolV2.ProgressCategory, WorkerJobProtocolV2.ProgressChangedType),
             CoordinateLookupProgressPayload =>
                 (WorkerJobProtocolV2.ProgressCategory, WorkerJobProtocolV2.ProgressChangedType),
+            CacheMutationProgressPayload =>
+                (WorkerJobProtocolV2.ProgressCategory, WorkerJobProtocolV2.ProgressChangedType),
             WorkerJobActivityStartedPayload =>
                 (WorkerJobProtocolV2.ActivityCategory, WorkerJobProtocolV2.ActivityStartedType),
             WorkerJobActivityEndedPayload =>

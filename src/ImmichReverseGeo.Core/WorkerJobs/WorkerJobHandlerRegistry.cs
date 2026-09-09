@@ -195,7 +195,9 @@ public sealed class WorkerJobHandlerRegistry
             WorkerJobKind.CoordinateLookup =>
                 descriptor.RequestType == typeof(CoordinateLookupRequest)
                 && descriptor.ResultType == typeof(CoordinateLookupResult),
-            WorkerJobKind.CacheMutation => false,
+            WorkerJobKind.CacheMutation =>
+                descriptor.RequestType == typeof(CacheMutationRequest)
+                && descriptor.ResultType == typeof(CacheMutationResult),
             _ => false
         };
 }

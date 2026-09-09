@@ -14,4 +14,9 @@
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Web\ImmichReverseGeo.Web.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Content Include="data\gadm-che-tiny.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="data\overture-che-tiny.json" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
 </Project>

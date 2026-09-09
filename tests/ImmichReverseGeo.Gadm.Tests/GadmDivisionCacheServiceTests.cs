@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Gadm.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -19,7 +20,7 @@ public class GadmDivisionCacheServiceTests
 
         try
         {
-            using (var conn = new SqliteConnection($"Data Source={dbPath}"))
+            using (var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false"))
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
@@ -49,7 +50,6 @@ public class GadmDivisionCacheServiceTests
         }
         finally
         {
-            SqliteConnection.ClearAllPools();
             if (Directory.Exists(tempDir))
             {
                 Directory.Delete(tempDir, recursive: true);
@@ -228,6 +228,768 @@ public class GadmDivisionCacheServiceTests
             Assert.AreEqual(0, source.InvocationCount); Assert.AreEqual(before, after);
         }
         finally { DeleteTempDir(tempDir); }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_EnsureAcceptsLegacyValidCacheWithoutSourceWorkOrTimestampRewrite()
+    {
+        var tempDir = CreateTempDir();
+        var directory = Path.Combine(tempDir, "gadm-divisions");
+        var cachePath = Path.Combine(directory, "CHE.db");
+        try
+        {
+            CreateValidCache(cachePath, "4.0");
+            DateTime beforeWriteUtc = File.GetLastWriteTimeUtc(cachePath);
+            byte[] beforeBytes = File.ReadAllBytes(cachePath);
+            var reporter = new RecordingCacheMutationReporter();
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    DownloadOperation = static (_, _, _) =>
+                        throw new AssertFailedException("Ensure reached the GADM download boundary."),
+                    ExportOperation = static (_, _, _, _) =>
+                        throw new AssertFailedException("Ensure reached the GADM export boundary."),
+                    CandidateOwnership = new RejectingCandidateOwnership()
+                });
+
+            CacheMutationSourceResult result = await service.ExecuteAsync(
+                CacheMutationOperation.Ensure,
+                "CHE",
+                reporter,
+                CancellationToken.None);
+
+            Assert.AreEqual(CacheMutationSource.Gadm, service.Source);
+            Assert.AreEqual(CacheMutationDisposition.AlreadyReady, result.Disposition);
+            Assert.AreEqual(CacheMutationOperation.Ensure, result.Operation);
+            Assert.AreEqual("CHE", result.Iso3);
+            Assert.AreEqual("4.0", result.Version);
+            Assert.AreEqual(result.Version, result.GadmAttribution!.DatasetVersion);
+            Assert.AreEqual(CacheMutationGadmAttribution.OfficialDatasetName, result.GadmAttribution.DatasetName);
+            Assert.AreEqual(CacheMutationGadmAttribution.OfficialLicenseUrl, result.GadmAttribution.LicenseUrl);
+            Assert.AreEqual(CacheMutationGadmAttribution.NonCommercialUseNotice, result.GadmAttribution.UsageNotice);
+            CollectionAssert.AreEqual(beforeBytes, File.ReadAllBytes(cachePath));
+            Assert.AreEqual(beforeWriteUtc, File.GetLastWriteTimeUtc(cachePath));
+            CollectionAssert.AreEqual(
+                new[] { CacheMutationProgressStep.CheckingExisting, CacheMutationProgressStep.Completed },
+                reporter.Progress.Select(item => item.Step).ToArray());
+            Assert.AreEqual("4.0", reporter.Progress[^1].GadmAttribution!.DatasetVersion);
+            Assert.AreEqual(0, reporter.StartedActivities);
+            Assert.AreEqual(0, reporter.EndedActivities);
+        }
+        finally
+        {
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_RefreshPublishesValidatedReplacementAndReportsCanonicalMetadata()
+    {
+        var tempDir = CreateTempDir();
+        var directory = Path.Combine(tempDir, "gadm-divisions");
+        var cachePath = Path.Combine(directory, "CHE.db");
+        try
+        {
+            CreateValidCache(cachePath, "old", "CHE");
+            var reporter = new RecordingCacheMutationReporter();
+            string? observedOldVersion = null;
+            var publisher = new DelegatingPublisher((candidatePath, finalPath) =>
+            {
+                Assert.AreEqual(cachePath, finalPath);
+                Assert.IsTrue(File.Exists(candidatePath));
+                observedOldVersion = ReadVersion(finalPath);
+                new AtomicCacheFilePublisher().Publish(candidatePath, finalPath);
+            });
+            var service = CreateMutationService(tempDir, publisher);
+
+            CacheMutationSourceResult result = await service.ExecuteAsync(
+                CacheMutationOperation.Refresh,
+                "CHE",
+                reporter,
+                CancellationToken.None);
+
+            Assert.AreEqual("old", observedOldVersion);
+            Assert.AreEqual("4.1", ReadVersion(cachePath));
+            Assert.AreEqual(CacheMutationDisposition.Published, result.Disposition);
+            Assert.AreEqual(CacheMutationOperation.Refresh, result.Operation);
+            Assert.AreEqual(GadmDivisionsLogic.DatasetVersion, result.Version);
+            Assert.AreEqual(result.Version, result.GadmAttribution!.DatasetVersion);
+            Assert.IsTrue(result.RowCount > 0);
+            Assert.IsTrue(result.FileSizeBytes > 0);
+            Assert.AreEqual(1, reporter.StartedActivities);
+            Assert.AreEqual(1, reporter.EndedActivities);
+            CollectionAssert.AreEqual(
+                new[]
+                {
+                    CacheMutationProgressStep.CheckingExisting,
+                    CacheMutationProgressStep.PreparingSource,
+                    CacheMutationProgressStep.Downloading,
+                    CacheMutationProgressStep.Exporting,
+                    CacheMutationProgressStep.ValidatingCandidate,
+                    CacheMutationProgressStep.Publishing,
+                    CacheMutationProgressStep.Completed
+                },
+                reporter.Progress.Select(item => item.Step).ToArray());
+            Assert.IsTrue(reporter.Progress.All(item =>
+                item.GadmAttribution is not null
+                && item.GadmAttribution.DatasetName == CacheMutationGadmAttribution.OfficialDatasetName
+                && item.GadmAttribution.DatasetVersion == GadmDivisionsLogic.DatasetVersion
+                && item.GadmAttribution.LicenseUrl == CacheMutationGadmAttribution.OfficialLicenseUrl
+                && item.GadmAttribution.UsageNotice == CacheMutationGadmAttribution.NonCommercialUseNotice));
+        }
+        finally
+        {
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_RefreshRealExporterPublishesCacheReadableByGadmDivisionsService()
+    {
+        var tempDir = CreateTempDir();
+        var sourcePath = Path.Combine(tempDir, "source.gpkg");
+        var directory = Path.Combine(tempDir, "gadm-divisions");
+        var publisher = new DelegatingPublisher(
+            (candidatePath, finalPath) =>
+                new AtomicCacheFilePublisher().Publish(candidatePath, finalPath));
+        try
+        {
+            CreateTwoLayerGeoPackage(sourcePath);
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    DownloadOperation = async (_, path, ct) =>
+                    {
+                        await using var source = File.OpenRead(sourcePath);
+                        await using var destination = new FileStream(
+                            path,
+                            FileMode.CreateNew,
+                            FileAccess.Write,
+                            FileShare.None,
+                            bufferSize: 81920,
+                            useAsync: true);
+                        await source.CopyToAsync(destination, ct);
+                    },
+                    ExportOperation = GadmCacheExporter.ExportGeoPackageToSqlite,
+                    FilePublisher = publisher
+                });
+
+            CacheMutationSourceResult result = await service.ExecuteAsync(
+                CacheMutationOperation.Refresh,
+                "CHE",
+                CacheMutationReporters.None,
+                CancellationToken.None);
+
+            var reader = new GadmDivisionsService(
+                NullLogger<GadmDivisionsService>.Instance,
+                tempDir);
+            var diagnostics = await reader.FindContainingDivisionAreasAsync(
+                47,
+                8,
+                "CHE",
+                CancellationToken.None);
+
+            Assert.AreEqual(CacheMutationDisposition.Published, result.Disposition);
+            Assert.AreEqual(GadmDivisionsLogic.DatasetVersion, result.Version);
+            Assert.AreEqual(3, result.RowCount);
+            Assert.AreEqual(1, publisher.InvocationCount);
+            Assert.IsNull(diagnostics.Error);
+            Assert.AreEqual(GadmDivisionsLogic.DatasetVersion, diagnostics.Version);
+            Assert.AreEqual(3, diagnostics.Candidates.Count);
+            Assert.IsNotNull(diagnostics.BestMatch);
+            Assert.AreEqual("CHE.1_1", diagnostics.BestMatch.Id);
+            Assert.AreEqual("Region", diagnostics.BestMatch.Name);
+            Assert.IsTrue(diagnostics.BestMatch.GeometryContainsPoint);
+            Assert.AreEqual(0, Directory.GetFiles(directory, "CHE.*.tmp").Length);
+            Assert.AreEqual(0, Directory.GetFiles(directory, "CHE.*.gpkg.download").Length);
+            Assert.AreEqual(0, Directory.GetFiles(directory, "CHE.*.owner").Length);
+        }
+        finally
+        {
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_ZeroRowProductionExportPreservesOldSpatialCacheAndCleansOwnedArtifacts()
+    {
+        var tempDir = CreateTempDir();
+        var validSourcePath = Path.Combine(tempDir, "old-source.gpkg");
+        var emptySourcePath = Path.Combine(tempDir, "empty-source.gpkg");
+        var directory = Path.Combine(tempDir, "gadm-divisions");
+        var cachePath = Path.Combine(directory, "CHE.db");
+        var unknownCandidate = Path.Combine(directory, "CHE.unknown.tmp");
+        var liveCandidate = Path.Combine(
+            directory,
+            $"CHE.{Environment.ProcessId}.{Guid.NewGuid():N}.gpkg.download");
+        string? ownedDb = null;
+        string? ownedDownload = null;
+        long? observedExportRows = null;
+        try
+        {
+            CreateTwoLayerGeoPackage(validSourcePath);
+            CreateEmptyGeoPackage(emptySourcePath);
+            Directory.CreateDirectory(directory);
+            Assert.AreEqual(3, GadmCacheExporter.ExportGeoPackageToSqlite(
+                validSourcePath,
+                cachePath,
+                "CHE",
+                CancellationToken.None));
+            byte[] oldBytes = File.ReadAllBytes(cachePath);
+            File.WriteAllText(unknownCandidate, "unknown-candidate");
+            var ownership = new CacheCandidateOwnership();
+            using ICacheCandidateLease liveLease = ownership.Acquire(liveCandidate);
+            File.WriteAllText(liveCandidate, "live-candidate");
+            var publisher = new DelegatingPublisher(static (_, _) =>
+                throw new AssertFailedException("The zero-row candidate reached publication."));
+            var reporter = new RecordingCacheMutationReporter();
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    DownloadOperation = async (_, path, ct) =>
+                    {
+                        ownedDownload = path;
+                        await CopyFileAsync(emptySourcePath, path, ct);
+                    },
+                    ExportOperation = (sourcePath, outputPath, iso3, ct) =>
+                    {
+                        ownedDb = outputPath;
+                        long rows = GadmCacheExporter.ExportGeoPackageToSqlite(
+                            sourcePath,
+                            outputPath,
+                            iso3,
+                            ct);
+                        observedExportRows = rows;
+                        return rows;
+                    },
+                    FilePublisher = publisher,
+                    CandidateOwnership = ownership
+                });
+
+            InvalidOperationException exception =
+                await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+                    await service.ExecuteAsync(
+                        CacheMutationOperation.Refresh,
+                        "CHE",
+                        reporter,
+                        CancellationToken.None));
+
+            Assert.AreEqual("No GADM rows were downloaded for CHE.", exception.Message);
+            Assert.IsNotNull(observedExportRows);
+            Assert.AreEqual(0L, observedExportRows!.Value);
+            Assert.AreEqual(0, publisher.InvocationCount);
+            CollectionAssert.AreEqual(oldBytes, File.ReadAllBytes(cachePath));
+            await AssertSpatialCacheRemainsReadableAsync(tempDir);
+            Assert.IsNotNull(ownedDb);
+            Assert.IsNotNull(ownedDownload);
+            Assert.IsFalse(File.Exists(ownedDb!));
+            Assert.IsFalse(File.Exists(ownedDownload!));
+            Assert.IsFalse(File.Exists(ownedDb! + ".owner"));
+            Assert.IsFalse(File.Exists(ownedDownload! + ".owner"));
+            Assert.IsTrue(File.Exists(unknownCandidate));
+            Assert.IsTrue(File.Exists(liveCandidate));
+            CollectionAssert.AreEquivalent(
+                new[] { unknownCandidate },
+                Directory.GetFiles(directory, "CHE.*.tmp"));
+            CollectionAssert.AreEquivalent(
+                new[] { liveCandidate },
+                Directory.GetFiles(directory, "CHE.*.gpkg.download"));
+            CollectionAssert.AreEquivalent(
+                new[] { liveCandidate + ".owner" },
+                Directory.GetFiles(directory, "CHE.*.owner"));
+            Assert.AreEqual(1, reporter.StartedActivities);
+            Assert.AreEqual(1, reporter.EndedActivities);
+            Assert.IsFalse(reporter.Progress.Any(
+                item => item.Step == CacheMutationProgressStep.Completed));
+        }
+        finally
+        {
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_UnixWriteDenialPreservesOldSpatialCacheBeforeSourceWork()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+        {
+            Assert.Inconclusive("Unix directory permissions are unavailable on this platform.");
+            return;
+        }
+
+        var tempDir = CreateTempDir();
+        var validSourcePath = Path.Combine(tempDir, "old-source.gpkg");
+        var directory = Path.Combine(tempDir, "gadm-divisions");
+        var cachePath = Path.Combine(directory, "CHE.db");
+        var unknownCandidate = Path.Combine(directory, "CHE.unknown.gpkg.download");
+        var liveCandidate = Path.Combine(
+            directory,
+            $"CHE.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        ICacheCandidateLease? liveLease = null;
+        UnixFileMode originalMode = default;
+        var permissionsChanged = false;
+        var probePath = Path.Combine(directory, "permission-probe");
+        try
+        {
+            CreateTwoLayerGeoPackage(validSourcePath);
+            Directory.CreateDirectory(directory);
+            Assert.AreEqual(3, GadmCacheExporter.ExportGeoPackageToSqlite(
+                validSourcePath,
+                cachePath,
+                "CHE",
+                CancellationToken.None));
+            byte[] oldBytes = File.ReadAllBytes(cachePath);
+            File.WriteAllText(unknownCandidate, "unknown-candidate");
+            var ownership = new RecordingCandidateOwnership(new CacheCandidateOwnership());
+            liveLease = ownership.Acquire(liveCandidate);
+            File.WriteAllText(liveCandidate, "live-candidate");
+            originalMode = File.GetUnixFileMode(directory);
+            File.SetUnixFileMode(
+                directory,
+                originalMode
+                    & ~UnixFileMode.UserWrite
+                    & ~UnixFileMode.GroupWrite
+                    & ~UnixFileMode.OtherWrite);
+            permissionsChanged = true;
+
+            var writeDenied = false;
+            try
+            {
+                File.WriteAllText(probePath, "probe");
+            }
+            catch (Exception writeException) when (writeException is UnauthorizedAccessException or IOException)
+            {
+                writeDenied = true;
+            }
+
+            if (!writeDenied)
+            {
+                Assert.Inconclusive(
+                    "The current filesystem identity bypasses Unix directory write permissions.");
+            }
+
+            var reporter = new RecordingCacheMutationReporter();
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    DownloadOperation = static (_, _, _) =>
+                        throw new AssertFailedException("Storage denial reached the download boundary."),
+                    ExportOperation = static (_, _, _, _) =>
+                        throw new AssertFailedException("Storage denial reached the export boundary."),
+                    FilePublisher = new DelegatingPublisher(static (_, _) =>
+                        throw new AssertFailedException("Storage denial reached publication.")),
+                    CandidateOwnership = ownership
+                });
+
+            CacheCandidateOwnershipException exception =
+                await Assert.ThrowsAsync<CacheCandidateOwnershipException>(async () =>
+                    await service.ExecuteAsync(
+                        CacheMutationOperation.Refresh,
+                        "CHE",
+                        reporter,
+                        CancellationToken.None));
+
+            Assert.AreEqual(
+                "The cache candidate ownership lease could not be established.",
+                exception.Message);
+            Assert.AreEqual(2, ownership.AcquiredPaths.Count);
+            string ownedCandidate = ownership.AcquiredPaths[1];
+            Assert.IsTrue(ownedCandidate.EndsWith(".tmp", StringComparison.Ordinal));
+            Assert.IsFalse(File.Exists(ownedCandidate));
+            Assert.IsFalse(File.Exists(ownedCandidate + ".owner"));
+            CollectionAssert.AreEqual(oldBytes, File.ReadAllBytes(cachePath));
+            await AssertSpatialCacheRemainsReadableAsync(tempDir);
+            Assert.IsTrue(File.Exists(unknownCandidate));
+            Assert.IsTrue(File.Exists(liveCandidate));
+            CollectionAssert.AreEquivalent(
+                new[] { liveCandidate },
+                Directory.GetFiles(directory, "CHE.*.tmp"));
+            CollectionAssert.AreEquivalent(
+                new[] { unknownCandidate },
+                Directory.GetFiles(directory, "CHE.*.gpkg.download"));
+            CollectionAssert.AreEquivalent(
+                new[] { liveCandidate + ".owner" },
+                Directory.GetFiles(directory, "CHE.*.owner"));
+            Assert.AreEqual(0, reporter.StartedActivities);
+            Assert.AreEqual(0, reporter.EndedActivities);
+            CollectionAssert.AreEqual(
+                new[] { CacheMutationProgressStep.CheckingExisting },
+                reporter.Progress.Select(item => item.Step).ToArray());
+        }
+        finally
+        {
+            try
+            {
+                if (permissionsChanged)
+                {
+                    File.SetUnixFileMode(directory, originalMode);
+                }
+            }
+            finally
+            {
+                try
+                {
+                    if (File.Exists(probePath))
+                    {
+                        File.Delete(probePath);
+                    }
+                }
+                finally
+                {
+                    try
+                    {
+                        liveLease?.Dispose();
+                    }
+                    finally
+                    {
+                        DeleteTempDir(tempDir);
+                    }
+                }
+            }
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_PublicationFailurePreservesOldCacheAndForeignCandidates()
+    {
+        var tempDir = CreateTempDir();
+        var directory = Path.Combine(tempDir, "gadm-divisions");
+        var cachePath = Path.Combine(directory, "CHE.db");
+        var foreignDb = Path.Combine(directory, "CHE.foreign.tmp");
+        var foreignDownload = Path.Combine(directory, "CHE.foreign.gpkg.download");
+        var unrecognizedOwner = Path.Combine(directory, "CHE.unknown.tmp.owner");
+        var liveDb = Path.Combine(
+            directory,
+            $"CHE.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        string? ownedDb = null;
+        string? ownedDownload = null;
+        try
+        {
+            CreateValidCache(cachePath, "old", "CHE");
+            byte[] oldBytes = File.ReadAllBytes(cachePath);
+            File.WriteAllText(foreignDb, "foreign-db");
+            File.WriteAllText(foreignDownload, "foreign-download");
+            File.WriteAllText(unrecognizedOwner, "unrecognized-owner");
+            var ownership = new CacheCandidateOwnership();
+            using ICacheCandidateLease liveLease = ownership.Acquire(liveDb);
+            File.WriteAllText(liveDb, "live-db");
+            var reporter = new RecordingCacheMutationReporter();
+            var publisher = new DelegatingPublisher(static (_, _) =>
+                throw new IOException("controlled publication failure"));
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    DownloadOperation = async (_, path, ct) =>
+                    {
+                        ownedDownload = path;
+                        await File.WriteAllTextAsync(path, "package", ct);
+                    },
+                    ExportOperation = (_, path, iso3, _) =>
+                    {
+                        ownedDb = path;
+                        CreateValidCache(path, GadmDivisionsLogic.DatasetVersion, iso3);
+                        return 1;
+                    },
+                    FilePublisher = publisher,
+                    CandidateOwnership = ownership
+                });
+
+            IOException exception = await Assert.ThrowsAsync<IOException>(async () => await service.ExecuteAsync(
+                CacheMutationOperation.Refresh,
+                "CHE",
+                reporter,
+                CancellationToken.None));
+
+            Assert.AreEqual("controlled publication failure", exception.Message);
+            Assert.AreEqual(1, publisher.InvocationCount);
+            CollectionAssert.AreEqual(oldBytes, File.ReadAllBytes(cachePath));
+            Assert.IsTrue(File.Exists(foreignDb));
+            Assert.IsTrue(File.Exists(foreignDownload));
+            Assert.IsTrue(File.Exists(unrecognizedOwner));
+            Assert.IsTrue(File.Exists(liveDb));
+            Assert.IsNotNull(ownedDb);
+            Assert.IsNotNull(ownedDownload);
+            Assert.IsFalse(File.Exists(ownedDb!));
+            Assert.IsFalse(File.Exists(ownedDownload!));
+            Assert.IsFalse(File.Exists(ownedDb! + ".owner"));
+            Assert.IsFalse(File.Exists(ownedDownload! + ".owner"));
+            Assert.AreEqual(1, reporter.StartedActivities);
+            Assert.AreEqual(1, reporter.EndedActivities);
+            Assert.IsFalse(reporter.Progress.Any(item => item.Step == CacheMutationProgressStep.Completed));
+        }
+        finally
+        {
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_CancelledWaiterDoesNotCancelLegacyEnsureOwner()
+    {
+        var tempDir = CreateTempDir();
+        var source = new ControlledSource(tempDir);
+        var waiterObservedSharedMutation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        Task? ownerTask = null;
+        Task<CacheMutationSourceResult>? waiterTask = null;
+        try
+        {
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    SourceOperation = source.RunAsync,
+                    AfterSharedMutationObserved = () =>
+                    {
+                        waiterObservedSharedMutation.TrySetResult();
+                    }
+                });
+            var owner = service.GetOrStartDownload("CHE");
+            ownerTask = owner.Task;
+            var ownerResult = owner.Result;
+            Assert.AreEqual(GadmDivisionEnsureResult.StartedDownload, ownerResult);
+            await source.Entered.Task;
+
+            using var waiterCancellation = new CancellationTokenSource();
+            waiterTask = service.ExecuteAsync(
+                CacheMutationOperation.Ensure,
+                "CHE",
+                CacheMutationReporters.None,
+                waiterCancellation.Token).AsTask();
+            await waiterObservedSharedMutation.Task;
+            waiterCancellation.Cancel();
+            await Assert.ThrowsAsync<OperationCanceledException>(async () => await waiterTask);
+            Assert.IsFalse(ownerTask.IsCompleted);
+
+            var (joinedTask, joinedResult) = service.GetOrStartDownload("CHE");
+            Assert.AreSame(ownerTask, joinedTask);
+            Assert.AreEqual(GadmDivisionEnsureResult.AwaitedExistingDownload, joinedResult);
+            source.Release();
+            await ownerTask;
+            await joinedTask;
+            Assert.AreEqual(1, source.InvocationCount);
+        }
+        finally
+        {
+            source.Release();
+            if (ownerTask is not null)
+            {
+                try
+                {
+                    await ownerTask;
+                }
+                catch
+                {
+                }
+            }
+
+            if (waiterTask is not null)
+            {
+                try
+                {
+                    await waiterTask;
+                }
+                catch
+                {
+                }
+            }
+
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_RefreshWaitsForEnsureThenBuildsReplacement()
+    {
+        var tempDir = CreateTempDir();
+        var source = new ControlledSource(tempDir);
+        var refreshDownloads = 0;
+        var refreshObservedSharedMutation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        var publisher = new DelegatingPublisher(
+            (candidatePath, finalPath) =>
+                new AtomicCacheFilePublisher().Publish(candidatePath, finalPath));
+        Task? ensureTask = null;
+        Task<CacheMutationSourceResult>? refreshTask = null;
+        try
+        {
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    SourceOperation = source.RunAsync,
+                    DownloadOperation = async (_, path, ct) =>
+                    {
+                        Interlocked.Increment(ref refreshDownloads);
+                        await File.WriteAllTextAsync(path, "package", ct);
+                    },
+                    ExportOperation = (_, path, iso3, _) =>
+                    {
+                        CreateValidCache(path, GadmDivisionsLogic.DatasetVersion, iso3);
+                        return 1;
+                    },
+                    FilePublisher = publisher,
+                    AfterSharedMutationObserved = () =>
+                    {
+                        refreshObservedSharedMutation.TrySetResult();
+                    }
+                });
+            var ensure = service.GetOrStartDownload("CHE");
+            ensureTask = ensure.Task;
+            var ensureResult = ensure.Result;
+            Assert.AreEqual(GadmDivisionEnsureResult.StartedDownload, ensureResult);
+            await source.Entered.Task;
+
+            refreshTask = service.ExecuteAsync(
+                CacheMutationOperation.Refresh,
+                "CHE",
+                CacheMutationReporters.None,
+                CancellationToken.None).AsTask();
+            await refreshObservedSharedMutation.Task;
+            Assert.IsFalse(refreshTask.IsCompleted);
+            Assert.AreEqual(0, refreshDownloads);
+            Assert.AreEqual(0, publisher.InvocationCount);
+            source.Release();
+            await ensureTask;
+            CacheMutationSourceResult refresh = await refreshTask;
+
+            Assert.AreEqual(1, refreshDownloads);
+            Assert.AreEqual(1, publisher.InvocationCount);
+            Assert.AreEqual(CacheMutationDisposition.Published, refresh.Disposition);
+            Assert.AreEqual(CacheMutationOperation.Refresh, refresh.Operation);
+            Assert.AreEqual(GadmDivisionsLogic.DatasetVersion, ReadVersion(
+                Path.Combine(tempDir, "gadm-divisions", "CHE.db")));
+        }
+        finally
+        {
+            source.Release();
+            if (ensureTask is not null)
+            {
+                try
+                {
+                    await ensureTask;
+                }
+                catch
+                {
+                }
+            }
+
+            if (refreshTask is not null)
+            {
+                try
+                {
+                    await refreshTask;
+                }
+                catch
+                {
+                }
+            }
+
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_EncodedCountryMismatchFailsBeforePublication()
+    {
+        var tempDir = CreateTempDir();
+        var directory = Path.Combine(tempDir, "gadm-divisions");
+        var cachePath = Path.Combine(directory, "CHE.db");
+        try
+        {
+            CreateValidCache(cachePath, "old", "CHE");
+            byte[] oldBytes = File.ReadAllBytes(cachePath);
+            var publisher = new DelegatingPublisher(static (_, _) =>
+                throw new AssertFailedException("Country-mismatched candidate reached publication."));
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    DownloadOperation = static async (_, path, ct) =>
+                        await File.WriteAllTextAsync(path, "package", ct),
+                    ExportOperation = static (_, path, _, _) =>
+                    {
+                        CreateValidCache(path, GadmDivisionsLogic.DatasetVersion, "DEU");
+                        return 1;
+                    },
+                    FilePublisher = publisher
+                });
+
+            await Assert.ThrowsAsync<InvalidOperationException>(async () => await service.ExecuteAsync(
+                CacheMutationOperation.Refresh,
+                "CHE",
+                CacheMutationReporters.None,
+                CancellationToken.None));
+
+            CollectionAssert.AreEqual(oldBytes, File.ReadAllBytes(cachePath));
+            Assert.AreEqual(0, publisher.InvocationCount);
+            Assert.AreEqual(0, Directory.GetFiles(directory, "CHE.*.tmp").Length);
+            Assert.AreEqual(0, Directory.GetFiles(directory, "CHE.*.gpkg.download").Length);
+        }
+        finally
+        {
+            DeleteTempDir(tempDir);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task ExecuteAsync_MalformedIso3FailsBeforeStorageOrSourceWork()
+    {
+        var tempDir = CreateTempDir();
+        var sourceCalls = 0;
+        try
+        {
+            var reporter = new RecordingCacheMutationReporter();
+            var service = new GadmDivisionCacheService(
+                NullLogger<GadmDivisionCacheService>.Instance,
+                tempDir,
+                new GadmDivisionCacheTestHooks
+                {
+                    DownloadOperation = (_, _, _) =>
+                    {
+                        Interlocked.Increment(ref sourceCalls);
+                        return Task.CompletedTask;
+                    },
+                    CandidateOwnership = new RejectingCandidateOwnership()
+                });
+
+            await Assert.ThrowsAsync<ArgumentException>(async () => await service.ExecuteAsync(
+                CacheMutationOperation.Ensure,
+                "che",
+                reporter,
+                CancellationToken.None));
+
+            Assert.AreEqual(0, sourceCalls);
+            Assert.AreEqual(0, reporter.Progress.Count);
+            Assert.IsFalse(Directory.Exists(Path.Combine(tempDir, "gadm-divisions")));
+        }
+        finally
+        {
+            DeleteTempDir(tempDir);
+        }
     }
 
     [TestMethod]
@@ -609,6 +1371,7 @@ public class GadmDivisionCacheServiceTests
 
             await Assert.ThrowsAsync<OperationCanceledException>(async () => await task);
             Assert.IsTrue(File.Exists(Path.Combine(directory, "CHE.db")));
+            Assert.AreEqual(0, Directory.GetFiles(directory, "CHE.*.owner").Length);
         }
         finally
         {
@@ -733,15 +1496,93 @@ public class GadmDivisionCacheServiceTests
         command.ExecuteNonQuery();
     }
 
-    private static void CreateValidCache(string path, string version)
+    private static void CreateEmptyGeoPackage(string path)
+    {
+        using var connection = new SqliteConnection($"Data Source={path};Pooling=false");
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE gpkg_contents (table_name TEXT, data_type TEXT);
+            CREATE TABLE gpkg_geometry_columns (table_name TEXT, column_name TEXT);
+            CREATE TABLE gadm41_CHE_0 (GID_0 TEXT, NAME_0 TEXT, geom BLOB);
+            INSERT INTO gpkg_contents VALUES ('gadm41_CHE_0', 'features');
+            INSERT INTO gpkg_geometry_columns VALUES ('gadm41_CHE_0', 'geom');
+            """;
+        command.ExecuteNonQuery();
+    }
+
+    private static async Task CopyFileAsync(
+        string sourcePath,
+        string destinationPath,
+        CancellationToken cancellationToken)
+    {
+        await using var source = File.OpenRead(sourcePath);
+        await using var destination = new FileStream(
+            destinationPath,
+            FileMode.CreateNew,
+            FileAccess.Write,
+            FileShare.None,
+            bufferSize: 81920,
+            useAsync: true);
+        await source.CopyToAsync(destination, cancellationToken);
+    }
+
+    private static async Task AssertSpatialCacheRemainsReadableAsync(string tempDir)
+    {
+        var reader = new GadmDivisionsService(
+            NullLogger<GadmDivisionsService>.Instance,
+            tempDir);
+        var diagnostics = await reader.FindContainingDivisionAreasAsync(
+            47,
+            8,
+            "CHE",
+            CancellationToken.None);
+
+        Assert.IsNull(diagnostics.Error);
+        Assert.AreEqual(GadmDivisionsLogic.DatasetVersion, diagnostics.Version);
+        Assert.AreEqual(3, diagnostics.Candidates.Count);
+        Assert.IsNotNull(diagnostics.BestMatch);
+        Assert.AreEqual("CHE.1_1", diagnostics.BestMatch.Id);
+        Assert.AreEqual("Region", diagnostics.BestMatch.Name);
+        Assert.IsTrue(diagnostics.BestMatch.GeometryContainsPoint);
+    }
+
+    private static GadmDivisionCacheService CreateMutationService(
+        string tempDir,
+        ICacheFilePublisher filePublisher)
+    {
+        return new GadmDivisionCacheService(
+            NullLogger<GadmDivisionCacheService>.Instance,
+            tempDir,
+            new GadmDivisionCacheTestHooks
+            {
+                DownloadOperation = static async (_, path, ct) =>
+                    await File.WriteAllTextAsync(path, "package", ct),
+                ExportOperation = static (_, path, iso3, _) =>
+                {
+                    CreateValidCache(path, GadmDivisionsLogic.DatasetVersion, iso3);
+                    return 1;
+                },
+                FilePublisher = filePublisher
+            });
+    }
+
+    private static void CreateValidCache(string path, string version, string? iso3 = null)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         using var connection = new SqliteConnection($"Data Source={path};Pooling=false");
         connection.Open();
         using var command = connection.CreateCommand();
-        command.CommandText = "CREATE TABLE gadm_area (id TEXT PRIMARY KEY); CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO gadm_area VALUES ('row'); INSERT INTO _meta VALUES ('downloadedAt', '2026-01-01T00:00:00Z'); INSERT INTO _meta VALUES ('version', $version);";
+        command.CommandText = "CREATE TABLE gadm_area (id TEXT PRIMARY KEY, name TEXT NOT NULL, english_type TEXT NULL, local_type TEXT NULL, admin_level INTEGER NOT NULL, geom_wkb BLOB NOT NULL, bbox_xmin REAL NOT NULL, bbox_ymin REAL NOT NULL, bbox_xmax REAL NOT NULL, bbox_ymax REAL NOT NULL); CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO gadm_area VALUES ('row', 'Area', NULL, NULL, 1, X'0101', 0, 0, 1, 1); INSERT INTO _meta VALUES ('downloadedAt', '2026-01-01T00:00:00Z'); INSERT INTO _meta VALUES ('version', $version);";
         command.Parameters.AddWithValue("$version", version);
         command.ExecuteNonQuery();
+        if (iso3 is not null)
+        {
+            command.CommandText = "INSERT INTO _meta VALUES ('iso3', $iso3);";
+            command.Parameters.Clear();
+            command.Parameters.AddWithValue("$iso3", iso3);
+            command.ExecuteNonQuery();
+        }
     }
 
     private static long ReadGadmAreaCount(string path)
@@ -764,12 +1605,100 @@ public class GadmDivisionCacheServiceTests
 
     private static string CreateTempDir()
     {
-        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N")); Directory.CreateDirectory(path); return path;
+        var path = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(path);
+        return path;
     }
 
     private static void DeleteTempDir(string path)
     {
-        SqliteConnection.ClearAllPools(); if (Directory.Exists(path)) { Directory.Delete(path, recursive: true); }
+        if (Directory.Exists(path))
+        {
+            Directory.Delete(path, recursive: true);
+        }
+    }
+
+    private sealed class DelegatingPublisher(Action<string, string> publish) : ICacheFilePublisher
+    {
+        public int InvocationCount { get; private set; }
+
+        public void Publish(string candidatePath, string finalPath)
+        {
+            InvocationCount++;
+            publish(candidatePath, finalPath);
+        }
+    }
+
+    private sealed class RejectingCandidateOwnership : ICacheCandidateOwnership
+    {
+        public ICacheCandidateLease Acquire(string candidatePath) =>
+            throw new AssertFailedException("The mutation reached candidate ownership.");
+
+        public bool TryCleanupAbandoned(string candidatePath) =>
+            throw new AssertFailedException("The mutation reached candidate cleanup.");
+    }
+
+    private sealed class RecordingCandidateOwnership(ICacheCandidateOwnership inner) : ICacheCandidateOwnership
+    {
+        public List<string> AcquiredPaths { get; } = [];
+
+        public ICacheCandidateLease Acquire(string candidatePath)
+        {
+            AcquiredPaths.Add(candidatePath);
+            return inner.Acquire(candidatePath);
+        }
+
+        public bool TryCleanupAbandoned(string candidatePath) =>
+            inner.TryCleanupAbandoned(candidatePath);
+    }
+
+    private sealed class RecordingCacheMutationReporter : ICacheMutationReporter
+    {
+        public List<CacheMutationProgressPayload> Progress { get; } = [];
+        public int StartedActivities { get; private set; }
+        public int EndedActivities { get; private set; }
+
+        public ValueTask ReportProgressAsync(
+            CacheMutationProgressPayload progress,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Progress.Add(progress);
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask ReportLogAsync(
+            string level,
+            string message,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return ValueTask.CompletedTask;
+        }
+
+        public ValueTask<ICacheMutationActivity> BeginActivityAsync(
+            string label,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            StartedActivities++;
+            return ValueTask.FromResult<ICacheMutationActivity>(new RecordingActivity(this));
+        }
+
+        private sealed class RecordingActivity(RecordingCacheMutationReporter owner) : ICacheMutationActivity
+        {
+            private int _disposed;
+
+            public ValueTask DisposeAsync()
+            {
+                if (Interlocked.Exchange(ref _disposed, 1) == 0)
+                {
+                    owner.EndedActivities++;
+                }
+
+                return ValueTask.CompletedTask;
+            }
+        }
     }
 
     private sealed class ControlledSource
@@ -791,10 +1720,9 @@ public class GadmDivisionCacheServiceTests
         }
         public void Publish(string iso3)
         {
-            var directory = Path.Combine(_tempDir, "gadm-divisions"); Directory.CreateDirectory(directory);
-            using var connection = new SqliteConnection($"Data Source={Path.Combine(directory, iso3 + ".db")};Pooling=false"); connection.Open();
-            using var command = connection.CreateCommand();
-            command.CommandText = "CREATE TABLE gadm_area (id TEXT PRIMARY KEY); CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL); INSERT INTO gadm_area VALUES ('row'); INSERT INTO _meta VALUES ('downloadedAt', '2026-01-01T00:00:00Z'); INSERT INTO _meta VALUES ('version', 'test-version');"; command.ExecuteNonQuery();
+            var directory = Path.Combine(_tempDir, "gadm-divisions");
+            Directory.CreateDirectory(directory);
+            CreateValidCache(Path.Combine(directory, iso3 + ".db"), "test-version");
         }
         public void Release() => _release.TrySetResult();
         public void ResetGate() { _release = NewGate(); Entered = NewGate(); }

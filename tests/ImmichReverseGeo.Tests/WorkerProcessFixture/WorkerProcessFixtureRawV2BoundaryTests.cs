@@ -68,7 +68,11 @@ public sealed class WorkerProcessFixtureRawV2BoundaryTests
                 Encoding.UTF8.GetBytes(readyLine));
             Assert.IsTrue(ready.IsSuccess, ready.Failure?.Diagnostic);
             CollectionAssert.AreEqual(
-                new[] { WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup },
+                new[]
+                {
+                    WorkerJobKind.ProcessAssets,
+                    WorkerJobKind.CoordinateLookup
+                },
                 Assert.IsInstanceOfType<WorkerJobReadyPayload>(ready.Message!.Payload)
                     .SupportedJobKinds.ToArray(),
                 "raw-v2-ready-exact-registered-kinds");

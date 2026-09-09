@@ -59,6 +59,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
     private readonly object _gate = new();
     private readonly WorkerProtocolControllerInputValidator _validator = new();
     private readonly WorkerJobControllerInputValidator? _jobValidator;
+    private readonly IWorkerJobRequestSemanticValidator? _semanticValidator;
     private readonly TaskCompletionSource<InitialProcessingRunAcquisition> _initial = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly TaskCompletionSource<WorkerInputPumpFinality> _finality = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private WorkerStdinFrameReader? _reader;
@@ -74,7 +75,8 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
         IWorkerStandardInputStreamFactory inputFactory,
         ILogger<WorkerStdinRequestSource> logger,
         InternalWorkerProtocolVersion protocolVersion = InternalWorkerProtocolVersion.V1,
-        IReadOnlyList<WorkerJobDescriptor>? supportedJobDescriptors = null)
+        IReadOnlyList<WorkerJobDescriptor>? supportedJobDescriptors = null,
+        IWorkerJobRequestSemanticValidator? semanticValidator = null)
     {
         ArgumentNullException.ThrowIfNull(inputFactory);
         ArgumentNullException.ThrowIfNull(logger);
@@ -96,6 +98,7 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
         _jobValidator = supportedJobDescriptors is null
             ? null
             : new WorkerJobControllerInputValidator(supportedJobDescriptors);
+        _semanticValidator = semanticValidator;
     }
 
     public Task<InitialProcessingRunAcquisition> AcquireAsync(CancellationToken cancellationToken)
@@ -352,6 +355,20 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
             return;
         }
 
+        IWorkerJobRequest? parsedRequest = jobParsed.Message!.Payload switch
+        {
+            ProcessAssetsExecutePayload execute => execute.Request,
+            CoordinateLookupExecutePayload lookup => lookup.Request,
+            CacheMutationExecutePayload cache => cache.Request,
+            _ => null
+        };
+        if (parsedRequest is CacheMutationRequest
+            && (_semanticValidator is null || !_semanticValidator.IsValid(parsedRequest)))
+        {
+            validationFailure = WorkerSafeFailure.Input(WorkerProtocolFailureCode.InvalidPayload);
+            return;
+        }
+
         lock (_gate)
         {
             WorkerJobControllerValidationResult validated = _jobValidator!.Validate(
@@ -374,6 +391,14 @@ internal sealed class WorkerStdinRequestSource : IInitialProcessingRunAcquirer, 
                 acceptedLease = new WorkerStdinCoordinateLookupLease(
                     validated.Message.JobId,
                     coordinateLookup.Request,
+                    this);
+                _lease = acceptedLease;
+            }
+            else if (validated.Message.Payload is CacheMutationExecutePayload cacheMutation)
+            {
+                acceptedLease = new WorkerStdinCacheMutationLease(
+                    validated.Message.JobId,
+                    cacheMutation.Request,
                     this);
                 _lease = acceptedLease;
             }
@@ -778,6 +803,20 @@ internal sealed class WorkerStdinCoordinateLookupLease : WorkerStdinRunLease
         WorkerStdinRequestSource owner)
         : base(
             new CoordinateLookupWorkerJobDispatch(jobId, request).Context,
+            request,
+            owner)
+    {
+    }
+}
+
+internal sealed class WorkerStdinCacheMutationLease : WorkerStdinRunLease
+{
+    internal WorkerStdinCacheMutationLease(
+        Guid jobId,
+        CacheMutationRequest request,
+        WorkerStdinRequestSource owner)
+        : base(
+            new CacheMutationWorkerJobDispatch(jobId, request).Context,
             request,
             owner)
     {

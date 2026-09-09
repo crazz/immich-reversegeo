@@ -1,12 +1,16 @@
 using System.Text.Json;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
+using ImmichReverseGeo.Web.WorkerHost;
+using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Components.Endpoints;
@@ -193,6 +197,44 @@ public sealed class InternalWorkerCompositionTests
         }
     }
 
+    [TestMethod]
+    [TestCategory("Change51")]
+    public void V2InternalWorkerComposition_ResolvesCacheHandlerAndPureSemanticValidator()
+    {
+        string fixtureRoot = CreateBundledIdentityFixture();
+        try
+        {
+            var services = CreateWorkerServices(fixtureRoot);
+            services.AddInternalWorkerHostServices(
+                new NullOutputFactory(),
+                new WorkerProcessExitOutcomeAccumulator(),
+                InternalWorkerProtocolVersion.V2);
+            using var provider = services.BuildServiceProvider();
+
+            var registry = provider.GetRequiredService<WorkerJobHandlerRegistry>();
+            CollectionAssert.Contains(
+                registry.SupportedJobKinds.ToArray(),
+                WorkerJobKind.CacheMutation);
+            Assert.IsNotNull(provider.GetRequiredService<IWorkerCacheMutationOperation>());
+            var validator = provider.GetRequiredService<IWorkerJobRequestSemanticValidator>();
+            Assert.IsTrue(validator.IsValid(new CacheMutationRequest(
+                CacheMutationSource.Overture,
+                CacheMutationOperation.Ensure,
+                "CHE")));
+            Assert.IsFalse(validator.IsValid(new CacheMutationRequest(
+                CacheMutationSource.Gadm,
+                CacheMutationOperation.Refresh,
+                "ZZZ")));
+            Assert.AreEqual(
+                2,
+                provider.GetServices<ICacheMutationSourceOperation>().Count());
+        }
+        finally
+        {
+            DeleteFixture(fixtureRoot);
+        }
+    }
+
     private static ServiceCollection CreateWorkerServices(string contentRoot)
     {
         var services = new ServiceCollection();
@@ -230,5 +272,10 @@ public sealed class InternalWorkerCompositionTests
         {
             Directory.Delete(fixtureRoot, recursive: true);
         }
+    }
+
+    private sealed class NullOutputFactory : IWorkerNdjsonOutputStreamFactory
+    {
+        public Stream OpenStandardOutput() => Stream.Null;
     }
 }

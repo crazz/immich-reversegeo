@@ -183,10 +183,19 @@ public static class WorkerJobDescriptors
             IsCancellable: true,
             IsGeodataBearing: true));
 
-    public static IReadOnlyList<WorkerJobDescriptor> Registered { get; } =
-        Array.AsReadOnly([ProcessAssets, CoordinateLookup]);
+    public static WorkerJobDescriptor CacheMutation { get; } = new(
+        WorkerJobKind.CacheMutation,
+        typeof(CacheMutationRequest),
+        typeof(CacheMutationResult),
+        new WorkerJobArbitrationMetadata(
+            WorkerJobCapabilityFamily.CacheMaintenance,
+            WorkerJobResourceClass.ExclusiveHeavyWorker,
+            IsHeavy: true,
+            IsCancellable: true,
+            IsGeodataBearing: true));
 
-    public static WorkerJobKind CacheMutation => WorkerJobKind.CacheMutation;
+    public static IReadOnlyList<WorkerJobDescriptor> Registered { get; } =
+        Array.AsReadOnly([ProcessAssets, CoordinateLookup, CacheMutation]);
 }
 
 public sealed record WorkerJobContext
@@ -319,6 +328,19 @@ public sealed record CoordinateLookupWorkerJobDispatch : WorkerJobDispatch
         }
 
         return descriptor;
+    }
+}
+
+public sealed record CacheMutationWorkerJobDispatch : WorkerJobDispatch
+{
+    public CacheMutationRequest Request { get; }
+
+    public CacheMutationWorkerJobDispatch(Guid jobId, CacheMutationRequest request)
+        : base(
+            new WorkerJobContext(jobId, WorkerJobKind.CacheMutation, WorkerJobRequestOrigin.Manual),
+            WorkerJobDescriptors.CacheMutation)
+    {
+        Request = request ?? throw new ArgumentNullException(nameof(request));
     }
 }
 

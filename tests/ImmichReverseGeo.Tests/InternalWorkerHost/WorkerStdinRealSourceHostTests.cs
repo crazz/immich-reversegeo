@@ -202,7 +202,12 @@ public sealed partial class WorkerStdinRealSourceHostTests
 
             var ready = Assert.IsInstanceOfType<WorkerJobReadyPayload>(messages[0].Payload);
             CollectionAssert.AreEqual(
-                new[] { WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup },
+                new[]
+                {
+                    WorkerJobKind.ProcessAssets,
+                    WorkerJobKind.CoordinateLookup,
+                    WorkerJobKind.CacheMutation
+                },
                 ready.SupportedJobKinds.ToArray(),
                 "v2-host-advertises-registered-kind-only");
             foreach (WorkerJobOutputMessage message in messages.Skip(1))
@@ -300,7 +305,12 @@ public sealed partial class WorkerStdinRealSourceHostTests
                 Encoding.UTF8.GetBytes(frames[0]));
             Assert.IsTrue(ready.IsSuccess, "reserved-kind-ready-valid");
             CollectionAssert.AreEqual(
-                new[] { WorkerJobKind.ProcessAssets, WorkerJobKind.CoordinateLookup },
+                new[]
+                {
+                    WorkerJobKind.ProcessAssets,
+                    WorkerJobKind.CoordinateLookup,
+                    WorkerJobKind.CacheMutation
+                },
                 Assert.IsInstanceOfType<WorkerJobReadyPayload>(ready.Message!.Payload)
                     .SupportedJobKinds.ToArray(),
                 "reserved-kind-not-advertised");

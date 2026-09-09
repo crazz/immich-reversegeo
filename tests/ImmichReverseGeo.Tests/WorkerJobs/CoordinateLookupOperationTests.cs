@@ -549,7 +549,10 @@ public sealed class CoordinateLookupOperationTests
             Exception? completionFailure = null;
             try
             {
-                await enteredPublication.Task;
+                await AwaitGateBeforeOwnerAsync(
+                    enteredPublication.Task,
+                    lookup,
+                    "cache mutation did not reach the pre-publication gate");
                 cancellation.Cancel();
             }
             finally
@@ -558,7 +561,7 @@ public sealed class CoordinateLookupOperationTests
                 releasePublication.TrySetResult();
                 try
                 {
-                    await lookup;
+                    await lookup.WaitAsync(TimeSpan.FromSeconds(5));
                 }
                 catch (Exception ex)
                 {
@@ -621,18 +624,24 @@ public sealed class CoordinateLookupOperationTests
             Exception? completionFailure = null;
             try
             {
-                await Task.WhenAll(cachePublished.Task, airportStarted.Task);
+                await AwaitGateBeforeOwnerAsync(
+                    Task.WhenAll(cachePublished.Task, airportStarted.Task),
+                    lookup,
+                    "lookup did not reach both post-publication and optional-source gates");
                 string dbPath = Path.Combine(tempDir, "overture-divisions", "CHE.db");
                 Assert.IsTrue(File.Exists(dbPath), "The cache must be atomically visible before cancellation.");
                 byte[] publishedBytes = await File.ReadAllBytesAsync(dbPath);
                 cancellation.Cancel();
                 releaseCache.TrySetResult();
-                await airportCancelled.Task;
+                await AwaitGateBeforeOwnerAsync(
+                    airportCancelled.Task,
+                    lookup,
+                    "optional source did not observe cancellation");
                 Assert.IsFalse(lookup.IsCompleted, "The operation must await optional-source cleanup.");
                 releaseAirportCleanup.TrySetResult();
                 try
                 {
-                    await lookup;
+                    await lookup.WaitAsync(TimeSpan.FromSeconds(5));
                 }
                 catch (Exception ex)
                 {
@@ -667,7 +676,7 @@ public sealed class CoordinateLookupOperationTests
                 releaseAirportCleanup.TrySetResult();
                 try
                 {
-                    await lookup;
+                    await lookup.WaitAsync(TimeSpan.FromSeconds(5));
                 }
                 catch (Exception ex)
                 {
@@ -802,6 +811,22 @@ public sealed class CoordinateLookupOperationTests
         await release.Task;
     }
 
+    private static async Task AwaitGateBeforeOwnerAsync(
+        Task gate,
+        Task owner,
+        string ownerCompletedMessage)
+    {
+        Task first = await Task.WhenAny(gate, owner)
+            .WaitAsync(TimeSpan.FromSeconds(5));
+        if (ReferenceEquals(first, owner))
+        {
+            await owner;
+            Assert.Fail(ownerCompletedMessage);
+        }
+
+        await gate;
+    }
+
     private static async Task<OvertureInfrastructureLookupDiagnostics> GatedAirportAsync(
         CancellationToken token,
         TaskCompletionSource started,
@@ -854,6 +879,7 @@ public sealed class CoordinateLookupOperationTests
                     $geometry, 7, 46, 9, 48);
             INSERT INTO _meta VALUES ('downloadedAt', '2026-09-08T00:00:00Z');
             INSERT INTO _meta VALUES ('release', 'fixture-release');
+            INSERT INTO _meta VALUES ('country', 'CH');
             """;
         command.Parameters.AddWithValue("$geometry", ValidPolygonWkb());
         command.ExecuteNonQuery();

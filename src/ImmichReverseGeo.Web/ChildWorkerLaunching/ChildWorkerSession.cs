@@ -134,7 +134,14 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         {
             _jobOutputValidator = new WorkerJobOutputStreamValidator(
                 dispatch.Context.JobId,
-                dispatch.Context.JobKind);
+                dispatch.Context.JobKind,
+                dispatch switch
+                {
+                    ProcessAssetsWorkerJobDispatch processingDispatch => processingDispatch.Request,
+                    CoordinateLookupWorkerJobDispatch coordinateLookup => coordinateLookup.Request,
+                    CacheMutationWorkerJobDispatch cacheMutation => cacheMutation.Request,
+                    _ => null
+                });
         }
         _jobProjection = dispatch is ProcessAssetsWorkerJobDispatch
             ? new ProcessAssetsWorkerJobProjection(_request)
@@ -603,6 +610,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                                 new ProcessAssetsExecutePayload(processAssets.Request),
                             CoordinateLookupWorkerJobDispatch coordinateLookup =>
                                 new CoordinateLookupExecutePayload(coordinateLookup.Request),
+                            CacheMutationWorkerJobDispatch cacheMutation =>
+                                new CacheMutationExecutePayload(cacheMutation.Request),
                             _ => throw new NotSupportedException(
                                 "The worker-job dispatch kind is not registered for serialization.")
                         }));

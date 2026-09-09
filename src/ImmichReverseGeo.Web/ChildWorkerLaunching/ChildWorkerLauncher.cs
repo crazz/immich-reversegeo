@@ -121,7 +121,8 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
         }
 
         if (dispatch.Context.JobKind is not WorkerJobKind.ProcessAssets
-            and not WorkerJobKind.CoordinateLookup)
+            and not WorkerJobKind.CoordinateLookup
+            and not WorkerJobKind.CacheMutation)
         {
             throw new NotSupportedException(
                 "The worker-job dispatch kind is not registered for child launch.");

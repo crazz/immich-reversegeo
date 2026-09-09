@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.ObjectModel;
 using System.Globalization;
+using System.Linq;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerProtocol;
 
@@ -137,6 +138,16 @@ public sealed record CoordinateLookupExecutePayload : WorkerJobControllerPayload
     }
 }
 
+public sealed record CacheMutationExecutePayload : WorkerJobControllerPayload
+{
+    public CacheMutationRequest Request { get; }
+
+    public CacheMutationExecutePayload(CacheMutationRequest request)
+    {
+        Request = request ?? throw new ArgumentNullException(nameof(request));
+    }
+}
+
 public sealed record WorkerJobCancelPayload : WorkerJobControllerPayload;
 
 public sealed record WorkerJobControllerMessage
@@ -184,7 +195,9 @@ public sealed record WorkerJobControllerMessage
                     && payload is ProcessAssetsExecutePayload execute
                     && execute.Request.ProcessingRequest.RunId == jobId)
                 || (jobKind == WorkerJobKind.CoordinateLookup
-                    && payload is CoordinateLookupExecutePayload),
+                    && payload is CoordinateLookupExecutePayload)
+                || (jobKind == WorkerJobKind.CacheMutation
+                    && payload is CacheMutationExecutePayload),
             WorkerJobProtocolV2.CancelType => payload is WorkerJobCancelPayload,
             _ => false
         };
@@ -363,6 +376,7 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
     public DateTimeOffset EndedAtUtc { get; }
     public ProcessAssetsResult? ProcessAssetsResult { get; }
     public CoordinateLookupResult? CoordinateLookupResult { get; }
+    public CacheMutationResult? CacheMutationResult { get; }
     public WorkerJobSafeError? Error { get; }
 
     public WorkerJobTerminalPayload(
@@ -371,7 +385,7 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
         DateTimeOffset endedAtUtc,
         ProcessAssetsResult? processAssetsResult,
         WorkerJobSafeError? error)
-        : this(outcome, startedAtUtc, endedAtUtc, processAssetsResult, null, error)
+        : this(outcome, startedAtUtc, endedAtUtc, processAssetsResult, null, null, error)
     {
     }
 
@@ -381,6 +395,25 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
         DateTimeOffset endedAtUtc,
         ProcessAssetsResult? processAssetsResult,
         CoordinateLookupResult? coordinateLookupResult,
+        WorkerJobSafeError? error)
+        : this(
+            outcome,
+            startedAtUtc,
+            endedAtUtc,
+            processAssetsResult,
+            coordinateLookupResult,
+            null,
+            error)
+    {
+    }
+
+    public WorkerJobTerminalPayload(
+        WorkerJobTerminalOutcome outcome,
+        DateTimeOffset startedAtUtc,
+        DateTimeOffset endedAtUtc,
+        ProcessAssetsResult? processAssetsResult,
+        CoordinateLookupResult? coordinateLookupResult,
+        CacheMutationResult? cacheMutationResult,
         WorkerJobSafeError? error)
     {
         WorkerJobProtocolV2.RequireUtc(startedAtUtc, nameof(startedAtUtc));
@@ -393,12 +426,23 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
         var validShape = outcome switch
         {
             WorkerJobTerminalOutcome.Completed =>
-                (processAssetsResult is not null) != (coordinateLookupResult is not null)
+                new[]
+                {
+                    processAssetsResult is not null,
+                    coordinateLookupResult is not null,
+                    cacheMutationResult is not null
+                }.Count(static present => present) == 1
                 && error is null,
             WorkerJobTerminalOutcome.Cancelled =>
-                processAssetsResult is null && coordinateLookupResult is null && error is null,
+                processAssetsResult is null
+                && coordinateLookupResult is null
+                && cacheMutationResult is null
+                && error is null,
             WorkerJobTerminalOutcome.Failed =>
-                processAssetsResult is null && coordinateLookupResult is null && error is not null,
+                processAssetsResult is null
+                && coordinateLookupResult is null
+                && cacheMutationResult is null
+                && error is not null,
             _ => false
         };
         if (!validShape)
@@ -418,11 +462,21 @@ public sealed record WorkerJobTerminalPayload : WorkerJobOutputPayload
             throw new ArgumentException("The terminal and typed-result timestamps must match.", nameof(coordinateLookupResult));
         }
 
+        if (cacheMutationResult is not null
+            && (cacheMutationResult.StartedAtUtc != startedAtUtc
+                || cacheMutationResult.EndedAtUtc != endedAtUtc))
+        {
+            throw new ArgumentException(
+                "The terminal and typed-result timestamps must match.",
+                nameof(cacheMutationResult));
+        }
+
         Outcome = outcome;
         StartedAtUtc = startedAtUtc;
         EndedAtUtc = endedAtUtc;
         ProcessAssetsResult = processAssetsResult;
         CoordinateLookupResult = coordinateLookupResult;
+        CacheMutationResult = cacheMutationResult;
         Error = error;
     }
 }
@@ -439,6 +493,7 @@ public sealed record WorkerJobHandlerEvent
         if (payload is not ProcessAssetsEligibilityPayload
             and not ProcessAssetsProgressPayload
             and not CoordinateLookupProgressPayload
+            and not CacheMutationProgressPayload
             and not WorkerJobActivityStartedPayload
             and not WorkerJobActivityEndedPayload
             and not WorkerJobLogPayload)
@@ -534,7 +589,13 @@ public sealed record WorkerJobOutputMessage
         var coordinateLookupMatches = jobKind == WorkerJobKind.CoordinateLookup
             && type == WorkerJobProtocolV2.ProgressChangedType
             && payload is CoordinateLookupProgressPayload;
-        if (!commonMatches && !processAssetsMatches && !coordinateLookupMatches)
+        var cacheMutationMatches = jobKind == WorkerJobKind.CacheMutation
+            && type == WorkerJobProtocolV2.ProgressChangedType
+            && payload is CacheMutationProgressPayload;
+        if (!commonMatches
+            && !processAssetsMatches
+            && !coordinateLookupMatches
+            && !cacheMutationMatches)
         {
             throw new ArgumentException("The output payload is not valid for the job kind and type.", nameof(payload));
         }
@@ -550,6 +611,13 @@ public sealed record WorkerJobOutputMessage
         if (payload is WorkerJobTerminalPayload coordinateTerminal
             && coordinateTerminal.CoordinateLookupResult is not null
             && jobKind != WorkerJobKind.CoordinateLookup)
+        {
+            throw new ArgumentException("The typed terminal result does not match the job kind.", nameof(payload));
+        }
+
+        if (payload is WorkerJobTerminalPayload cacheTerminal
+            && cacheTerminal.CacheMutationResult is not null
+            && jobKind != WorkerJobKind.CacheMutation)
         {
             throw new ArgumentException("The typed terminal result does not match the job kind.", nameof(payload));
         }

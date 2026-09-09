@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Gadm.Services;
@@ -217,6 +218,34 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertAlias<WorkerNdjsonProcessingEventReporter, IProcessingEventReporter>(worker.Provider);
         await worker.Provider.GetRequiredService<IWorkerReadinessPublisher>().PublishAsync(CancellationToken.None);
         AssertHostedAlias<InternalWorkerLifecycleService>(worker.Provider);
+    }
+
+    [TestMethod]
+    [TestCategory("Change51")]
+    public async Task Composition_WebRootsRetainCacheFacadesWithoutWorkerMutationAdapters()
+    {
+        await using var standard = WebFixture.Create(DeploymentMode.Standard);
+        await using var webOnly = WebFixture.Create(DeploymentMode.WebOnly);
+
+        foreach ((string Name, IReadOnlyList<ServiceDescriptor> Descriptors) root in new[]
+        {
+            ("standard", standard.Descriptors),
+            ("web-only", webOnly.Descriptors)
+        })
+        {
+            Assert.IsTrue(
+                root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(OvertureDivisionCacheService)),
+                root.Name + "-overture-status-delete-facade");
+            Assert.IsTrue(
+                root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(GadmDivisionCacheService)),
+                root.Name + "-gadm-status-delete-facade");
+            Assert.IsFalse(
+                root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(ICacheMutationSourceOperation)),
+                root.Name + "-no-worker-source-operation");
+            Assert.IsFalse(
+                root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(IWorkerCacheMutationOperation)),
+                root.Name + "-no-worker-mutation-operation");
+        }
     }
 
     [TestMethod]
@@ -817,7 +846,9 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertSingletonAliasDescriptors<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(descriptors);
         AssertSingletonAliasDescriptors<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(descriptors);
         AssertSingletonHostedAliasDescriptor<CoordinateLookupPageControllerHostLifetime>(descriptors);
-        Assert.AreEqual(scheduler ? 6 : 5, descriptors.Count(descriptor => descriptor.ServiceType == typeof(IHostedService)), "web-hosted-alias-count");
+        AssertSingletonAliasDescriptors<CacheMutationWorkerClient, ICacheMutationWorkerClient>(descriptors);
+        AssertSingletonHostedAliasDescriptor<CacheMutationPageControllerHostLifetime>(descriptors);
+        Assert.AreEqual(scheduler ? 7 : 6, descriptors.Count(descriptor => descriptor.ServiceType == typeof(IHostedService)), "web-hosted-alias-count");
         Assert.AreEqual(scheduler ? 1 : 0, descriptors.Count(descriptor => descriptor.ServiceType == typeof(ProcessingBackgroundService)), "scheduler-descriptor");
         Assert.AreEqual(scheduler ? 1 : 0, descriptors.Count(descriptor => descriptor.ServiceType == typeof(IScheduledRunTrigger)), "scheduled-trigger-descriptor");
         if (scheduler)
@@ -862,9 +893,11 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertHostedAlias<WorkerJobCoordinator>(provider);
         AssertAlias<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(provider);
         AssertAlias<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(provider);
+        AssertAlias<CacheMutationWorkerClient, ICacheMutationWorkerClient>(provider);
         AssertHostedAlias<ProcessingRunCoordinator>(provider);
         AssertHostedAlias<ChildWorkerStartupValidator>(provider);
         AssertHostedAlias<CoordinateLookupPageControllerHostLifetime>(provider);
+        AssertHostedAlias<CacheMutationPageControllerHostLifetime>(provider);
         ProcessAssetsWebStatus status = provider.GetRequiredService<ProcessAssetsWebStatus>();
         Assert.AreSame(status, provider.GetRequiredService<IProcessAssetsWebStatus>(), "web-status-query-alias");
         Assert.AreSame(status, provider.GetRequiredService<IProcessAssetsWorkerStatusSink>(), "web-status-sink-alias");

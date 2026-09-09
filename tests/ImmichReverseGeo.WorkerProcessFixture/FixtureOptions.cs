@@ -26,7 +26,14 @@ internal enum FixtureScenario
     RealCoordinateDomainFailure,
     RealCoordinateCancellation,
     RealCoordinateOutputFailure,
-    RealCoordinateStartupFailure
+    RealCoordinateStartupFailure,
+    RealCacheSuccess,
+    RealCacheOvertureSuccess,
+    RealCacheInfrastructureFailure,
+    RealCacheOutputFailure,
+    RealCacheFailure,
+    RealCacheCancellation,
+    RealCacheUnresponsive
 }
 
 internal enum MalformedKind
@@ -95,7 +102,14 @@ internal sealed record FixtureOptions(
             ["real-coordinate-domain-failure"] = FixtureScenario.RealCoordinateDomainFailure,
             ["real-coordinate-cancellation"] = FixtureScenario.RealCoordinateCancellation,
             ["real-coordinate-output-failure"] = FixtureScenario.RealCoordinateOutputFailure,
-            ["real-coordinate-startup-failure"] = FixtureScenario.RealCoordinateStartupFailure
+            ["real-coordinate-startup-failure"] = FixtureScenario.RealCoordinateStartupFailure,
+            ["real-cache-success"] = FixtureScenario.RealCacheSuccess,
+            ["real-cache-overture-success"] = FixtureScenario.RealCacheOvertureSuccess,
+            ["real-cache-infrastructure-failure"] = FixtureScenario.RealCacheInfrastructureFailure,
+            ["real-cache-output-failure"] = FixtureScenario.RealCacheOutputFailure,
+            ["real-cache-failure"] = FixtureScenario.RealCacheFailure,
+            ["real-cache-cancellation"] = FixtureScenario.RealCacheCancellation,
+            ["real-cache-unresponsive"] = FixtureScenario.RealCacheUnresponsive
         };
 
     internal bool UsesProductionCoordinateHost => Scenario is
@@ -106,6 +120,15 @@ internal sealed record FixtureOptions(
         FixtureScenario.RealCoordinateCancellation or
         FixtureScenario.RealCoordinateOutputFailure or
         FixtureScenario.RealCoordinateStartupFailure;
+
+    internal bool UsesProductionCacheHost => Scenario is
+        FixtureScenario.RealCacheSuccess or
+        FixtureScenario.RealCacheOvertureSuccess or
+        FixtureScenario.RealCacheInfrastructureFailure or
+        FixtureScenario.RealCacheOutputFailure or
+        FixtureScenario.RealCacheFailure or
+        FixtureScenario.RealCacheCancellation or
+        FixtureScenario.RealCacheUnresponsive;
 
     internal static bool TryParse(string[] arguments, out FixtureOptions? options, out string error)
     {
