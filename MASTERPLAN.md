@@ -1034,7 +1034,7 @@ Build candidates in unique same-directory files, validate expected schema/table,
 
 **Dependencies and sequencing:** Requires finalized/applied 47, 48, and 50 and binds to their exact landed descriptor, admission-result, owner-handle, active-snapshot, cancellation, shutdown, and finality symbols at apply time; stop rather than create parallel names, gates, identities, or lifecycle DTOs if landed source differs. Precedes 52, 53, and 55. Do not edit or combine 50 arbitration, 52 deletion, or 53 inventory ownership here.
 
-**OpenSpec:** [`51-move-cache-download-export-into-worker`](openspec/changes/51-move-cache-download-export-into-worker/).
+**OpenSpec:** [`51-move-cache-download-export-into-worker`](openspec/changes/archive/2026-09-09-51-move-cache-download-export-into-worker/).
 
 ### 52. `feat: coordinate cache deletion with active worker`
 
