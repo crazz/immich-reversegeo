@@ -13,6 +13,7 @@ namespace ImmichReverseGeo.Tests.WorkerJobs;
 [TestCategory("Change48")]
 public sealed class CoordinateLookupWorkerJobProtocolTests
 {
+    private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
     private static readonly Guid JobId = Guid.Parse("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
     private static readonly DateTimeOffset Started =
         new DateTimeOffset(2026, 9, 8, 12, 13, 14, TimeSpan.Zero).AddTicks(1234567);
@@ -796,8 +797,9 @@ public sealed class CoordinateLookupWorkerJobProtocolTests
         var request = new CoordinateLookupRequest(12.5, 45.25, false, true, false, EmptyOverrides());
         byte[] content = WorkerJobProtocolCodec.SerializeControllerInput(Execute(request));
         byte[] frame = [.. content, (byte)'\n'];
+        var input = new PendingAfterFrameInputStream(frame);
         await using var source = new WorkerStdinRequestSource(
-            new MemoryInputFactory(frame),
+            new MemoryInputFactory(input),
             NullLogger<WorkerStdinRequestSource>.Instance,
             InternalWorkerProtocolVersion.V2,
             [WorkerJobDescriptors.CoordinateLookup]);
@@ -805,16 +807,28 @@ public sealed class CoordinateLookupWorkerJobProtocolTests
         InitialProcessingRunAcquisition acquisition =
             await source.AcquireAsync(CancellationToken.None);
         var accepted = Assert.IsInstanceOfType<InitialProcessingRunAcquisition.Accepted>(acquisition);
+        try
+        {
+            Assert.AreEqual(JobId, accepted.Lease.Context.JobId);
+            Assert.AreEqual(WorkerJobKind.CoordinateLookup, accepted.Lease.Context.JobKind);
+            var acceptedRequest =
+                Assert.IsInstanceOfType<CoordinateLookupRequest>(accepted.Lease.JobRequest);
+            Assert.AreEqual(request.Latitude, acceptedRequest.Latitude);
+            Assert.ThrowsExactly<InvalidOperationException>(() => _ = accepted.Lease.Request);
 
-        Assert.AreEqual(JobId, accepted.Lease.Context.JobId);
-        Assert.AreEqual(WorkerJobKind.CoordinateLookup, accepted.Lease.Context.JobKind);
-        var acceptedRequest =
-            Assert.IsInstanceOfType<CoordinateLookupRequest>(accepted.Lease.JobRequest);
-        Assert.AreEqual(request.Latitude, acceptedRequest.Latitude);
-        Assert.ThrowsExactly<InvalidOperationException>(() => _ = accepted.Lease.Request);
-        Assert.IsInstanceOfType<WorkerInputPumpFinality.ControlsClosedFinality>(
-            await accepted.Lease.SettleAsync(CancellationToken.None));
-        await accepted.Lease.DisposeAsync();
+            await input.PendingRead.WaitAsync(Bound);
+            ValueTask<WorkerInputPumpFinality> settlement =
+                accepted.Lease.SettleAsync(CancellationToken.None);
+            await input.CancellationObserved.WaitAsync(Bound);
+            Assert.IsInstanceOfType<WorkerInputPumpFinality.ExpectedShutdownFinality>(
+                await settlement.AsTask().WaitAsync(Bound));
+        }
+        finally
+        {
+            await accepted.Lease.DisposeAsync();
+        }
+
+        Assert.AreEqual(1, input.DisposeCount);
     }
 
     private static WorkerJobControllerMessage Execute(CoordinateLookupRequest request) =>
@@ -924,8 +938,101 @@ public sealed class CoordinateLookupWorkerJobProtocolTests
         }
     }
 
-    private sealed class MemoryInputFactory(byte[] frame) : IWorkerStandardInputStreamFactory
+    private sealed class MemoryInputFactory(Stream input) : IWorkerStandardInputStreamFactory
     {
-        public Stream OpenStandardInput() => new MemoryStream(frame, writable: false);
+        public Stream OpenStandardInput() => input;
+    }
+
+    private sealed class PendingAfterFrameInputStream(byte[] frame) : Stream
+    {
+        private int _position;
+        private int _disposeCount;
+
+        internal Task PendingRead => _pendingRead.Task;
+        internal Task CancellationObserved => _cancellationObserved.Task;
+        internal int DisposeCount => Volatile.Read(ref _disposeCount);
+
+        private readonly TaskCompletionSource _pendingRead =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _cancellationObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public override bool CanRead => true;
+        public override bool CanSeek => false;
+        public override bool CanWrite => false;
+        public override long Length => throw new NotSupportedException();
+        public override long Position
+        {
+            get => _position;
+            set => throw new NotSupportedException();
+        }
+
+        public override int Read(byte[] buffer, int offset, int count)
+        {
+            int remaining = frame.Length - _position;
+            if (remaining <= 0)
+            {
+                return 0;
+            }
+
+            int copied = Math.Min(remaining, count);
+            frame.AsSpan(_position, copied).CopyTo(buffer.AsSpan(offset, copied));
+            _position += copied;
+            return copied;
+        }
+
+        public override async ValueTask<int> ReadAsync(
+            Memory<byte> buffer,
+            CancellationToken cancellationToken = default)
+        {
+            int remaining = frame.Length - _position;
+            if (remaining > 0)
+            {
+                int copied = Math.Min(remaining, buffer.Length);
+                frame.AsMemory(_position, copied).CopyTo(buffer);
+                _position += copied;
+                return copied;
+            }
+
+            _pendingRead.TrySetResult();
+            var cancelled = new TaskCompletionSource<int>(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            using CancellationTokenRegistration registration = cancellationToken.Register(() =>
+            {
+                _cancellationObserved.TrySetResult();
+                cancelled.TrySetCanceled(cancellationToken);
+            });
+            try
+            {
+                return await cancelled.Task;
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+        }
+
+        public override void Flush()
+        {
+        }
+
+        public override long Seek(long offset, SeekOrigin origin) =>
+            throw new NotSupportedException();
+
+        public override void SetLength(long value) =>
+            throw new NotSupportedException();
+
+        public override void Write(byte[] buffer, int offset, int count) =>
+            throw new NotSupportedException();
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing)
+            {
+                Interlocked.Increment(ref _disposeCount);
+            }
+
+            base.Dispose(disposing);
+        }
     }
 }
