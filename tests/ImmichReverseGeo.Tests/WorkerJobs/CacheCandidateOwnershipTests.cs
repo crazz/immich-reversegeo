@@ -126,6 +126,8 @@ public sealed class CacheCandidateOwnershipTests
         var start = new ProcessStartInfo
         {
             FileName = WorkerProcessFixtureLease.FixtureExecutable,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
             UseShellExecute = false,
             CreateNoWindow = true
         };
@@ -135,6 +137,9 @@ public sealed class CacheCandidateOwnershipTests
         Task readyObserved = ObserveCreatedFileAsync(ready);
         using Process child = Process.Start(start)
             ?? throw new AssertFailedException("The ownership fixture did not start.");
+        Task<string> standardOutput = child.StandardOutput.ReadToEndAsync();
+        Task<string> standardError = child.StandardError.ReadToEndAsync();
+        FileStream? deleteGuard = null;
         try
         {
             await readyObserved;
@@ -143,20 +148,115 @@ public sealed class CacheCandidateOwnershipTests
             Assert.IsTrue(File.Exists(candidate));
 
             child.Kill(entireProcessTree: true);
-            await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+            Assert.IsTrue(
+                child.WaitForExit(TimeSpan.FromSeconds(10)),
+                "The ownership fixture did not reach kernel-signaled process finality.");
+            Assert.AreEqual(string.Empty, await standardOutput.WaitAsync(TimeSpan.FromSeconds(10)));
+            Assert.AreEqual(string.Empty, await standardError.WaitAsync(TimeSpan.FromSeconds(10)));
+
+            if (OperatingSystem.IsWindows())
+            {
+                AssertReleasedOwnerMarker(candidate);
+                using (var independentHolder = new FileStream(
+                    candidate,
+                    FileMode.Open,
+                    FileAccess.Read,
+                    FileShare.None))
+                {
+                    Assert.IsFalse(ownership.TryCleanupAbandoned(candidate));
+                    Assert.IsTrue(File.Exists(candidate));
+                    Assert.IsTrue(File.Exists(CacheCandidateOwnership.GetOwnerPath(candidate)));
+                }
+
+                deleteGuard = new FileStream(
+                    candidate,
+                    FileMode.Open,
+                    FileAccess.ReadWrite,
+                    FileShare.Delete);
+            }
 
             Assert.IsTrue(ownership.TryCleanupAbandoned(candidate));
+            deleteGuard?.Dispose();
+            deleteGuard = null;
             Assert.IsFalse(File.Exists(candidate));
             Assert.IsFalse(File.Exists(CacheCandidateOwnership.GetOwnerPath(candidate)));
         }
         finally
         {
-            if (!child.HasExited)
+            try
             {
-                child.Kill(entireProcessTree: true);
-                await child.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(10));
+                deleteGuard?.Dispose();
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                if (!child.HasExited)
+                {
+                    child.Kill(entireProcessTree: true);
+                }
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _ = child.WaitForExit(TimeSpan.FromSeconds(10));
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _ = await standardOutput.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch
+            {
+            }
+
+            try
+            {
+                _ = await standardError.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+            catch
+            {
             }
         }
+    }
+
+    private static void AssertReleasedOwnerMarker(string candidate)
+    {
+        byte[] expected = CacheCandidateOwnership.GetMarkerBytes();
+        byte[] actual = new byte[expected.Length];
+        long actualLength = -1;
+        string accessStage = "open";
+        try
+        {
+            using var owner = new FileStream(
+                CacheCandidateOwnership.GetOwnerPath(candidate),
+                FileMode.Open,
+                FileAccess.ReadWrite,
+                FileShare.None);
+            actualLength = owner.Length;
+            if (actualLength == expected.Length)
+            {
+                accessStage = "read";
+                owner.ReadExactly(actual);
+            }
+        }
+        catch (Exception exception)
+        {
+            Assert.Fail(
+                $"post-exit-owner-{accessStage}:{exception.GetType().Name}:0x{exception.HResult:X8}");
+            return;
+        }
+
+        Assert.AreEqual(expected.Length, actualLength, "post-exit-owner-marker-length");
+        CollectionAssert.AreEqual(expected, actual, "post-exit-owner-marker-content");
     }
 
     private static async Task ObserveCreatedFileAsync(string path)
