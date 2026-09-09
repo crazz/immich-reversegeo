@@ -246,11 +246,23 @@ public sealed class CoordinateLookupDrainFinalityTests
                     clock.GetUtcNow(),
                     new WorkerJobReadyPayload([WorkerJobKind.CoordinateLookup])))));
             ObservedSession session = await worker.SessionStarted.WaitAsync(Bound);
+            WorkerJobControllerMessage execute = ParseControllerFrame(
+                await process.StandardInput.FirstFrameWritten.WaitAsync(Bound));
+            Assert.AreEqual(WorkerJobProtocolV2.ExecuteType, execute.Type);
+            Assert.AreEqual(JobId, execute.JobId);
+            Assert.AreEqual(WorkerJobKind.CoordinateLookup, execute.JobKind);
+            Assert.IsInstanceOfType<CoordinateLookupExecutePayload>(execute.Payload);
             long timerGeneration = clock.TimerGeneration;
 
             cancel = controller.CancelAsync();
-            await clock.WaitForTimerCreatedAsync(timerGeneration).WaitAsync(Bound);
-            await process.StandardInput.SecondWrite.WaitAsync(Bound);
+            WorkerJobControllerMessage cancelFrame = ParseControllerFrame(
+                await process.StandardInput.SecondFrameWritten.WaitAsync(Bound));
+            Assert.AreEqual(WorkerJobProtocolV2.ControlCategory, cancelFrame.Category);
+            Assert.AreEqual(WorkerJobProtocolV2.CancelType, cancelFrame.Type);
+            Assert.AreEqual(JobId, cancelFrame.JobId);
+            Assert.AreEqual(WorkerJobKind.CoordinateLookup, cancelFrame.JobKind);
+            Assert.IsInstanceOfType<WorkerJobCancelPayload>(cancelFrame.Payload);
+            Assert.IsGreaterThan(timerGeneration, clock.TimerGeneration);
             Assert.AreEqual(CoordinateLookupPagePhase.CancelRequested, controller.State.Phase);
             Assert.IsFalse(run.IsCompleted);
             Assert.AreEqual(0, process.KillCalls);
@@ -302,6 +314,16 @@ public sealed class CoordinateLookupDrainFinalityTests
         new(47.4, 8.5, false, false, false);
 
     private static byte[] Frame(byte[] payload) => [.. payload, (byte)'\n'];
+
+    private static WorkerJobControllerMessage ParseControllerFrame(byte[] frame)
+    {
+        Assert.IsGreaterThan(0, frame.Length);
+        Assert.AreEqual((byte)'\n', frame[^1]);
+        WorkerJobControllerParseResult parsed =
+            WorkerJobProtocolCodec.ParseControllerInput(frame.AsSpan(0, frame.Length - 1));
+        Assert.IsTrue(parsed.IsSuccess, parsed.Failure?.Diagnostic);
+        return parsed.Message!;
+    }
 
     private static CoordinateLookupRequest Request() =>
         new(
@@ -471,26 +493,23 @@ public sealed class CoordinateLookupDrainFinalityTests
     {
         private readonly TaskCompletionSource _closed =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
-        private readonly TaskCompletionSource _secondWrite =
+        private readonly TaskCompletionSource<byte[]> _firstFrameWritten =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<byte[]> _secondFrameWritten =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _writeCount;
 
         internal Task Closed => _closed.Task;
-        internal Task SecondWrite => _secondWrite.Task;
+        internal Task<byte[]> FirstFrameWritten => _firstFrameWritten.Task;
+        internal Task<byte[]> SecondFrameWritten => _secondFrameWritten.Task;
         internal int DisposeCount { get; private set; }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            base.Write(buffer, offset, count);
-            ObserveWrite();
-        }
 
         public override async ValueTask WriteAsync(
             ReadOnlyMemory<byte> buffer,
             CancellationToken cancellationToken = default)
         {
             await base.WriteAsync(buffer, cancellationToken);
-            ObserveWrite();
+            ObserveFrame(buffer);
         }
 
         protected override void Dispose(bool disposing)
@@ -506,11 +525,16 @@ public sealed class CoordinateLookupDrainFinalityTests
             _closed.TrySetResult();
         }
 
-        private void ObserveWrite()
+        private void ObserveFrame(ReadOnlyMemory<byte> frame)
         {
-            if (Interlocked.Increment(ref _writeCount) == 2)
+            int writeCount = Interlocked.Increment(ref _writeCount);
+            if (writeCount == 1)
             {
-                _secondWrite.TrySetResult();
+                _firstFrameWritten.TrySetResult(frame.ToArray());
+            }
+            else if (writeCount == 2)
+            {
+                _secondFrameWritten.TrySetResult(frame.ToArray());
             }
         }
     }
