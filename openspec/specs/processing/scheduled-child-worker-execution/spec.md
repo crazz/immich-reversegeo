@@ -7,15 +7,31 @@ Routes admitted scheduled processing through child-worker isolation only when a 
 ## Requirements
 
 ### Requirement: Scheduled detection follows local admission
-The system SHALL perform exactly one scheduled work-detection operation only after the scheduled request has acquired process-local admission. For an admitted request, the system SHALL publish its cancellable active handle, mark processing pending immediately, and arm the matching state adapter before detection. A locally rejected request SHALL perform no pending mutation, detection, backend resolution, or worker launch.
+Block 50 supersedes the original admission-first ordering. For a due scheduled occurrence, the system SHALL perform exactly one lightweight work-detection operation before creating a JobId, publishing a cancellation/owner handle, calling `ProcessingState.MarkPending()`, arming the processing adapter, or attempting coordinator admission. A normal no-work result SHALL close at the scheduler boundary with no identity, pending mutation, adapter, admission, backend resolution, or worker launch. A positive result SHALL then create the sole ProcessAssets RunId/JobId, atomically attempt shared admission, and, only after admission succeeds, publish the owner and call `MarkPending()` immediately before adapter arming and asynchronous launch. Manual processing SHALL continue to bypass scheduled detection and attempt admission directly.
+
+#### Scenario: Scheduled occurrence finds no work before admission
+- **WHEN** a due scheduled occurrence's detector reports no current eligible work
+- **THEN** no JobId, owner handle, pending state, adapter, coordinator reservation, backend, or child is created
+
+#### Scenario: Positive detection loses the admission race
+- **WHEN** detection reports work but another heavy job wins coordinator admission before the scheduled request
+- **THEN** scheduled processing follows its existing skipped/coalesced trigger semantics without pending state, queueing, reservation, or worker launch
+
+#### Scenario: Positive detection is admitted
+- **WHEN** detection reports work and the scheduled ProcessAssets request wins admission
+- **THEN** one RunId/JobId and owner are created, pending is marked immediately after admission, the matching adapter is armed, and exactly one child launch path is eligible
+
+#### Scenario: Manual processing is requested
+- **WHEN** a valid manual ProcessAssets request is submitted
+- **THEN** it does not invoke the scheduled detector and attempts shared admission directly
 
 #### Scenario: Admitted scheduled occurrence reaches detection
-- **WHEN** a due scheduled occurrence acquires process-local admission
-- **THEN** its active cancellation handle is observable before pending state, pending state is published before adapter arming, and exactly one detector operation follows before backend resolution
+- **WHEN** a due scheduled occurrence reaches its lightweight detector
+- **THEN** detection instead occurs before identity, owner publication, pending state, adapter arming, coordinator admission, and backend resolution
 
 #### Scenario: Scheduled occurrence is locally busy
-- **WHEN** a due scheduled occurrence is rejected because a local processing attempt already owns admission
-- **THEN** the existing scheduled-contention log is recorded and no detector, backend, worker, or new processing-state lifecycle is started
+- **WHEN** detection reports work but shared admission is already owned by any exclusive heavy job
+- **THEN** the existing scheduled-contention outcome is recorded and no pending mutation, adapter, backend, worker, or queued reservation is started
 
 ### Requirement: Initial detector is advisory and count-backed
 The scheduled detector SHALL expose only a work/no-work decision and SHALL initially implement it by evaluating the current exact eligibility count as greater than zero. It SHALL use the same database predicate as the executor count, SHALL perform no skipped-ID, processing-configuration, batch, protocol, resolver, cache, or geodata operation, and SHALL NOT publish its count as the authoritative run eligibility. The child worker's executor SHALL retain the authoritative exact count and eligibility event.
@@ -29,11 +45,15 @@ The scheduled detector SHALL expose only a work/no-work decision and SHALL initi
 - **THEN** the detector reports no work without reading non-detector configuration or processing dependencies
 
 ### Requirement: Empty scheduled attempts complete locally
-When the detector reports no work, the system SHALL resolve neither execution backend, SHALL start no child process, SHALL receive no worker protocol event, and SHALL construct or access no in-process executor or processing geodata dependency through this route. It SHALL project eligibility zero and a local completed-zero lifecycle through the identity-checked state adapter, return to idle, set start and completion timestamps, clear the run counters and last error, and append the established lines in order: `Run started — nothing to process, all assets already have location data.` then `Run complete. Processed=0 Skipped=0 Errors=0`. This local closure SHALL release only the matching active handle and SHALL NOT fabricate a worker terminal event or worker result.
+When the detector reports no work, the system SHALL resolve neither execution backend nor coordinator admission, SHALL create no processing identity or pending lifecycle, SHALL start no child process, and SHALL construct or access no in-process executor or processing geodata dependency. It SHALL record the established bounded scheduler no-work outcome without fabricating a processing run, worker terminal, or worker result. Work appearing afterward waits for a later ordinary trigger.
+
+#### Scenario: Detector-empty scheduled occurrence
+- **WHEN** the detector reports no eligible work before identity and admission
+- **THEN** the occurrence closes locally with no ProcessingState run transition, backend resolution, child launch, worker event/result, skipped/config/batch access, or geodata work
 
 #### Scenario: Empty admitted scheduled attempt
-- **WHEN** the detector reports no eligible work for the admitted scheduled request
-- **THEN** the attempt reaches the established idle zero-run presentation without backend resolution, child launch, worker events, skipped-ID access, processing-config access, batches, or geodata work
+- **WHEN** a due scheduled occurrence's detector returns no eligible work
+- **THEN** the detector-empty occurrence instead closes before admission with the same zero backend, child, protocol, skipped/config/batch, and geodata effects and with no processing lifecycle
 
 ### Requirement: Eligible scheduled attempts use one child backend
 When the detector reports work and child-worker is the frozen temporary backend selection, the system SHALL lazily resolve and invoke exactly that child backend once with the admitted scheduled request, armed adapter, and coordinator-owned cancellation token. The scheduled caller SHALL remain awaiting the accepted attempt until authoritative terminal handling, process and stream finality, child cleanup, and matching coordinator-handle release have settled.
@@ -51,15 +71,23 @@ When the detector reports work and child-worker is the frozen temporary backend 
 - **THEN** the worker produces the reserved failed busy outcome and exit code 3 with zero domain work, rather than treating the occurrence as a local scheduled skip or retrying it
 
 ### Requirement: Predispatch cancellation and failure finalize locally
-The system SHALL use the matching admitted handle's cancellation token for detection. Active cancellation before backend dispatch SHALL close the pending attempt locally with the established `Run cancelled.` and completion-summary ordering, shall add no error, and SHALL launch no worker. An unexpected detector failure SHALL close the matching pending attempt locally through the established pre-eligibility failed presentation using bounded safe detail, SHALL return the coordinator to idle, and SHALL launch no worker. Neither outcome SHALL resolve a backend, fabricate worker protocol events, fall back to in-process execution, or automatically retry the occurrence.
+The detector SHALL use the scheduler/host cancellation token before any run identity or admission owner exists. Cancellation SHALL close the occurrence through the established scheduler-level cancellation path, and an unexpected detector failure SHALL use the established bounded scheduler-level failure path. Neither outcome SHALL create a JobId, mark processing pending, arm an adapter, attempt admission, fabricate worker events, fall back, or automatically retry.
+
+#### Scenario: Detector is cancelled before admission
+- **WHEN** the detector observes scheduler or host cancellation
+- **THEN** the occurrence closes without a processing lifecycle, coordinator owner, or worker launch
+
+#### Scenario: Detector fails before admission
+- **WHEN** the detector throws a non-cancellation failure
+- **THEN** bounded scheduler failure presentation is recorded without a processing identity, pending state, coordinator owner, or worker launch
 
 #### Scenario: Detector is cancelled
-- **WHEN** the admitted scheduled detector observes cancellation from the matching run or host token before backend dispatch
-- **THEN** the attempt returns to idle through the existing pre-eligibility cancellation presentation without an error or worker launch
+- **WHEN** a due scheduled occurrence's detector observes scheduler or host cancellation
+- **THEN** cancellation is handled at the scheduler boundary before identity, admission, pending state, adapter arming, backend resolution, or worker launch
 
 #### Scenario: Detector fails
-- **WHEN** the admitted scheduled detector throws a non-cancellation failure
-- **THEN** the attempt returns to idle through the existing pre-eligibility fatal-error and completion-summary presentation with safe detail and no worker launch
+- **WHEN** a due scheduled occurrence's detector throws a non-cancellation failure
+- **THEN** bounded scheduler failure presentation is recorded before identity, admission, pending state, adapter arming, backend resolution, or worker launch
 
 ### Requirement: Existing snapshot and scheduling boundaries remain unchanged
 The schedule enabled/cron snapshot SHALL remain pinned according to the existing scheduler contract, and the backend selection SHALL remain the immutable internal composition value frozen on the admitted handle. The detector SHALL read no AppConfig or processing settings. The worker request SHALL continue to contain only its established immutable request identity and scheduled trigger; credentials, schedule data, detector output, eligibility totals, work sets, and processing settings SHALL NOT be added. After its authoritative nonzero count, the worker executor SHALL take the existing single processing-config snapshot. Configuration changes SHALL NOT wake or replan an active schedule wait, and this change SHALL add no catch-up, fallback, replacement, or retry behavior.
