@@ -173,7 +173,15 @@
     </MSBuild>
     <ItemGroup>
       <_ProductionWorkerAppHostPublishRuntimeFile Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)**\*" />
+      <_ProductionWorkerStaticAssetsEndpointsManifest Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)$(ProductionWorkerAppHostAssemblyName).staticwebassets.endpoints.json" />
     </ItemGroup>
+    <Error Condition="!Exists('@(_ProductionWorkerStaticAssetsEndpointsManifest)')"
+           Text="Production Web static-assets endpoints manifest was not generated: @(_ProductionWorkerStaticAssetsEndpointsManifest)." />
+    <Copy SourceFiles="@(_ProductionWorkerStaticAssetsEndpointsManifest)"
+          DestinationFiles="@(_ProductionWorkerStaticAssetsEndpointsManifest->'$(PublishDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)$(ProductionWorkerAppHostAssemblyName).staticwebassets.endpoints.json')"
+           Text="Production Web static-assets endpoints manifest was not staged to $(PublishDir)." />
     <Copy SourceFiles="@(_ProductionWorkerAppHostPublishRuntimeFile)"
           DestinationFiles="@(_ProductionWorkerAppHostPublishRuntimeFile->'$(PublishDir)$(ProductionWorkerAppHostStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
