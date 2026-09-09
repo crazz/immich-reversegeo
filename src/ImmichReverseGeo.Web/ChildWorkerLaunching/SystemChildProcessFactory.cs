@@ -84,6 +84,7 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
     {
         private readonly Process _process;
         private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private bool _disposed;
 
         internal SystemChildProcess(Process process)
         {
@@ -91,10 +92,12 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
             StandardInput = _process.StandardInput.BaseStream;
             StandardOutput = _process.StandardOutput.BaseStream;
             StandardError = _process.StandardError.BaseStream;
-            _process.Exited += OnExited;
-            if (_process.HasExited)
+            // Process raises Exited while holding its own monitor. Reuse that
+            // monitor so HasExited and ExitCode cannot race or invert locks.
+            lock (_process)
             {
-                OnExited(this, EventArgs.Empty);
+                _process.Exited += OnExited;
+                ObserveExitUnderLock();
             }
         }
 
@@ -110,42 +113,59 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
 
         public ChildProcessExitState GetExitState()
         {
-            if (_exit.Task.IsCompletedSuccessfully)
+            lock (_process)
             {
-                return ChildProcessExitState.Exited;
-            }
+                if (_exit.Task.IsCompletedSuccessfully)
+                {
+                    return ChildProcessExitState.Exited;
+                }
 
-            try
-            {
-                return _process.HasExited ? ChildProcessExitState.Exited : ChildProcessExitState.Alive;
-            }
-            catch
-            {
-                return ChildProcessExitState.Unavailable;
+                if (_disposed)
+                {
+                    return ChildProcessExitState.Unavailable;
+                }
+
+                try
+                {
+                    if (!_process.HasExited)
+                    {
+                        return ChildProcessExitState.Alive;
+                    }
+
+                    _exit.TrySetResult(_process.ExitCode);
+                    return ChildProcessExitState.Exited;
+                }
+                catch
+                {
+                    return ChildProcessExitState.Unavailable;
+                }
             }
         }
 
         public ChildProcessKillOutcome KillProcessTree()
         {
-            if (GetExitState() == ChildProcessExitState.Exited)
+            lock (_process)
             {
-                return ChildProcessKillOutcome.AlreadyExited;
-            }
-
-            try
-            {
-                _process.Kill(entireProcessTree: true);
-                return ChildProcessKillOutcome.Requested;
-            }
-            catch (Exception failure)
-            {
-                // A descendant failure must remain visible even if the root exited.
-                if (failure is not AggregateException && GetExitState() == ChildProcessExitState.Exited)
+                if (GetExitState() == ChildProcessExitState.Exited)
                 {
                     return ChildProcessKillOutcome.AlreadyExited;
                 }
 
-                return NormalizeKillFailure(failure);
+                try
+                {
+                    _process.Kill(entireProcessTree: true);
+                    return ChildProcessKillOutcome.Requested;
+                }
+                catch (Exception failure)
+                {
+                    // A descendant failure must remain visible even if the root exited.
+                    if (failure is not AggregateException && GetExitState() == ChildProcessExitState.Exited)
+                    {
+                        return ChildProcessKillOutcome.AlreadyExited;
+                    }
+
+                    return NormalizeKillFailure(failure);
+                }
             }
         }
 
@@ -164,16 +184,42 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
 
         public ValueTask DisposeAsync()
         {
-            _process.Exited -= OnExited;
-            _process.Dispose();
+            lock (_process)
+            {
+                if (_disposed)
+                {
+                    return ValueTask.CompletedTask;
+                }
+
+                _disposed = true;
+                _process.Exited -= OnExited;
+                _process.Dispose();
+            }
+
             return ValueTask.CompletedTask;
         }
 
         private void OnExited(object? sender, EventArgs args)
         {
+            lock (_process)
+            {
+                if (_disposed || _exit.Task.IsCompleted)
+                {
+                    return;
+                }
+
+                ObserveExitUnderLock();
+            }
+        }
+
+        private void ObserveExitUnderLock()
+        {
             try
             {
-                _exit.TrySetResult(_process.ExitCode);
+                if (_process.HasExited)
+                {
+                    _exit.TrySetResult(_process.ExitCode);
+                }
             }
             catch (InvalidOperationException exception)
             {
