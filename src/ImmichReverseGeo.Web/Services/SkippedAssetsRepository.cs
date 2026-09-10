@@ -14,7 +14,8 @@ namespace ImmichReverseGeo.Web.Services;
 /// Tracks asset IDs that had no ADM0 boundary match, preventing endless reprocessing.
 /// Stored in /data/skipped.db (SQLite).
 /// </summary>
-public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, string dataDir) : IProcessingSkippedStore
+public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, string dataDir)
+    : IProcessingSkippedStore, ISkippedAssetsMaintenanceStore, ISkippedAssetsCountReader
 {
     // DI constructor
     public SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, StorageOptions dirs)
@@ -25,6 +26,16 @@ public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, st
     // Pooling=false: this is a singleton-owned file; pooling adds no benefit and forces
     // callers to ClearAllPools() before deleting the file on Windows (global side-effect).
     private string ConnectionString => $"Data Source={_dbPath};Pooling=false";
+
+    private string ExistingConnectionString(SqliteOpenMode mode)
+    {
+        return new SqliteConnectionStringBuilder
+        {
+            DataSource = _dbPath,
+            Mode = mode,
+            Pooling = false
+        }.ToString();
+    }
 
     public Task InitialiseAsync()
     {
@@ -80,32 +91,36 @@ public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, st
 
     public async Task<long> GetCountAsync()
     {
-        if (!File.Exists(_dbPath)) { return 0; }
-        await using var conn = new SqliteConnection(ConnectionString);
-        await conn.OpenAsync();
+        await using var conn = await OpenExistingAsync(SqliteOpenMode.ReadOnly, CancellationToken.None);
+        if (conn is null)
+        {
+            return 0;
+        }
+
         await using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM skipped_assets";
         return (long)(await cmd.ExecuteScalarAsync())!;
     }
 
-    public async Task ClearAllAsync()
+    public async Task<long> ClearAllAsync(CancellationToken cancellationToken = default)
     {
-        if (!File.Exists(_dbPath)) { return; }
-        await using var conn = new SqliteConnection(ConnectionString);
-        await conn.OpenAsync();
-        await using var cmd = conn.CreateCommand();
-        cmd.CommandText = "DELETE FROM skipped_assets";
-        var rows = await cmd.ExecuteNonQueryAsync();
-        logger.LogInformation("Cleared {Count} skipped assets", rows);
-    }
-
-    public async Task<long> RemoveAsync(IEnumerable<Guid> assetIds)
-    {
-        if (!File.Exists(_dbPath))
+        await using var conn = await OpenExistingAsync(SqliteOpenMode.ReadWrite, cancellationToken);
+        if (conn is null)
         {
             return 0;
         }
 
+        await using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM skipped_assets";
+        var rows = await cmd.ExecuteNonQueryAsync(cancellationToken);
+        logger.LogInformation("Cleared {Count} skipped assets", rows);
+        return rows;
+    }
+
+    public async Task<long> RemoveAsync(
+        IEnumerable<Guid> assetIds,
+        CancellationToken cancellationToken = default)
+    {
         var ids = assetIds
             .Distinct()
             .Select(id => id.ToString())
@@ -116,8 +131,12 @@ public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, st
             return 0;
         }
 
-        await using var conn = new SqliteConnection(ConnectionString);
-        await conn.OpenAsync();
+        await using var conn = await OpenExistingAsync(SqliteOpenMode.ReadWrite, cancellationToken);
+        if (conn is null)
+        {
+            return 0;
+        }
+
         using var tx = conn.BeginTransaction();
 
         long removed = 0;
@@ -127,11 +146,50 @@ public class SkippedAssetsRepository(ILogger<SkippedAssetsRepository> logger, st
             cmd.Transaction = tx;
             cmd.CommandText = "DELETE FROM skipped_assets WHERE asset_id = $id";
             cmd.Parameters.AddWithValue("$id", id);
-            removed += await cmd.ExecuteNonQueryAsync();
+            removed += await cmd.ExecuteNonQueryAsync(cancellationToken);
         }
 
-        await tx.CommitAsync();
+        await tx.CommitAsync(cancellationToken);
         logger.LogInformation("Removed {Count} skipped assets by id", removed);
         return removed;
+    }
+
+    private async Task<SqliteConnection?> OpenExistingAsync(
+        SqliteOpenMode mode,
+        CancellationToken cancellationToken)
+    {
+        var connection = new SqliteConnection(ExistingConnectionString(mode));
+        try
+        {
+            await connection.OpenAsync(cancellationToken);
+            return connection;
+        }
+        catch (SqliteException ex) when (ex.SqliteErrorCode == 14 && IsConfirmedMissing())
+        {
+            await connection.DisposeAsync();
+            return null;
+        }
+        catch
+        {
+            await connection.DisposeAsync();
+            throw;
+        }
+    }
+
+    private bool IsConfirmedMissing()
+    {
+        try
+        {
+            _ = File.GetAttributes(_dbPath);
+            return false;
+        }
+        catch (FileNotFoundException)
+        {
+            return true;
+        }
+        catch (DirectoryNotFoundException)
+        {
+            return true;
+        }
     }
 }

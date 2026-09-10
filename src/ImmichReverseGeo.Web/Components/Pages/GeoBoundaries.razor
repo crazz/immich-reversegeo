@@ -47,6 +47,10 @@
         {
             <div>Active: cache maintenance</div>
         }
+        else if (deletion.Result?.BusyOwner is ExclusiveHeavyOwnerBusyMetadata.DatabaseMaintenance)
+        {
+            <div>Active: database maintenance</div>
+        }
     </div>
     @if (deletion.ReloadError is not null)
     {
@@ -74,6 +78,10 @@
         else if (mutation.BusyOwner is ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance)
         {
             <div>Active: cache maintenance</div>
+        }
+        else if (mutation.BusyOwner is ExclusiveHeavyOwnerBusyMetadata.DatabaseMaintenance)
+        {
+            <div>Active: database maintenance</div>
         }
         @if (mutation.CanCancel)
         {

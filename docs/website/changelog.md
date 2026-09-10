@@ -10,6 +10,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 ## Unreleased
 
+- Immich location resets and skip-list clearing now share the app's local work slot with processing, Lookup, and cache maintenance. The pages show actual results for Immich and the skip list, keep partial outcomes visible, and can retry only failed skip-list cleanup. See [Resetting Immich location data](./using-the-app.md#resetting-immich-location-data).
 - The Administrative Areas cache table now reads lightweight file metadata and shows cache status and last-modified time instead of scanning every cache for an area count. In-progress, invalid, unreadable, unsafe, and truncated storage states are shown directly. See [Data tools](./using-the-app.md#administrative-cache-inventory).
 - Administrative cache deletion now checks the app's local work slot, confirms the source, reports each file outcome, and refuses linked cache paths. Busy requests fail immediately and can be retried after the active operation finishes. See [Data tools](./using-the-app.md#deleting-administrative-caches).
 - Country detection now keeps supported territories as their own country identity instead of replacing them with the administering country.

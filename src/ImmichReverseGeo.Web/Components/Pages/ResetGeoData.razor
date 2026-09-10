@@ -1,8 +1,9 @@
 @page "/data/reset-geo-data"
 @rendermode InteractiveServer
 @using System.Linq
-@inject ImmichDbRepository Db
-@inject SkippedAssetsRepository Skipped
+@implements IAsyncDisposable
+@inject ILocationValueOptionsReader Db
+@inject IDatabaseMaintenanceController Maintenance
 
 <h2>Reset Immich Geo Data</h2>
 
@@ -21,19 +22,15 @@
             {
                 <p class="alert alert-error">This will clear reverse geo location data for every matching asset. It does not touch any other metadata. Continue?</p>
                 <div class="btn-row">
-                    <button @onclick="ResetAllConfirmed" class="btn btn-primary">Yes, reset all geo data</button>
-                    <button @onclick="CancelResetAll" class="btn btn-secondary">Cancel</button>
+                    <button @onclick="ResetAllConfirmed" class="btn btn-primary" disabled="@_operationActive">Yes, reset all geo data</button>
+                    <button @onclick="CancelResetAll" class="btn btn-secondary" disabled="@_operationActive">Cancel</button>
                 </div>
             }
             else
             {
                 <div class="btn-row">
-                    <button @onclick="BeginResetAll" class="btn btn-secondary">Reset All Data…</button>
+                    <button @onclick="BeginResetAll" class="btn btn-secondary" disabled="@_operationActive">Reset All Data…</button>
                 </div>
-            }
-            @if (_resetAllResult is not null)
-            {
-                <p class="alert alert-success">@_resetAllResult</p>
             }
         </div>
 
@@ -45,24 +42,17 @@
                 <textarea id="asset-reset-ids"
                           class="form-control reset-textarea"
                           @bind="_assetIdsInput"
+                          disabled="@_operationActive"
                           placeholder="Paste one or more asset GUIDs, separated by commas, spaces, or new lines"></textarea>
                 <div class="hint">Example: <code>f3f2d7e3-0e29-4e11-9d2a-7cb0dc7d97f1</code></div>
             </div>
             <div class="btn-row">
                 <button @onclick="ResetSelectedAssetsAsync"
                         class="btn btn-secondary"
-                        disabled="@string.IsNullOrWhiteSpace(_assetIdsInput)">
+                        disabled="@(_operationActive || string.IsNullOrWhiteSpace(_assetIdsInput))">
                     Reset Selected Items
                 </button>
             </div>
-            @if (_singleResetError is not null)
-            {
-                <p class="alert alert-error">@_singleResetError</p>
-            }
-            @if (_singleResetResult is not null)
-            {
-                <p class="alert alert-success">@_singleResetResult</p>
-            }
         </div>
 
         <div class="reset-option-card">
@@ -74,7 +64,7 @@
             <div class="reset-select-grid">
                 <div class="form-group">
                     <label for="reset-scope">Reset By</label>
-                    <select id="reset-scope" class="form-control" value="@_selectedLocationScope" @onchange="OnLocationScopeChanged">
+                    <select id="reset-scope" class="form-control" value="@_selectedLocationScope" @onchange="OnLocationScopeChanged" disabled="@_operationActive">
                         @foreach (var scope in Enum.GetValues<LocationResetScope>())
                         {
                             <option value="@scope">@GetScopeDisplayName(scope)</option>
@@ -83,7 +73,7 @@
                 </div>
                 <div class="form-group">
                     <label for="reset-location-sort">Sort Locations</label>
-                    <select id="reset-location-sort" class="form-control" value="@_locationSortMode" @onchange="OnLocationSortChanged">
+                    <select id="reset-location-sort" class="form-control" value="@_locationSortMode" @onchange="OnLocationSortChanged" disabled="@_operationActive">
                         @foreach (var sortMode in Enum.GetValues<LocationValueSortMode>())
                         {
                             <option value="@sortMode">@GetSortModeDisplayName(sortMode)</option>
@@ -95,7 +85,7 @@
                     <select id="reset-location-value"
                             class="form-control"
                             @bind="_selectedLocationValue"
-                            disabled="@(CurrentLocationOptions.Count == 0)">
+                            disabled="@(_operationActive || CurrentLocationOptions.Count == 0)">
                         @if (CurrentLocationOptions.Count == 0)
                         {
                             <option value="">No @(GetScopeDisplayName(_selectedLocationScope).ToLowerInvariant()) values found</option>
@@ -114,29 +104,53 @@
             <div class="btn-row">
                 <button @onclick="ResetSelectedLocationAsync"
                         class="btn btn-secondary"
-                        disabled="@string.IsNullOrWhiteSpace(_selectedLocationValue)">
+                        disabled="@(_operationActive || string.IsNullOrWhiteSpace(_selectedLocationValue))">
                     Reset Matching @GetScopeDisplayName(_selectedLocationScope)
                 </button>
             </div>
-            @if (_locationResetError is not null)
-            {
-                <p class="alert alert-error">@_locationResetError</p>
-            }
-            @if (_locationResetResult is not null)
-            {
-                <p class="alert alert-success">@_locationResetResult</p>
-            }
         </div>
     </div>
+    @if (_operationActive && _maintenanceResult is null && _retryResult is null)
+    {
+        <div class="alert alert-info" role="status" aria-live="polite">
+            Database maintenance is running. This operation cannot be cancelled.
+        </div>
+    }
+    @if (_maintenanceResult is not null)
+    {
+        <div class="alert @MaintenanceAlertClass" role="status" aria-live="polite">
+            @_maintenanceResult.Message
+        </div>
+        @if (CanRetrySkippedCleanup)
+        {
+            <div class="btn-row">
+                <button @onclick="RetrySkippedCleanupAsync" class="btn btn-secondary" disabled="@_operationActive">
+                    Retry Skip List Cleanup
+                </button>
+            </div>
+        }
+    }
+    @if (_retryResult is not null)
+    {
+        <div class="alert @RetryAlertClass" role="status" aria-live="polite">@_retryResult.Message</div>
+    }
+    @if (_reloadError is not null)
+    {
+        <div class="alert alert-error" role="status" aria-live="polite">
+            @_reloadError
+            <button @onclick="ReloadLocationOptionsAsync" class="btn btn-secondary" disabled="@_operationActive">Reload Locations</button>
+        </div>
+    }
 </section>
 
 @code {
     private bool _resetAllConfirm;
-    private string? _resetAllResult;
-    private string? _singleResetResult;
-    private string? _singleResetError;
-    private string? _locationResetResult;
-    private string? _locationResetError;
+    private DatabaseMaintenanceResult? _maintenanceResult;
+    private DatabaseMaintenanceResult? _retryResult;
+    private string? _reloadError;
+    private bool _operationActive;
+    private bool _disposed;
+    private long _generation;
     private string? _assetIdsInput;
     private LocationResetScope _selectedLocationScope = LocationResetScope.City;
     private LocationValueSortMode _locationSortMode = LocationValueSortMode.AssetCount;
@@ -162,7 +176,6 @@
     private void BeginResetAll()
     {
         _resetAllConfirm = true;
-        _resetAllResult = null;
     }
 
     private void CancelResetAll()
@@ -172,80 +185,153 @@
 
     private async Task ResetAllConfirmed()
     {
+        bool confirmed = _resetAllConfirm;
         _resetAllConfirm = false;
-        _singleResetResult = null;
-        _singleResetError = null;
-        _locationResetResult = null;
-        _locationResetError = null;
-
-        var rows = await Db.ClearAllLocationDataAsync();
-        await Skipped.ClearAllAsync();
-        await LoadLocationOptionsAsync();
-
-        _resetAllResult = $"Cleared reverse geo data from {rows:N0} asset(s). Skip list also cleared. Ready to reprocess.";
+        await RunMaintenanceAsync(new DatabaseMaintenanceRequest.ResetAll(confirmed));
     }
 
     private async Task ResetSelectedAssetsAsync()
     {
-        _resetAllResult = null;
-        _singleResetResult = null;
-        _singleResetError = null;
-        _locationResetResult = null;
-        _locationResetError = null;
-
-        var (assetIds, invalidTokens) = ParseAssetIds(_assetIdsInput);
-        if (assetIds.Count == 0)
-        {
-            _singleResetError = invalidTokens.Count > 0
-                ? $"No valid asset GUIDs were found. Invalid token(s): {FormatInvalidTokens(invalidTokens)}"
-                : "Paste at least one asset GUID to reset.";
-            return;
-        }
-
-        var clearedIds = await Db.ClearLocationDataForAssetsAsync(assetIds);
-        var removedSkipped = await Skipped.RemoveAsync(assetIds);
-        await LoadLocationOptionsAsync();
-
-        var invalidSuffix = invalidTokens.Count > 0
-            ? $" Ignored {invalidTokens.Count:N0} invalid token(s): {FormatInvalidTokens(invalidTokens)}."
-            : string.Empty;
-
-        _singleResetResult = clearedIds.Count > 0
-            ? $"Cleared reverse geo data for {clearedIds.Count:N0} asset(s). Removed {removedSkipped:N0} matching asset(s) from the skip list.{invalidSuffix}"
-            : $"No reverse geo fields were set for the selected asset IDs. Removed {removedSkipped:N0} matching asset(s) from the skip list.{invalidSuffix}";
+        await RunMaintenanceAsync(new DatabaseMaintenanceRequest.ResetSelected(_assetIdsInput));
     }
 
     private async Task ResetSelectedLocationAsync()
     {
-        _resetAllResult = null;
-        _singleResetResult = null;
-        _singleResetError = null;
-        _locationResetResult = null;
-        _locationResetError = null;
+        await RunMaintenanceAsync(new DatabaseMaintenanceRequest.ResetMatching(
+            _selectedLocationScope,
+            _selectedLocationValue));
+    }
 
-        if (string.IsNullOrWhiteSpace(_selectedLocationValue))
+    private async Task RunMaintenanceAsync(DatabaseMaintenanceRequest request)
+    {
+        if (_operationActive || _disposed)
         {
-            _locationResetError = $"Select a {GetScopeDisplayName(_selectedLocationScope).ToLowerInvariant()} value to reset.";
             return;
         }
 
-        var selectedValue = _selectedLocationValue;
-        var clearedIds = await Db.ClearLocationDataByValueAsync(_selectedLocationScope, selectedValue);
-        var removedSkipped = await Skipped.RemoveAsync(clearedIds);
-        await LoadLocationOptionsAsync();
+        long generation = ++_generation;
+        _operationActive = true;
+        _maintenanceResult = null;
+        _retryResult = null;
+        _reloadError = null;
+        try
+        {
+            DatabaseMaintenanceResult result = await Maintenance.ExecuteAsync(request);
+            if (!CanUpdate(generation))
+            {
+                return;
+            }
 
-        _locationResetResult = clearedIds.Count > 0
-            ? $"Cleared reverse geo data for {clearedIds.Count:N0} asset(s) matching {GetScopeDisplayName(_selectedLocationScope).ToLowerInvariant()} \"{selectedValue}\". Removed {removedSkipped:N0} matching asset(s) from the skip list."
-            : $"No reverse geo fields were set for assets matching {GetScopeDisplayName(_selectedLocationScope).ToLowerInvariant()} \"{selectedValue}\".";
+            _maintenanceResult = result;
+            if (result.WasAdmitted)
+            {
+                await ReloadAfterFinalizationAsync(generation);
+            }
+        }
+        finally
+        {
+            if (CanUpdate(generation))
+            {
+                _operationActive = false;
+            }
+        }
     }
 
-    private async Task LoadLocationOptionsAsync()
+    private async Task RetrySkippedCleanupAsync()
+    {
+        SkippedCleanupRetryCapability? retry = _maintenanceResult?.Retry;
+        if (retry is null || _operationActive || _disposed)
+        {
+            return;
+        }
+
+        long generation = ++_generation;
+        _operationActive = true;
+        _retryResult = null;
+        _reloadError = null;
+        try
+        {
+            DatabaseMaintenanceResult result = await Maintenance.RetrySkippedCleanupAsync(retry);
+            if (!CanUpdate(generation))
+            {
+                return;
+            }
+
+            _retryResult = result;
+            if (result.WasAdmitted)
+            {
+                await ReloadAfterFinalizationAsync(generation);
+            }
+        }
+        finally
+        {
+            if (CanUpdate(generation))
+            {
+                _operationActive = false;
+            }
+        }
+    }
+
+    private async Task ReloadAfterFinalizationAsync(long generation)
+    {
+        try
+        {
+            await LoadLocationOptionsAsync(generation);
+        }
+        catch
+        {
+            if (CanUpdate(generation))
+            {
+                _reloadError = "The reset result is final, but current location values could not be reloaded.";
+            }
+        }
+    }
+
+    private async Task ReloadLocationOptionsAsync()
+    {
+        if (_operationActive || _disposed)
+        {
+            return;
+        }
+
+        long generation = ++_generation;
+        _operationActive = true;
+        _reloadError = null;
+        try
+        {
+            await LoadLocationOptionsAsync(generation);
+        }
+        catch
+        {
+            if (CanUpdate(generation))
+            {
+                _reloadError = "Current location values could not be reloaded.";
+            }
+        }
+        finally
+        {
+            if (CanUpdate(generation))
+            {
+                _operationActive = false;
+            }
+        }
+    }
+
+    private bool CanUpdate(long generation) => !_disposed && generation == _generation;
+
+    private async Task LoadLocationOptionsAsync(long? expectedGeneration = null)
     {
         var cityTask = Db.GetLocationValueOptionsAsync(LocationResetScope.City);
         var stateTask = Db.GetLocationValueOptionsAsync(LocationResetScope.State);
         var countryTask = Db.GetLocationValueOptionsAsync(LocationResetScope.Country);
 
         await Task.WhenAll(cityTask, stateTask, countryTask);
+
+        if (_disposed
+            || expectedGeneration is not null && expectedGeneration != _generation)
+        {
+            return;
+        }
 
         _cityOptions = cityTask.Result;
         _stateOptions = stateTask.Result;
@@ -287,48 +373,6 @@
         }
     }
 
-    private static (List<Guid> AssetIds, List<string> InvalidTokens) ParseAssetIds(string? input)
-    {
-        var assetIds = new List<Guid>();
-        var invalidTokens = new List<string>();
-        var seen = new HashSet<Guid>();
-
-        if (string.IsNullOrWhiteSpace(input))
-        {
-            return (assetIds, invalidTokens);
-        }
-
-        var tokens = input.Split(
-            ['\r', '\n', ',', ';', ' ', '\t'],
-            StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-
-        foreach (var token in tokens)
-        {
-            if (Guid.TryParse(token, out var assetId))
-            {
-                if (seen.Add(assetId))
-                {
-                    assetIds.Add(assetId);
-                }
-            }
-            else
-            {
-                invalidTokens.Add(token);
-            }
-        }
-
-        return (assetIds, invalidTokens);
-    }
-
-    private static string FormatInvalidTokens(IReadOnlyList<string> invalidTokens)
-    {
-        const int maxPreview = 5;
-        var preview = invalidTokens.Take(maxPreview);
-        return invalidTokens.Count > maxPreview
-            ? $"{string.Join(", ", preview)}, ..."
-            : string.Join(", ", preview);
-    }
-
     private static string GetScopeDisplayName(LocationResetScope scope) =>
         scope switch
         {
@@ -358,6 +402,29 @@
             LocationValueSortMode.Name => "Name",
             _ => "Number Of Assets"
         };
+
+    private string MaintenanceAlertClass => _maintenanceResult?.Disposition switch
+    {
+        DatabaseMaintenanceDisposition.Complete => "alert-success",
+        DatabaseMaintenanceDisposition.Partial => "alert-error",
+        _ => "alert-error"
+    };
+
+    private string RetryAlertClass => _retryResult?.Disposition == DatabaseMaintenanceDisposition.Complete
+        ? "alert-success"
+        : "alert-error";
+
+    private bool CanRetrySkippedCleanup =>
+        _maintenanceResult?.Disposition == DatabaseMaintenanceDisposition.Partial
+        && _maintenanceResult.Retry is not null
+        && _retryResult?.Disposition != DatabaseMaintenanceDisposition.Complete;
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _generation++;
+        return ValueTask.CompletedTask;
+    }
 
     private enum LocationValueSortMode
     {

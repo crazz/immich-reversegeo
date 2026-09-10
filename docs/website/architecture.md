@@ -41,7 +41,7 @@ The background processor:
 
 Heavy jobs such as asset processing and coordinate Lookup run in an isolated child process. Administrative cache deletion runs directly in the Web process, but reserves the same local slot while it removes the final cache files. A busy request is rejected immediately and can be tried again after the active operation finishes.
 
-This slot is local to each web container. If you run multiple web containers, an operation in one container can overlap processing, Lookup, cache refresh, or cache deletion in another container. Asset processing also keeps its PostgreSQL advisory lock, which prevents two processing workers from updating Immich at the same time across containers. Run one interactive web container if you need strict exclusion while changing a shared cache volume.
+This slot is local to each web container. If you run multiple web containers, an operation in one container can overlap processing, Lookup, cache refresh, cache deletion, or database reset in another container. Asset processing also keeps its PostgreSQL advisory lock, which prevents two processing workers from updating Immich at the same time across containers; database resets do not broaden that processing-only lock. Run one interactive web container with no independent writer if you need strict exclusion while changing shared caches, Immich location fields, or the skip list.
 
 ### Active data sources
 

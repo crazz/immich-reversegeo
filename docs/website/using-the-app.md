@@ -91,7 +91,17 @@ Cache refreshes share one heavy-work slot with processing and Lookup in each run
 
 If download, export, validation, or publication preparation fails, the existing valid cache remains available. Cancelling before publication also keeps that cache. If cancellation arrives just after a validated replacement was published, the refresh can still end as cancelled while the new valid cache appears after the page reloads its actual status. A cancelled attempt is never reported as successful.
 
-The Reset Immich Geo Data page only clears reverse geo values in `asset_exif`. It does not touch any other Immich metadata.
+### Resetting Immich location data
+
+The **Reset Immich Geo Data** page only clears `city`, `state`, and `country` in Immich's location records. It does not delete assets, change other metadata, or modify downloaded geographic caches. Make a database backup before resetting a large library.
+
+**Reset All Data** keeps its confirmation step and also clears the complete skip list. **Reset Selected Items** accepts asset GUIDs separated by spaces, commas, semicolons, or lines; duplicates are handled once, malformed values are reported, and at least one valid GUID is required. Its skip-list cleanup includes every valid requested ID, even when an asset already had no location value to clear. **Reset Matching City**, **Reset Matching State**, and **Reset Matching Country** use the exact selected value, consider non-deleted assets, and clean skipped tracking only for records actually cleared. Reset All Data and Reset Selected Items keep their broader existing asset scope. Matching resets need no extra confirmation. The Data-page **Clear Skip List** changes only skipped-asset tracking and also needs no confirmation.
+
+Reset work shares the same local slot as processing, Lookup, cache refresh, and cache deletion. A busy request fails immediately and is not queued. Once a reset starts, its controls stay disabled until the database work and result are final; there is no Cancel action. The page then reloads its location choices or skipped count from storage.
+
+Immich is updated first and the skip list second. A completed result shows the actual count for each store. If Immich commits but the skip-list update fails, the result remains partial and offers **Retry Skip List Cleanup**. That retry does not repeat the Immich update. Permission, read-only, connection, or storage failures are shown separately, and a later reload failure does not replace the completed mutation result.
+
+This coordination applies within one Standard or Web-only Web process. For strict exclusion during a reset, run one interactive Web container and do not run a separate run-once process, private worker, database client, or direct `skipped.db` writer at the same time.
 
 ## Logs
 

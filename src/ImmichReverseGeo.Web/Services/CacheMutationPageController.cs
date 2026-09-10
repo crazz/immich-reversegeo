@@ -305,9 +305,14 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             WorkerJobAdmissionResult admission = _admission.TryAdmit(dispatch);
             if (admission is WorkerJobAdmissionResult.Busy busy)
             {
-                string message = busy.ActiveOwner is ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance
-                    ? "Cache maintenance is in progress. Try again after it finishes."
-                    : "Another worker job is active. Try again after it finishes.";
+                string message = busy.ActiveOwner switch
+                {
+                    ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance =>
+                        "Cache maintenance is in progress. Try again after it finishes.",
+                    ExclusiveHeavyOwnerBusyMetadata.DatabaseMaintenance =>
+                        "Database maintenance is in progress. Try again after it finishes.",
+                    _ => "Another worker job is active. Try again after it finishes."
+                };
                 SetRejected(generation, CacheMutationPagePhase.Busy,
                     message, busy.ActiveOwner);
                 return;

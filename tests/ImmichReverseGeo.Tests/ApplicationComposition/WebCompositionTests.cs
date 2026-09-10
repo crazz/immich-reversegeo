@@ -1,6 +1,8 @@
 using System.Text.Json;
+using System.Reflection;
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Composition;
@@ -38,6 +40,12 @@ public sealed class WebCompositionTests
                 typeof(ProcessingState),
                 typeof(IProcessAssetsWebStatus),
                 typeof(IManualProcessingRunCoordinator),
+                typeof(DatabaseMaintenanceController),
+                typeof(IDatabaseMaintenanceController),
+                typeof(IImmichLocationResetStore),
+                typeof(ILocationValueOptionsReader),
+                typeof(ISkippedAssetsMaintenanceStore),
+                typeof(ISkippedAssetsCountReader),
                 typeof(ImmichDbRepository),
                 typeof(SkippedAssetsRepository),
                 typeof(GadmDivisionsService),
@@ -65,6 +73,68 @@ public sealed class WebCompositionTests
 
             using var provider = services.BuildServiceProvider();
             Assert.AreEqual("ImmichReverseGeo", provider.GetRequiredService<IOptions<DataProtectionOptions>>().Value.ApplicationDiscriminator, "data-protection-application-name");
+        }
+        finally
+        {
+            DeleteFixture(fixtureRoot);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change54")]
+    public void WebComposition_ResolvesOneDatabaseMaintenanceOwnerAndExistingRepositoryAliases()
+    {
+        var fixtureRoot = CreateBundledIdentityFixture();
+        try
+        {
+            var services = CreateWebServices(
+                fixtureRoot,
+                Path.Combine(fixtureRoot, "data"),
+                Path.Combine(fixtureRoot, "config"));
+            using ServiceProvider provider = services.BuildServiceProvider();
+
+            Assert.AreSame(
+                provider.GetRequiredService<DatabaseMaintenanceController>(),
+                provider.GetRequiredService<IDatabaseMaintenanceController>());
+            Assert.AreSame(
+                provider.GetRequiredService<ImmichDbRepository>(),
+                provider.GetRequiredService<IImmichLocationResetStore>());
+            Assert.AreSame(
+                provider.GetRequiredService<ImmichDbRepository>(),
+                provider.GetRequiredService<ILocationValueOptionsReader>());
+            Assert.AreSame(
+                provider.GetRequiredService<SkippedAssetsRepository>(),
+                provider.GetRequiredService<ISkippedAssetsMaintenanceStore>());
+            Assert.AreSame(
+                provider.GetRequiredService<SkippedAssetsRepository>(),
+                provider.GetRequiredService<ISkippedAssetsCountReader>());
+            Assert.AreSame(
+                provider.GetRequiredService<WorkerJobCoordinator>(),
+                provider.GetRequiredService<IWorkerJobAdmissionGate>());
+            Assert.HasCount(0, typeof(DatabaseMaintenanceOperation).Assembly
+                .GetTypes()
+                .Where(type => typeof(WorkerJobDispatch).IsAssignableFrom(type)
+                    && type.Name.Contains("DatabaseMaintenance", StringComparison.Ordinal)));
+            Type[] controllerDependencies = typeof(DatabaseMaintenanceController)
+                .GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .SelectMany(constructor => constructor.GetParameters())
+                .Select(parameter => parameter.ParameterType)
+                .Distinct()
+                .ToArray();
+            Assert.IsTrue(controllerDependencies.Contains(typeof(WorkerJobCoordinator)));
+            Assert.IsTrue(controllerDependencies.Contains(typeof(IImmichLocationResetStore)));
+            Assert.IsTrue(controllerDependencies.Contains(typeof(ISkippedAssetsMaintenanceStore)));
+            Assert.IsFalse(controllerDependencies.Any(type =>
+                typeof(ProcessingState).IsAssignableFrom(type)
+                || type.Name.Contains("WorkerClient", StringComparison.Ordinal)
+                || type.Name.Contains("Geodata", StringComparison.Ordinal)
+                || type.Namespace?.Contains("Overture", StringComparison.Ordinal) == true
+                || type.Namespace?.Contains("Gadm", StringComparison.Ordinal) == true));
+            Assert.HasCount(0, typeof(IDatabaseMaintenanceController)
+                .GetMethods()
+                .SelectMany(method => method.GetParameters())
+                .Where(parameter => parameter.ParameterType == typeof(string)
+                    && parameter.Name is "path" or "connectionString"));
         }
         finally
         {

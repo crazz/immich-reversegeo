@@ -58,6 +58,16 @@ internal sealed record CacheMaintenanceBusyMetadata(
     CacheMaintenanceRequestOrigin Origin,
     DateTimeOffset AdmittedAtUtc);
 
+internal enum DatabaseMaintenanceRequestOrigin
+{
+    ResetGeoDataPage,
+    DataPage
+}
+
+internal sealed record DatabaseMaintenanceBusyMetadata(
+    DatabaseMaintenanceRequestOrigin Origin,
+    DateTimeOffset AdmittedAtUtc);
+
 internal abstract record ExclusiveHeavyOwnerBusyMetadata
 {
     private ExclusiveHeavyOwnerBusyMetadata()
@@ -66,6 +76,7 @@ internal abstract record ExclusiveHeavyOwnerBusyMetadata
 
     internal sealed record Worker(WorkerJobBusyMetadata Job) : ExclusiveHeavyOwnerBusyMetadata;
     internal sealed record CacheMaintenance(CacheMaintenanceBusyMetadata Operation) : ExclusiveHeavyOwnerBusyMetadata;
+    internal sealed record DatabaseMaintenance(DatabaseMaintenanceBusyMetadata Operation) : ExclusiveHeavyOwnerBusyMetadata;
 }
 
 internal sealed record WorkerJobArbitrationDiagnosticSnapshot(
@@ -87,6 +98,10 @@ internal sealed record CacheMaintenanceOwnerSnapshot(
     CacheMaintenanceRequestOrigin Origin,
     DateTimeOffset AdmittedAtUtc);
 
+internal sealed record DatabaseMaintenanceOwnerSnapshot(
+    DatabaseMaintenanceRequestOrigin Origin,
+    DateTimeOffset AdmittedAtUtc);
+
 internal abstract record ExclusiveHeavyOwnerSnapshot
 {
     private ExclusiveHeavyOwnerSnapshot()
@@ -95,6 +110,7 @@ internal abstract record ExclusiveHeavyOwnerSnapshot
 
     internal sealed record Worker(WorkerJobOwnerSnapshot Job) : ExclusiveHeavyOwnerSnapshot;
     internal sealed record CacheMaintenance(CacheMaintenanceOwnerSnapshot Operation) : ExclusiveHeavyOwnerSnapshot;
+    internal sealed record DatabaseMaintenance(DatabaseMaintenanceOwnerSnapshot Operation) : ExclusiveHeavyOwnerSnapshot;
 }
 
 internal interface IWorkerJobArbitrationDiagnostics
@@ -124,6 +140,10 @@ internal interface ICacheMaintenanceReservation : IAsyncDisposable
 {
 }
 
+internal interface IDatabaseMaintenanceReservation : IAsyncDisposable
+{
+}
+
 internal abstract record WorkerJobAdmissionResult
 {
     private WorkerJobAdmissionResult()
@@ -144,6 +164,17 @@ internal abstract record CacheMaintenanceAdmissionResult
     internal sealed record Reserved(ICacheMaintenanceReservation Reservation) : CacheMaintenanceAdmissionResult;
     internal sealed record Busy(ExclusiveHeavyOwnerBusyMetadata ActiveOwner) : CacheMaintenanceAdmissionResult;
     internal sealed record Unavailable(string Code, string Message) : CacheMaintenanceAdmissionResult;
+}
+
+internal abstract record DatabaseMaintenanceAdmissionResult
+{
+    private DatabaseMaintenanceAdmissionResult()
+    {
+    }
+
+    internal sealed record Admitted(IDatabaseMaintenanceReservation Reservation) : DatabaseMaintenanceAdmissionResult;
+    internal sealed record Busy(ExclusiveHeavyOwnerBusyMetadata ActiveOwner) : DatabaseMaintenanceAdmissionResult;
+    internal sealed record Unavailable(string Code, string Message) : DatabaseMaintenanceAdmissionResult;
 }
 
 internal interface IWorkerJobAdmissionGate
@@ -281,16 +312,64 @@ internal sealed class WorkerJobCoordinator :
             }
             else
             {
+                DateTimeOffset admittedAtUtc = _timeProvider.GetUtcNow().ToUniversalTime();
                 var reservation = new MaintenanceReservation(
                     this,
-                    origin,
-                    _timeProvider.GetUtcNow().ToUniversalTime());
+                    new ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance(
+                        new CacheMaintenanceBusyMetadata(origin, admittedAtUtc)),
+                    new ExclusiveHeavyOwnerSnapshot.CacheMaintenance(
+                        new CacheMaintenanceOwnerSnapshot(origin, admittedAtUtc)));
                 _active = reservation;
                 result = new CacheMaintenanceAdmissionResult.Reserved(reservation);
             }
         }
 
         if (result is CacheMaintenanceAdmissionResult.Reserved)
+        {
+            NotifyChanged();
+        }
+
+        return result;
+    }
+
+    internal DatabaseMaintenanceAdmissionResult TryReserveDatabaseMaintenance(
+        DatabaseMaintenanceRequestOrigin origin)
+    {
+        if (!Enum.IsDefined(origin))
+        {
+            return new DatabaseMaintenanceAdmissionResult.Unavailable(
+                "database-maintenance-origin",
+                "The requested database maintenance operation is not available in this Web host.");
+        }
+
+        DatabaseMaintenanceAdmissionResult result;
+        lock (_gate)
+        {
+            if (!_admissionOpen)
+            {
+                result = new DatabaseMaintenanceAdmissionResult.Unavailable(
+                    "database-maintenance-stopped",
+                    "Database maintenance is unavailable while the Web host is stopping.");
+            }
+            else if (_active is not null)
+            {
+                result = new DatabaseMaintenanceAdmissionResult.Busy(_active.SafeSnapshotUnderGate);
+            }
+            else
+            {
+                DateTimeOffset admittedAtUtc = _timeProvider.GetUtcNow().ToUniversalTime();
+                var reservation = new MaintenanceReservation(
+                    this,
+                    new ExclusiveHeavyOwnerBusyMetadata.DatabaseMaintenance(
+                        new DatabaseMaintenanceBusyMetadata(origin, admittedAtUtc)),
+                    new ExclusiveHeavyOwnerSnapshot.DatabaseMaintenance(
+                        new DatabaseMaintenanceOwnerSnapshot(origin, admittedAtUtc)));
+                _active = reservation;
+                result = new DatabaseMaintenanceAdmissionResult.Admitted(reservation);
+            }
+        }
+
+        if (result is DatabaseMaintenanceAdmissionResult.Admitted)
         {
             NotifyChanged();
         }
@@ -742,33 +821,33 @@ internal sealed class WorkerJobCoordinator :
         }
     }
 
-    private sealed class MaintenanceReservation : ActiveOwnerState, ICacheMaintenanceReservation
+    private sealed class MaintenanceReservation :
+        ActiveOwnerState,
+        ICacheMaintenanceReservation,
+        IDatabaseMaintenanceReservation
     {
         private readonly WorkerJobCoordinator _owner;
+        private readonly ExclusiveHeavyOwnerBusyMetadata _busyMetadata;
+        private readonly ExclusiveHeavyOwnerSnapshot _ownerSnapshot;
         private readonly TaskCompletionSource _released =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _releasedState;
 
         internal MaintenanceReservation(
             WorkerJobCoordinator owner,
-            CacheMaintenanceRequestOrigin origin,
-            DateTimeOffset admittedAtUtc)
+            ExclusiveHeavyOwnerBusyMetadata busyMetadata,
+            ExclusiveHeavyOwnerSnapshot ownerSnapshot)
         {
             _owner = owner;
-            Origin = origin;
-            AdmittedAtUtc = admittedAtUtc;
+            _busyMetadata = busyMetadata;
+            _ownerSnapshot = ownerSnapshot;
         }
 
-        private CacheMaintenanceRequestOrigin Origin { get; }
-        private DateTimeOffset AdmittedAtUtc { get; }
-
         internal override ExclusiveHeavyOwnerBusyMetadata SafeSnapshotUnderGate =>
-            new ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance(
-                new CacheMaintenanceBusyMetadata(Origin, AdmittedAtUtc));
+            _busyMetadata;
 
         internal override ExclusiveHeavyOwnerSnapshot OwnerSnapshotUnderGate =>
-            new ExclusiveHeavyOwnerSnapshot.CacheMaintenance(
-                new CacheMaintenanceOwnerSnapshot(Origin, AdmittedAtUtc));
+            _ownerSnapshot;
 
         public ValueTask DisposeAsync()
         {

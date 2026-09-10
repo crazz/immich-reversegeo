@@ -1,8 +1,10 @@
 @page "/data"
 @rendermode InteractiveServer
 @using ImmichReverseGeo.Core.WorkerJobs
+@implements IAsyncDisposable
 @inject ICacheInventory CacheInventory
-@inject SkippedAssetsRepository Skipped
+@inject ISkippedAssetsCountReader Skipped
+@inject IDatabaseMaintenanceController Maintenance
 
 <h2>Data Management</h2>
 
@@ -32,19 +34,36 @@
        to prevent endless retries. Clear the list to re-attempt them on the next run.</p>
     <p>@_skippedCount asset(s) permanently skipped.</p>
     <div class="btn-row">
-        <button @onclick="ClearSkipped" class="btn btn-secondary" disabled="@(_skippedCount == 0)">
+        <button @onclick="ClearSkipped" class="btn btn-secondary" disabled="@(_skipOperationActive || _skippedCount == 0)">
             Clear Skip List
         </button>
     </div>
+    @if (_skipOperationActive && _skipClearResult is null)
+    {
+        <p class="alert alert-info" role="status" aria-live="polite">
+            Skip-list maintenance is running. This operation cannot be cancelled.
+        </p>
+    }
     @if (_skipClearResult is not null)
     {
-        <p class="alert alert-success">@_skipClearResult</p>
+        <p class="alert @SkipAlertClass" role="status" aria-live="polite">@_skipClearResult.Message</p>
+    }
+    @if (_skipReloadError is not null)
+    {
+        <div class="alert alert-error" role="status" aria-live="polite">
+            @_skipReloadError
+            <button @onclick="ReloadSkippedCountAsync" class="btn btn-secondary" disabled="@_skipOperationActive">Reload Count</button>
+        </div>
     }
 </section>
 
 @code {
     private long _skippedCount;
-    private string? _skipClearResult;
+    private DatabaseMaintenanceResult? _skipClearResult;
+    private string? _skipReloadError;
+    private bool _skipOperationActive;
+    private bool _disposed;
+    private long _generation;
     private int _overtureDivisionCountryCount;
     private int _gadmDivisionCountryCount;
     private IReadOnlyList<string> _inventoryWarnings = Array.Empty<string>();
@@ -56,10 +75,92 @@
 
     private async Task ClearSkipped()
     {
-        var prev = _skippedCount;
-        await Skipped.ClearAllAsync();
-        _skippedCount = 0;
-        _skipClearResult = $"Cleared {prev:N0} skipped asset(s). They will be retried on the next run.";
+        if (_skipOperationActive || _disposed)
+        {
+            return;
+        }
+
+        long generation = ++_generation;
+        _skipOperationActive = true;
+        _skipClearResult = null;
+        _skipReloadError = null;
+        try
+        {
+            DatabaseMaintenanceResult result = await Maintenance.ExecuteAsync(
+                new DatabaseMaintenanceRequest.ClearSkipList());
+            if (!CanUpdate(generation))
+            {
+                return;
+            }
+
+            _skipClearResult = result;
+            if (result.WasAdmitted)
+            {
+                await ReloadSkippedCountAsync(generation);
+            }
+        }
+        finally
+        {
+            if (CanUpdate(generation))
+            {
+                _skipOperationActive = false;
+            }
+        }
+    }
+
+    private async Task ReloadSkippedCountAsync()
+    {
+        if (_skipOperationActive || _disposed)
+        {
+            return;
+        }
+
+        long generation = ++_generation;
+        _skipOperationActive = true;
+        _skipReloadError = null;
+        try
+        {
+            await ReloadSkippedCountAsync(generation);
+        }
+        finally
+        {
+            if (CanUpdate(generation))
+            {
+                _skipOperationActive = false;
+            }
+        }
+    }
+
+    private async Task ReloadSkippedCountAsync(long generation)
+    {
+        try
+        {
+            long count = await Skipped.GetCountAsync();
+            if (CanUpdate(generation))
+            {
+                _skippedCount = count;
+            }
+        }
+        catch
+        {
+            if (CanUpdate(generation))
+            {
+                _skipReloadError = "The operation result is final, but the skipped-asset count could not be reloaded.";
+            }
+        }
+    }
+
+    private bool CanUpdate(long generation) => !_disposed && generation == _generation;
+
+    private string SkipAlertClass => _skipClearResult?.Disposition == DatabaseMaintenanceDisposition.Complete
+        ? "alert-success"
+        : "alert-error";
+
+    public ValueTask DisposeAsync()
+    {
+        _disposed = true;
+        _generation++;
+        return ValueTask.CompletedTask;
     }
 
     private async Task RefreshPageState()

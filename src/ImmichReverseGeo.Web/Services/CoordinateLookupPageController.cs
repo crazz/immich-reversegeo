@@ -685,7 +685,9 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             ? "another coordinate lookup"
             : busy is ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance
                 ? "cache maintenance"
-                : "another background job";
+                : busy is ExclusiveHeavyOwnerBusyMetadata.DatabaseMaintenance
+                    ? "database maintenance"
+                    : "another background job";
         lock (_gate)
         {
             if (!CanMutate(generation))

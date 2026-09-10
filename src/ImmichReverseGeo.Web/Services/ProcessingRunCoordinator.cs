@@ -339,6 +339,8 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
                 {
                     ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance =>
                         "Scheduled run skipped because cache maintenance is in progress.",
+                    ExclusiveHeavyOwnerBusyMetadata.DatabaseMaintenance =>
+                        "Scheduled run skipped because database maintenance is in progress.",
                     null or ExclusiveHeavyOwnerBusyMetadata.Worker
                     {
                         Job.CapabilityFamily: WorkerJobCapabilityFamily.Processing

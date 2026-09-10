@@ -89,6 +89,17 @@ internal static class WebServiceCollectionExtensions
         services.AddSingleton<IWorkerJobArbitrationDiagnostics>(sp =>
             sp.GetRequiredService<WorkerJobCoordinator>());
         services.AddHostedService(sp => sp.GetRequiredService<WorkerJobCoordinator>());
+        services.AddSingleton<IImmichLocationResetStore>(sp =>
+            sp.GetRequiredService<ImmichDbRepository>());
+        services.AddSingleton<ILocationValueOptionsReader>(sp =>
+            sp.GetRequiredService<ImmichDbRepository>());
+        services.AddSingleton<ISkippedAssetsMaintenanceStore>(sp =>
+            sp.GetRequiredService<SkippedAssetsRepository>());
+        services.AddSingleton<ISkippedAssetsCountReader>(sp =>
+            sp.GetRequiredService<SkippedAssetsRepository>());
+        services.AddSingleton<DatabaseMaintenanceController>();
+        services.AddSingleton<IDatabaseMaintenanceController>(sp =>
+            sp.GetRequiredService<DatabaseMaintenanceController>());
         services.AddSingleton<PhysicalCacheDeletionFileSystem>();
         services.AddSingleton<ICacheDeletionFileSystem>(sp =>
             sp.GetRequiredService<PhysicalCacheDeletionFileSystem>());
