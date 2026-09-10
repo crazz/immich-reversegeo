@@ -679,37 +679,6 @@ public class OvertureDivisionCacheServiceTests
     }
 
     [TestMethod]
-    public void DeleteFile_RemovesDbAndTempFiles()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var dbDir = Path.Combine(tempDir, "overture-divisions");
-        Directory.CreateDirectory(dbDir);
-        var dbPath = Path.Combine(dbDir, "CHE.db");
-        var tmpPath = Path.Combine(dbDir, "CHE.abc.tmp");
-        File.WriteAllText(dbPath, "db");
-        File.WriteAllText(tmpPath, "tmp");
-
-        try
-        {
-            var svc = new OvertureDivisionCacheService(
-                NullLogger<OvertureDivisionCacheService>.Instance,
-                tempDir,
-                _ => "CH");
-            svc.DeleteFile("CHE");
-
-            Assert.IsFalse(File.Exists(dbPath));
-            Assert.IsFalse(File.Exists(tmpPath));
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir))
-            {
-                Directory.Delete(tempDir, recursive: true);
-            }
-        }
-    }
-
-    [TestMethod]
     public async Task GetOrStartDownload_PreflightFailureIsRemovedAndRetryStartsNewTask()
     {
         var tempDir = CreateTempDir();
@@ -751,7 +720,7 @@ public class OvertureDivisionCacheServiceTests
             var (retry, _) = svc.GetOrStartDownload("CHE");
             source.Release();
             await retry;
-            svc.DeleteFile("CHE");
+            File.Delete(Path.Combine(tempDir, "overture-divisions", "CHE.db"));
 
             source.ResetGate();
             var (active, _) = svc.GetOrStartDownload("CHE");
@@ -911,7 +880,7 @@ public class OvertureDivisionCacheServiceTests
             var ready = svc.GetOrStartDownload("CHE");
             Assert.AreEqual(OvertureDivisionEnsureResult.AlreadyReady, ready.Result);
             Assert.AreEqual(1, source.InvocationCount);
-            svc.DeleteFile("CHE");
+            File.Delete(Path.Combine(tempDir, "overture-divisions", "CHE.db"));
             source.ResetGate();
             var (afterDeletion, afterDeletionResult) = svc.GetOrStartDownload("CHE");
             Assert.AreEqual(OvertureDivisionEnsureResult.StartedDownload, afterDeletionResult);

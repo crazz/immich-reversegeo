@@ -70,43 +70,11 @@ public sealed class HeavyCompositionPathTests
     }
 
     [TestMethod]
-    public void OvertureDivisionCache_DeletesOnlyConfiguredDataRoot()
+    [TestCategory("Change52")]
+    public void CacheServices_DoNotExposeUncoordinatedDeleteEntryPoints()
     {
-        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var data = Path.Combine(root, "literal-data-root");
-        var path = Path.Combine(data, "overture-divisions", "CHE.db");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, "overture-cache-defect");
-            using var provider = BuildWorkerProvider(root, data);
-            provider.GetRequiredService<OvertureDivisionCacheService>().DeleteFile("CHE");
-            Assert.IsFalse(File.Exists(path), "overture-cache-configured-data-root");
-        }
-        finally
-        {
-            DeleteFixture(root);
-        }
-    }
-
-    [TestMethod]
-    public void GadmDivisionCache_DeletesOnlyConfiguredDataRoot()
-    {
-        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var data = Path.Combine(root, "literal-data-root");
-        var path = Path.Combine(data, "gadm-divisions", "CHE.db");
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-            File.WriteAllText(path, "gadm-cache-defect");
-            using var provider = BuildWorkerProvider(root, data);
-            provider.GetRequiredService<GadmDivisionCacheService>().DeleteFile("CHE");
-            Assert.IsFalse(File.Exists(path), "gadm-cache-configured-data-root");
-        }
-        finally
-        {
-            DeleteFixture(root);
-        }
+        Assert.IsNull(typeof(OvertureDivisionCacheService).GetMethod("DeleteFile"));
+        Assert.IsNull(typeof(GadmDivisionCacheService).GetMethod("DeleteFile"));
     }
 
     [TestMethod]

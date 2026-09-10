@@ -35,7 +35,7 @@ An admitted deletion SHALL run as a lightweight Web control-plane operation and 
 - **THEN** either deletion is rejected as unavailable before touching storage or shutdown observes the admitted lightweight owner and waits for its bounded completion/release without starting or killing a child
 
 ### Requirement: Canonical source, country, and path confinement
-Every per-cache target SHALL contain only a closed source of Overture or GADM and an exact three-letter uppercase ASCII ISO3 code known to the bundled country catalog and mappable for that source. The system SHALL derive only the matching final path beneath the configured source directory and MUST NOT accept a caller-supplied path, delete a temporary candidate, follow a symbolic link/reparse point, or allow traversal outside configured data storage.
+Every per-cache target SHALL contain only a closed source of Overture or GADM and an exact three-letter uppercase ASCII ISO3 code known to the bundled country catalog and mappable for that source. The current Overture and GADM mappings SHALL remain total over that bundled catalog, including the GADM `XKX` to `XKO` source alias while retaining `XKX.db` as the final cache name. Pure source and identity validation SHALL occur before admission. After reservation, the system SHALL derive and inspect only the matching final path beneath the configured source directory and MUST NOT accept a caller-supplied path, delete a temporary candidate, follow a symbolic link/reparse point, or allow traversal outside configured data storage.
 
 #### Scenario: Canonical target is requested
 - **WHEN** the source and ISO3 are valid and the configured source root and final entry are ordinary non-link filesystem objects
@@ -43,7 +43,7 @@ Every per-cache target SHALL contain only a closed source of Overture or GADM an
 
 #### Scenario: Invalid or mismatched target is requested
 - **WHEN** the source is unknown, the code is padded, lowercase, non-ASCII, malformed, unknown, source-unmappable, or request data contains a path
-- **THEN** the request is rejected before admission, directory creation, or filesystem mutation
+- **THEN** the request is Invalid before admission, storage inspection, directory creation, or filesystem mutation even if a worker is active or shutdown has fenced the coordinator
 
 #### Scenario: Link or escaped storage is encountered
 - **WHEN** canonical containment fails or the configured source path or selected cache entry is a symbolic link/reparse point
@@ -61,7 +61,7 @@ The system SHALL acquire deletion reservation only after prior local worker owne
 - **THEN** that target is reported failed with bounded safe copy, no success is fabricated, and unrelated cache files remain eligible for truthful Delete All processing
 
 ### Requirement: Idempotent and truthful deletion outcomes
-Per-cache deletion SHALL return exactly Deleted, Missing, Invalid, or Failed for the requested target. Missing SHALL be an idempotent non-error. Source-specific Delete All SHALL take one reservation for its whole immutable validated target snapshot, attempt each target independently, and return ordered per-target outcomes plus Deleted, Missing, Invalid, and Failed counts.
+Per-cache deletion SHALL return exactly Deleted, Missing, Invalid, or Failed for an attempted or invalid requested target, separate from operation-level Busy or Unavailable admission rejection. Missing SHALL be an idempotent non-error based on an explicit missing filesystem result rather than a generic false existence check. Source-specific Delete All SHALL snapshot and validate each target before admission, treat the first unique valid identity as eligible and later duplicates as Invalid, and take one reservation for all eligible targets. A reserved batch SHALL attempt each eligible target independently and return deterministic ordered per-target outcomes plus Deleted, Missing, Invalid, and Failed counts. A Busy or Unavailable mixed batch SHALL preserve its ordered preflight Invalid results and report the eligible targets as unattempted without fabricating per-target outcomes.
 
 #### Scenario: Per-cache target is already absent
 - **WHEN** a valid cache target does not exist at deletion time
@@ -72,11 +72,19 @@ Per-cache deletion SHALL return exactly Deleted, Missing, Invalid, or Failed for
 - **THEN** the operation continues through the snapshot, reports actual per-target outcomes and aggregate counts, and does not claim that all files were deleted
 
 #### Scenario: Delete All target set is empty
-- **WHEN** the page-supplied source target snapshot contains no valid cache targets
+- **WHEN** the page-supplied source target snapshot is actually empty
 - **THEN** the operation completes as a no-op with zero counts and does not fabricate a deletion
 
+#### Scenario: Delete All target set is invalid-only
+- **WHEN** a nonempty source target snapshot contains no eligible target after validation
+- **THEN** the operation returns deterministic ordered Invalid results and truthful Invalid counts without admission or storage inspection
+
+#### Scenario: Delete All target set is mixed or contains duplicates
+- **WHEN** a snapshot contains unique valid targets plus invalid, mismatched, or duplicate entries
+- **THEN** the first unique valid identity remains eligible, later duplicates and other invalid entries remain Invalid, and one Busy/Unavailable result reports those Invalid results plus the eligible unattempted count or one reservation processes the eligible targets in deterministic order
+
 ### Requirement: Finalized results and existing page reload
-The deletion operation SHALL return finalized explicit Deleted, Missing, Invalid, or Failed result data and MUST NOT require or introduce an inventory cache, invalidation contract, snapshot, or reload service. After operation completion and reservation release, the existing Data page SHALL perform its current explicit status reload and present deletion outcomes separately from that subsequent read.
+The deletion operation SHALL return finalized explicit Deleted, Missing, Invalid, or Failed result data and MUST NOT require or introduce an inventory cache, invalidation contract, snapshot, or reload service. After any Completed outcome, and after reservation release when a reservation was taken, the existing Data page SHALL perform its current explicit status reload and present deletion outcomes separately from that subsequent read. Busy and Unavailable attempts SHALL NOT reload storage. A reload failure SHALL NOT rewrite the finalized deletion result.
 
 #### Scenario: Deletion completes
 - **WHEN** per-cache deletion or Delete All has finalized every requested target outcome

@@ -65,6 +65,14 @@ The Data area contains maintenance tools that change downloaded caches or Immich
 | `Re-download GADM cache` | Replaces one downloaded GADM country cache with a fresh copy. |
 | `Delete All GADM Caches` | Removes every downloaded GADM cache so they will be fetched again on demand later. |
 
+### Deleting administrative caches
+
+Select a delete action, then confirm the named source. Deletion removes only the selected final `.db` file; it does not clear temporary work from a refresh. `Delete All` continues past ordinary filesystem failures and reports separate Deleted, Missing, Invalid, and Failed counts.
+
+Deletion shares the same local exclusion slot as processing, Lookup, and cache refreshes. A `Busy` or `Unavailable` request does not delete or reload anything and is not queued. Retry a busy request after the active operation finishes. Once deletion starts it cannot be cancelled; the controls stay disabled until the result is final and the page has reloaded the current cache list.
+
+This protection applies within one Immich ReverseGeo Web process. If multiple Web containers share `/data`, run one interactive Web container while deleting caches when you need strict exclusion across the shared volume.
+
 ### Re-downloading an administrative cache
 
 `Re-download` starts a temporary worker that builds and validates a fresh cache before replacing the current one. The page shows named steps such as downloading, exporting, validating, and publishing when they apply. It also shows one `Cancel` action while the refresh can be cancelled. Cache controls stay disabled until the worker has finished and cleanup is complete.

@@ -30,7 +30,7 @@ public sealed class CoordinatorScheduledGateTests
         await gate.Entered.Task.WaitAsync(Bound);
 
         Assert.IsNull(fixture.Coordinator.ActiveRequest, "detection publishes no processing identity");
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob, "detection owns no worker admission");
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner, "detection owns no worker admission");
         Assert.AreEqual(before, Snapshot(fixture.State), "detection mutates no ProcessingState observation");
         gate.Decide(false);
 
@@ -75,7 +75,7 @@ public sealed class CoordinatorScheduledGateTests
             () => scheduled.WaitAsync(Bound));
         Assert.AreEqual(callerCancellation.Token, failure.CancellationToken);
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(before, Snapshot(fixture.State));
         AssertNoChildBoundary(fixture, "detector-cancellation");
     }
@@ -95,7 +95,7 @@ public sealed class CoordinatorScheduledGateTests
 
         Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal, await scheduled.WaitAsync(Bound));
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(before, Snapshot(fixture.State));
         Assert.AreEqual(0, fixture.Launcher.CallCount, "foreign cancellation does not launch a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "foreign cancellation resolves no forbidden graph");
@@ -115,7 +115,7 @@ public sealed class CoordinatorScheduledGateTests
 
         Assert.AreEqual(ScheduledTriggerResult.AcceptedAfterTerminal, await scheduled.WaitAsync(Bound));
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(before, Snapshot(fixture.State));
         Assert.AreEqual(0, fixture.Launcher.CallCount, "unexpected failure does not launch a child");
         Assert.AreEqual(0, fixture.ForbiddenResolutionCount, "unexpected failure resolves no forbidden graph");

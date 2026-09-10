@@ -39,7 +39,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
     private readonly Func<string, GadmDivisionStatus> _statusOperation;
     private readonly Func<string, string, bool> _hasRowsOperation;
     private readonly Func<string, bool> _validationOperation;
-    private readonly Action<string, string> _deleteFileOperation;
     private readonly ICacheFilePublisher _filePublisher;
     private readonly ICacheCandidateOwnership _candidateOwnership;
     private readonly Action _afterInFlightTaskAcquired;
@@ -61,7 +60,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         _statusOperation = ReadStatus;
         _hasRowsOperation = HasRows;
         _validationOperation = IsValidDb;
-        _deleteFileOperation = DeleteFileAndTemps;
         _filePublisher = new AtomicCacheFilePublisher();
         _candidateOwnership = new CacheCandidateOwnership();
         _afterInFlightTaskAcquired = static () => { };
@@ -80,7 +78,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         _statusOperation = ReadStatus;
         _hasRowsOperation = HasRows;
         _validationOperation = IsValidDb;
-        _deleteFileOperation = DeleteFileAndTemps;
         _filePublisher = new AtomicCacheFilePublisher();
         _candidateOwnership = new CacheCandidateOwnership();
         _afterInFlightTaskAcquired = static () => { };
@@ -158,14 +155,12 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         string dataDir,
         Func<string, GadmDivisionStatus> statusOperation,
         Func<string, string, bool> hasRowsOperation,
-        Func<string, bool> validationOperation,
-        Action<string, string> deleteFileOperation)
+        Func<string, bool> validationOperation)
         : this(logger, dataDir)
     {
         _statusOperation = statusOperation ?? throw new ArgumentNullException(nameof(statusOperation));
         _hasRowsOperation = hasRowsOperation ?? throw new ArgumentNullException(nameof(hasRowsOperation));
         _validationOperation = validationOperation ?? throw new ArgumentNullException(nameof(validationOperation));
-        _deleteFileOperation = deleteFileOperation ?? throw new ArgumentNullException(nameof(deleteFileOperation));
     }
 
     internal GadmDivisionCacheService(
@@ -183,7 +178,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         _statusOperation = hooks.StatusOperation ?? _statusOperation;
         _hasRowsOperation = hooks.HasRowsOperation ?? _hasRowsOperation;
         _validationOperation = hooks.ValidationOperation ?? _validationOperation;
-        _deleteFileOperation = hooks.DeleteFileOperation ?? _deleteFileOperation;
         _filePublisher = hooks.FilePublisher ?? _filePublisher;
         _candidateOwnership = hooks.CandidateOwnership ?? _candidateOwnership;
         _afterInFlightTaskAcquired = hooks.AfterInFlightTaskAcquired ?? _afterInFlightTaskAcquired;
@@ -197,14 +191,12 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         Func<string, string, string, CancellationToken, long> exportOperation,
         Func<string, GadmDivisionStatus> statusOperation,
         Func<string, string, bool> hasRowsOperation,
-        Func<string, bool> validationOperation,
-        Action<string, string> deleteFileOperation)
+        Func<string, bool> validationOperation)
         : this(logger, dataDir, downloadOperation, exportOperation)
     {
         _statusOperation = statusOperation ?? throw new ArgumentNullException(nameof(statusOperation));
         _hasRowsOperation = hasRowsOperation ?? throw new ArgumentNullException(nameof(hasRowsOperation));
         _validationOperation = validationOperation ?? throw new ArgumentNullException(nameof(validationOperation));
-        _deleteFileOperation = deleteFileOperation ?? throw new ArgumentNullException(nameof(deleteFileOperation));
     }
 
     public Dictionary<string, GadmDivisionStatus> GetStatus()
@@ -263,12 +255,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         }
 
         return hasData;
-    }
-
-    public void DeleteFile(string iso3)
-    {
-        _readyCaches.TryRemove(iso3, out _);
-        _deleteFileOperation(GetDbPath(iso3), iso3);
     }
 
     public async ValueTask<CacheMutationSourceResult> ExecuteAsync(
@@ -960,21 +946,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         }
     }
 
-    private static void DeleteFileAndTemps(string path, string iso3)
-    {
-        TryDelete(path);
-        var dir = Path.GetDirectoryName(path);
-        if (dir is null || !Directory.Exists(dir))
-        {
-            return;
-        }
-
-        foreach (var stale in Directory.GetFiles(dir, $"{iso3}.*.tmp"))
-        {
-            TryDelete(stale);
-        }
-    }
-
     private static void TryDelete(string path)
     {
         try
@@ -1018,7 +989,6 @@ internal sealed class GadmDivisionCacheTestHooks
     public Func<string, GadmDivisionStatus>? StatusOperation { get; init; }
     public Func<string, string, bool>? HasRowsOperation { get; init; }
     public Func<string, bool>? ValidationOperation { get; init; }
-    public Action<string, string>? DeleteFileOperation { get; init; }
     public ICacheFilePublisher? FilePublisher { get; init; }
     public ICacheCandidateOwnership? CandidateOwnership { get; init; }
     public Action? AfterInFlightTaskAcquired { get; init; }

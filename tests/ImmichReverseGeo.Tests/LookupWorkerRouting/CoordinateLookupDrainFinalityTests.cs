@@ -650,6 +650,10 @@ public sealed class CoordinateLookupDrainFinalityTests
 
             return result;
         }
+
+        public CacheMaintenanceAdmissionResult TryReserveCacheMaintenance(
+            CacheMaintenanceRequestOrigin origin) =>
+            inner.TryReserveCacheMaintenance(origin);
     }
 
     private sealed class RecordingLease(

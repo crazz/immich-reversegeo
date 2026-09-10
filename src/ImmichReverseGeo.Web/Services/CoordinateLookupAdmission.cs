@@ -49,9 +49,28 @@ internal sealed record WorkerJobBusyMetadata(
     }
 }
 
+internal enum CacheMaintenanceRequestOrigin
+{
+    GeoBoundariesPage
+}
+
+internal sealed record CacheMaintenanceBusyMetadata(
+    CacheMaintenanceRequestOrigin Origin,
+    DateTimeOffset AdmittedAtUtc);
+
+internal abstract record ExclusiveHeavyOwnerBusyMetadata
+{
+    private ExclusiveHeavyOwnerBusyMetadata()
+    {
+    }
+
+    internal sealed record Worker(WorkerJobBusyMetadata Job) : ExclusiveHeavyOwnerBusyMetadata;
+    internal sealed record CacheMaintenance(CacheMaintenanceBusyMetadata Operation) : ExclusiveHeavyOwnerBusyMetadata;
+}
+
 internal sealed record WorkerJobArbitrationDiagnosticSnapshot(
     bool IsAccepting,
-    WorkerJobBusyMetadata? ActiveJob);
+    ExclusiveHeavyOwnerBusyMetadata? ActiveOwner);
 
 internal sealed record WorkerJobOwnerSnapshot(
     Guid JobId,
@@ -63,6 +82,20 @@ internal sealed record WorkerJobOwnerSnapshot(
     DateTimeOffset AdmittedAtUtc,
     DateTimeOffset? StartedAtUtc,
     int? ChildProcessId);
+
+internal sealed record CacheMaintenanceOwnerSnapshot(
+    CacheMaintenanceRequestOrigin Origin,
+    DateTimeOffset AdmittedAtUtc);
+
+internal abstract record ExclusiveHeavyOwnerSnapshot
+{
+    private ExclusiveHeavyOwnerSnapshot()
+    {
+    }
+
+    internal sealed record Worker(WorkerJobOwnerSnapshot Job) : ExclusiveHeavyOwnerSnapshot;
+    internal sealed record CacheMaintenance(CacheMaintenanceOwnerSnapshot Operation) : ExclusiveHeavyOwnerSnapshot;
+}
 
 internal interface IWorkerJobArbitrationDiagnostics
 {
@@ -87,6 +120,10 @@ internal interface IWorkerJobAdmissionLease : IAsyncDisposable
         int? childProcessId = null);
 }
 
+internal interface ICacheMaintenanceReservation : IAsyncDisposable
+{
+}
+
 internal abstract record WorkerJobAdmissionResult
 {
     private WorkerJobAdmissionResult()
@@ -94,13 +131,25 @@ internal abstract record WorkerJobAdmissionResult
     }
 
     internal sealed record Admitted(IWorkerJobAdmissionLease Lease) : WorkerJobAdmissionResult;
-    internal sealed record Busy(WorkerJobBusyMetadata ActiveJob) : WorkerJobAdmissionResult;
+    internal sealed record Busy(ExclusiveHeavyOwnerBusyMetadata ActiveOwner) : WorkerJobAdmissionResult;
     internal sealed record Unavailable(string Code, string Message) : WorkerJobAdmissionResult;
+}
+
+internal abstract record CacheMaintenanceAdmissionResult
+{
+    private CacheMaintenanceAdmissionResult()
+    {
+    }
+
+    internal sealed record Reserved(ICacheMaintenanceReservation Reservation) : CacheMaintenanceAdmissionResult;
+    internal sealed record Busy(ExclusiveHeavyOwnerBusyMetadata ActiveOwner) : CacheMaintenanceAdmissionResult;
+    internal sealed record Unavailable(string Code, string Message) : CacheMaintenanceAdmissionResult;
 }
 
 internal interface IWorkerJobAdmissionGate
 {
     WorkerJobAdmissionResult TryAdmit(WorkerJobDispatch dispatch);
+    CacheMaintenanceAdmissionResult TryReserveCacheMaintenance(CacheMaintenanceRequestOrigin origin);
 }
 
 internal sealed class WorkerJobCoordinator :
@@ -116,7 +165,7 @@ internal sealed class WorkerJobCoordinator :
     private readonly TaskCompletionSource _applicationStoppingRegistrationReady =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly CancellationTokenRegistration _applicationStoppingRegistration;
-    private Lease? _active;
+    private ActiveOwnerState? _active;
     private Task? _shutdownTask;
     private bool _admissionOpen = true;
 
@@ -152,7 +201,7 @@ internal sealed class WorkerJobCoordinator :
         }
     }
 
-    internal WorkerJobOwnerSnapshot? ActiveOwner
+    internal ExclusiveHeavyOwnerSnapshot? ActiveOwner
     {
         get
         {
@@ -207,6 +256,48 @@ internal sealed class WorkerJobCoordinator :
         return result;
     }
 
+    public CacheMaintenanceAdmissionResult TryReserveCacheMaintenance(
+        CacheMaintenanceRequestOrigin origin)
+    {
+        if (!Enum.IsDefined(origin))
+        {
+            return new CacheMaintenanceAdmissionResult.Unavailable(
+                "cache-maintenance-origin",
+                "The requested cache maintenance operation is not available in this Web host.");
+        }
+
+        CacheMaintenanceAdmissionResult result;
+        lock (_gate)
+        {
+            if (!_admissionOpen)
+            {
+                result = new CacheMaintenanceAdmissionResult.Unavailable(
+                    "cache-maintenance-stopped",
+                    "Cache maintenance is unavailable while the Web host is stopping.");
+            }
+            else if (_active is not null)
+            {
+                result = new CacheMaintenanceAdmissionResult.Busy(_active.SafeSnapshotUnderGate);
+            }
+            else
+            {
+                var reservation = new MaintenanceReservation(
+                    this,
+                    origin,
+                    _timeProvider.GetUtcNow().ToUniversalTime());
+                _active = reservation;
+                result = new CacheMaintenanceAdmissionResult.Reserved(reservation);
+            }
+        }
+
+        if (result is CacheMaintenanceAdmissionResult.Reserved)
+        {
+            NotifyChanged();
+        }
+
+        return result;
+    }
+
     public Task StartAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 
     public Task StopAsync(CancellationToken cancellationToken)
@@ -226,7 +317,7 @@ internal sealed class WorkerJobCoordinator :
     {
         TaskCompletionSource start;
         Task shutdown;
-        Lease? active;
+        ActiveOwnerState? active;
         lock (_gate)
         {
             if (_shutdownTask is not null)
@@ -236,7 +327,10 @@ internal sealed class WorkerJobCoordinator :
 
             _admissionOpen = false;
             active = _active;
-            active?.MarkStopRequested();
+            if (active is Lease worker)
+            {
+                worker.MarkStopRequested();
+            }
             start = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
             shutdown = CompleteShutdownAsync(active, start.Task);
             _shutdownTask = shutdown;
@@ -247,14 +341,18 @@ internal sealed class WorkerJobCoordinator :
         return shutdown;
     }
 
-    private async Task CompleteShutdownAsync(Lease? active, Task start)
+    private async Task CompleteShutdownAsync(ActiveOwnerState? active, Task start)
     {
         await start.ConfigureAwait(false);
         try
         {
-            if (active is not null)
+            if (active is Lease worker)
             {
-                await active.RequestShutdownStopAsync().ConfigureAwait(false);
+                await worker.RequestShutdownStopAsync().ConfigureAwait(false);
+            }
+            else if (active is MaintenanceReservation maintenance)
+            {
+                await maintenance.AwaitReleaseAsync().ConfigureAwait(false);
             }
         }
         finally
@@ -322,8 +420,7 @@ internal sealed class WorkerJobCoordinator :
         bool changed = false;
         lock (_gate)
         {
-            if (ReferenceEquals(_active, lease)
-                && Matches(_active.Context, lease.Context))
+            if (ReferenceEquals(_active, lease))
             {
                 _active = null;
                 changed = true;
@@ -331,6 +428,25 @@ internal sealed class WorkerJobCoordinator :
         }
 
         lease.CompleteRelease();
+        if (changed)
+        {
+            NotifyChanged();
+        }
+    }
+
+    private void Release(MaintenanceReservation reservation)
+    {
+        bool changed = false;
+        lock (_gate)
+        {
+            if (ReferenceEquals(_active, reservation))
+            {
+                _active = null;
+                changed = true;
+            }
+        }
+
+        reservation.CompleteRelease();
         if (changed)
         {
             NotifyChanged();
@@ -419,7 +535,13 @@ internal sealed class WorkerJobCoordinator :
             && expected.Origin == actual.Origin;
     }
 
-    private sealed class Lease : IWorkerJobAdmissionLease
+    private abstract class ActiveOwnerState
+    {
+        internal abstract ExclusiveHeavyOwnerBusyMetadata SafeSnapshotUnderGate { get; }
+        internal abstract ExclusiveHeavyOwnerSnapshot OwnerSnapshotUnderGate { get; }
+    }
+
+    private sealed class Lease : ActiveOwnerState, IWorkerJobAdmissionLease
     {
         private readonly WorkerJobCoordinator _owner;
         private readonly object _bindingGate = new();
@@ -451,25 +573,27 @@ internal sealed class WorkerJobCoordinator :
         public bool IsStopRequested => Volatile.Read(ref _stopRequested) != 0;
         private DateTimeOffset AdmittedAtUtc { get; }
 
-        internal WorkerJobBusyMetadata SafeSnapshotUnderGate => new(
-            Context.JobKind,
-            Descriptor.Arbitration.CapabilityFamily,
-            Context.Origin,
-            Descriptor.Arbitration.IsCancellable,
-            _lifecycle,
-            AdmittedAtUtc,
-            _startedAtUtc);
+        internal override ExclusiveHeavyOwnerBusyMetadata SafeSnapshotUnderGate =>
+            new ExclusiveHeavyOwnerBusyMetadata.Worker(new WorkerJobBusyMetadata(
+                Context.JobKind,
+                Descriptor.Arbitration.CapabilityFamily,
+                Context.Origin,
+                Descriptor.Arbitration.IsCancellable,
+                _lifecycle,
+                AdmittedAtUtc,
+                _startedAtUtc));
 
-        internal WorkerJobOwnerSnapshot OwnerSnapshotUnderGate => new(
-            Context.JobId,
-            Context.JobKind,
-            Descriptor.Arbitration.CapabilityFamily,
-            Context.Origin,
-            Descriptor.Arbitration.IsCancellable,
-            _lifecycle,
-            AdmittedAtUtc,
-            _startedAtUtc,
-            _childProcessId);
+        internal override ExclusiveHeavyOwnerSnapshot OwnerSnapshotUnderGate =>
+            new ExclusiveHeavyOwnerSnapshot.Worker(new WorkerJobOwnerSnapshot(
+                Context.JobId,
+                Context.JobKind,
+                Descriptor.Arbitration.CapabilityFamily,
+                Context.Origin,
+                Descriptor.Arbitration.IsCancellable,
+                _lifecycle,
+                AdmittedAtUtc,
+                _startedAtUtc,
+                _childProcessId));
 
         public bool TryBindOwnerStop(
             WorkerJobContext context,
@@ -615,6 +739,52 @@ internal sealed class WorkerJobCoordinator :
 
             await _released.Task.ConfigureAwait(false);
             stopFailure?.Throw();
+        }
+    }
+
+    private sealed class MaintenanceReservation : ActiveOwnerState, ICacheMaintenanceReservation
+    {
+        private readonly WorkerJobCoordinator _owner;
+        private readonly TaskCompletionSource _released =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private int _releasedState;
+
+        internal MaintenanceReservation(
+            WorkerJobCoordinator owner,
+            CacheMaintenanceRequestOrigin origin,
+            DateTimeOffset admittedAtUtc)
+        {
+            _owner = owner;
+            Origin = origin;
+            AdmittedAtUtc = admittedAtUtc;
+        }
+
+        private CacheMaintenanceRequestOrigin Origin { get; }
+        private DateTimeOffset AdmittedAtUtc { get; }
+
+        internal override ExclusiveHeavyOwnerBusyMetadata SafeSnapshotUnderGate =>
+            new ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance(
+                new CacheMaintenanceBusyMetadata(Origin, AdmittedAtUtc));
+
+        internal override ExclusiveHeavyOwnerSnapshot OwnerSnapshotUnderGate =>
+            new ExclusiveHeavyOwnerSnapshot.CacheMaintenance(
+                new CacheMaintenanceOwnerSnapshot(Origin, AdmittedAtUtc));
+
+        public ValueTask DisposeAsync()
+        {
+            if (Interlocked.Exchange(ref _releasedState, 1) == 0)
+            {
+                _owner.Release(this);
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        internal Task AwaitReleaseAsync() => _released.Task;
+
+        internal void CompleteRelease()
+        {
+            _released.TrySetResult();
         }
     }
 }

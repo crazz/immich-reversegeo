@@ -33,7 +33,7 @@ internal sealed record CacheMutationPageState(
     CacheMutationProgressStep? CurrentStep,
     string? CurrentActivity,
     CacheMutationResult? Result,
-    WorkerJobBusyMetadata? BusyJob,
+    ExclusiveHeavyOwnerBusyMetadata? BusyOwner,
     bool HasAdmittedOperation,
     bool TerminalObserved)
 {
@@ -305,8 +305,11 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             WorkerJobAdmissionResult admission = _admission.TryAdmit(dispatch);
             if (admission is WorkerJobAdmissionResult.Busy busy)
             {
+                string message = busy.ActiveOwner is ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance
+                    ? "Cache maintenance is in progress. Try again after it finishes."
+                    : "Another worker job is active. Try again after it finishes.";
                 SetRejected(generation, CacheMutationPagePhase.Busy,
-                    "Another worker job is active. Try again after it finishes.", busy.ActiveJob);
+                    message, busy.ActiveOwner);
                 return;
             }
 
@@ -573,7 +576,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
         long generation,
         CacheMutationPagePhase phase,
         string message,
-        WorkerJobBusyMetadata? busy)
+        ExclusiveHeavyOwnerBusyMetadata? busy)
     {
         lock (_gate)
         {
@@ -589,7 +592,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
                 Status = message,
                 Error = null,
                 JobId = null,
-                BusyJob = busy,
+                BusyOwner = busy,
                 HasAdmittedOperation = false,
                 TerminalObserved = false
             };

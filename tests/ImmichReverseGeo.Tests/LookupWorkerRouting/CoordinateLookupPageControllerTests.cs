@@ -132,10 +132,11 @@ public sealed class CoordinateLookupPageControllerTests
         await first.WaitAsync(Bound);
         CoordinateLookupResult completed = controller.State.Result!;
 
-        admission.Next = new WorkerJobAdmissionResult.Busy(new WorkerJobBusyMetadata(
-            WorkerJobCapabilityFamily.Processing,
-            WorkerJobRequestOrigin.Scheduled,
-            true));
+        admission.Next = new WorkerJobAdmissionResult.Busy(
+            new ExclusiveHeavyOwnerBusyMetadata.Worker(new WorkerJobBusyMetadata(
+                WorkerJobCapabilityFamily.Processing,
+                WorkerJobRequestOrigin.Scheduled,
+                true)));
         await controller.SubmitAsync(Submission());
 
         Assert.AreEqual(CoordinateLookupPagePhase.Busy, controller.State.Phase);
@@ -495,12 +496,12 @@ public sealed class CoordinateLookupPageControllerTests
         }
 
         await shutdown!.WaitAsync(Bound);
-        Assert.IsNull(admission.Snapshot.ActiveJob);
+        Assert.IsNull(admission.Snapshot.ActiveOwner);
         Assert.AreEqual(1, session!.DisposeCount);
 
         void BeginShutdownAfterAdmission()
         {
-            if (admission.Snapshot.ActiveJob is not null
+            if (admission.Snapshot.ActiveOwner is not null
                 && Interlocked.CompareExchange(ref shutdownStarted, 1, 0) == 0)
             {
                 shutdown = admission.BeginShutdown();
@@ -520,7 +521,7 @@ public sealed class CoordinateLookupPageControllerTests
             gate.TryAdmit(first));
         WorkerJobAdmissionResult.Busy busy =
             Assert.IsInstanceOfType<WorkerJobAdmissionResult.Busy>(gate.TryAdmit(second));
-        Assert.AreEqual(WorkerJobCapabilityFamily.Lookup, busy.ActiveJob.CapabilityFamily);
+        Assert.AreEqual(WorkerJobCapabilityFamily.Lookup, busy.ActiveOwner.RequireWorker().CapabilityFamily);
 
         await admitted.Lease.DisposeAsync();
         await admitted.Lease.DisposeAsync();
@@ -809,6 +810,10 @@ public sealed class CoordinateLookupPageControllerTests
             Lease = new RecordingLease(dispatch.Context, dispatch.Descriptor);
             return new WorkerJobAdmissionResult.Admitted(Lease);
         }
+
+        public CacheMaintenanceAdmissionResult TryReserveCacheMaintenance(
+            CacheMaintenanceRequestOrigin origin) =>
+            throw new AssertFailedException("Lookup tests do not reserve cache deletion.");
     }
 
     private sealed class RecordingLease(

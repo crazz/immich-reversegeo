@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Threading.Channels;
+using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
@@ -50,6 +51,7 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         SetInjected(page, "OvertureCache", overture);
         SetInjected(page, "GadmCache", gadm);
         SetInjected(page, "CacheMutations", factory);
+        SetInjected(page, "CacheDeletions", CreateDeletionFactory(root.Path, admission));
         await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
         await renderer.AttachAsync(page);
 
@@ -176,10 +178,12 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         bool busy)
     {
         WorkerJobAdmissionResult rejection = busy
-            ? new WorkerJobAdmissionResult.Busy(new WorkerJobBusyMetadata(
-                WorkerJobCapabilityFamily.Processing,
-                WorkerJobRequestOrigin.Scheduled,
-                true))
+            ? new WorkerJobAdmissionResult.Busy(
+                new ExclusiveHeavyOwnerBusyMetadata.Worker(
+                    new WorkerJobBusyMetadata(
+                        WorkerJobCapabilityFamily.Processing,
+                        WorkerJobRequestOrigin.Scheduled,
+                        true)))
             : new WorkerJobAdmissionResult.Unavailable(
                 "worker-stopping",
                 "Cache worker admission is unavailable.");
@@ -260,6 +264,413 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         AssertMutationControls(completed.Frames, disabled: false);
         Assert.IsFalse(HasButton(completed.Frames, "Cancel"));
         Assert.AreEqual(1, fixture.Admission.Lease!.DisposeCount);
+    }
+
+    [TestMethod]
+    [TestCategory("Change52")]
+    public async Task RenderedDeleteAll_RequiresSourceNamedConfirmationAndDismissDoesNotRunCommand()
+    {
+        await using RenderedPageFixture fixture = await RenderedPageFixture.CreateAsync(
+            includeOverture: true,
+            includeGadm: false);
+        string cachePath = Path.Combine(
+            fixture.RootPath,
+            "overture-divisions",
+            "CHE.db");
+
+        await InvokeButtonAsync(fixture.Renderer, "Delete All Overture Divisions");
+        WebStatusRenderingTests.RenderSnapshot confirmation = await fixture.Renderer.ReadAsync();
+        StringAssert.Contains(confirmation.Text, "Delete all Overture cache files?");
+        StringAssert.Contains(confirmation.Text, "best-effort");
+        Assert.IsTrue(HasButton(confirmation.Frames, "Confirm Delete All", disabled: false));
+        Assert.IsTrue(HasButton(confirmation.Frames, "Keep caches", disabled: false));
+        AssertMutationControls(confirmation.Frames, disabled: true);
+        Assert.AreEqual(0, fixture.Admission.MaintenanceAttempts);
+
+        await InvokeButtonAsync(fixture.Renderer, "Keep caches");
+        Assert.IsTrue(File.Exists(cachePath));
+        Assert.AreEqual(0, fixture.Admission.MaintenanceAttempts);
+
+        await InvokeButtonAsync(fixture.Renderer, "Delete All Overture Divisions");
+        await InvokeButtonAsync(fixture.Renderer, "Confirm Delete All");
+        WebStatusRenderingTests.RenderSnapshot completed = await fixture.Renderer.ReadAsync();
+
+        Assert.IsFalse(File.Exists(cachePath));
+        Assert.AreEqual(1, fixture.Admission.MaintenanceAttempts);
+        Assert.AreEqual(
+            CacheMaintenanceRequestOrigin.GeoBoundariesPage,
+            fixture.Admission.MaintenanceOrigin);
+        Assert.AreEqual(1, fixture.Admission.MaintenanceReservation!.DisposeCount);
+        Assert.AreEqual(0, fixture.Worker.Starts);
+        StringAssert.Contains(completed.Text, "Overture cache deletion completed");
+        StringAssert.Contains(
+            completed.Text,
+            "No cached administrative area data matches the current filters.");
+        Assert.IsFalse(HasButton(completed.Frames, "Cancel"));
+    }
+
+    [TestMethod]
+    [TestCategory("Change52")]
+    public async Task RenderedPerCacheDelete_RoutesGadmIdentityThroughCommandAndReloadsFullSchemaStatus()
+    {
+        await using RenderedPageFixture fixture = await RenderedPageFixture.CreateAsync(
+            includeOverture: false,
+            includeGadm: true);
+        string cachePath = Path.Combine(fixture.RootPath, "gadm-divisions", "CHE.db");
+
+        await InvokeButtonAsync(fixture.Renderer, "Delete");
+        WebStatusRenderingTests.RenderSnapshot confirmation = await fixture.Renderer.ReadAsync();
+        StringAssert.Contains(confirmation.Text, "Delete the GADM cache for CHE?");
+        Assert.AreEqual(0, fixture.Admission.MaintenanceAttempts);
+        await InvokeButtonAsync(fixture.Renderer, "Keep caches");
+        Assert.IsTrue(File.Exists(cachePath));
+        Assert.AreEqual(0, fixture.Admission.MaintenanceAttempts);
+
+        await InvokeButtonAsync(fixture.Renderer, "Delete");
+        await InvokeButtonAsync(fixture.Renderer, "Confirm Delete");
+        WebStatusRenderingTests.RenderSnapshot completed = await fixture.Renderer.ReadAsync();
+
+        Assert.IsFalse(File.Exists(cachePath));
+        Assert.AreEqual(1, fixture.Admission.MaintenanceAttempts);
+        Assert.AreEqual(1, fixture.Admission.MaintenanceReservation!.DisposeCount);
+        Assert.AreEqual(0, fixture.Worker.Starts);
+        StringAssert.Contains(completed.Text, "Deleted the GADM cache for CHE.");
+        StringAssert.Contains(
+            completed.Text,
+            "No cached administrative area data matches the current filters.");
+        Assert.IsTrue(HasButton(
+            completed.Frames,
+            "Delete All GADM Caches",
+            disabled: false));
+        Assert.IsFalse(HasButton(completed.Frames, "Delete"));
+        Assert.IsFalse(HasButton(completed.Frames, "Re-download"));
+    }
+
+    [TestMethod]
+    [TestCategory("Change52")]
+    public async Task RenderedDelete_KeepsControlsDisabledUntilReservationReleaseThenReloads()
+    {
+        var releaseReservation = new TaskCompletionSource(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        await using RenderedPageFixture fixture = await RenderedPageFixture.CreateAsync(
+            includeOverture: true,
+            includeGadm: false,
+            maintenanceRelease: releaseReservation);
+        string cachePath = Path.Combine(
+            fixture.RootPath,
+            "overture-divisions",
+            "CHE.db");
+
+        await InvokeButtonAsync(fixture.Renderer, "Delete");
+        fixture.Click = InvokeButtonAsync(fixture.Renderer, "Confirm Delete");
+        RecordingMaintenanceReservation reservation =
+            await fixture.Admission.MaintenanceReservationAvailable.WaitAsync(Bound);
+        await reservation.DisposeObserved.WaitAsync(Bound);
+        WebStatusRenderingTests.RenderSnapshot releasing = await fixture.Renderer.ReadAsync();
+
+        Assert.IsFalse(File.Exists(cachePath), "the final database is removed before release");
+        Assert.IsFalse(fixture.Click.IsCompleted);
+        AssertMutationControls(releasing.Frames, disabled: true);
+        StringAssert.Contains(releasing.Text, "CHE");
+        Assert.AreEqual(0, fixture.Worker.Starts);
+
+        releaseReservation.TrySetResult();
+        await fixture.Click.WaitAsync(Bound);
+        fixture.Click = null;
+        WebStatusRenderingTests.RenderSnapshot completed = await fixture.Renderer.ReadAsync();
+        Assert.AreEqual(1, reservation.DisposeCount);
+        Assert.IsTrue(HasButton(
+            completed.Frames,
+            "Delete All Overture Divisions",
+            disabled: false));
+        Assert.IsFalse(HasButton(completed.Frames, "Delete"));
+        Assert.IsFalse(HasButton(completed.Frames, "Re-download"));
+        StringAssert.Contains(completed.Text, "Deleted the Overture cache for CHE.");
+        StringAssert.Contains(
+            completed.Text,
+            "No cached administrative area data matches the current filters.");
+    }
+
+    [TestMethod]
+    [TestCategory("Change52")]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task RenderedDelete_RejectedBusyOrUnavailableHasNoFileOrReloadSideEffect(
+        bool busy)
+    {
+        CacheMaintenanceAdmissionResult rejection = busy
+            ? new CacheMaintenanceAdmissionResult.Busy(
+                new ExclusiveHeavyOwnerBusyMetadata.Worker(
+                    new WorkerJobBusyMetadata(
+                        WorkerJobCapabilityFamily.Processing,
+                        WorkerJobRequestOrigin.Scheduled,
+                        true)))
+            : new CacheMaintenanceAdmissionResult.Unavailable(
+                "worker-stopping",
+                "Cache deletion is unavailable while the application is stopping.");
+        await using RenderedPageFixture fixture = await RenderedPageFixture.CreateAsync(
+            includeOverture: true,
+            includeGadm: false,
+            maintenanceRejection: rejection);
+        string cachePath = Path.Combine(
+            fixture.RootPath,
+            "overture-divisions",
+            "CHE.db");
+
+        await InvokeButtonAsync(fixture.Renderer, "Delete");
+        WebStatusRenderingTests.RenderSnapshot confirmation = await fixture.Renderer.ReadAsync();
+        StringAssert.Contains(confirmation.Text, "Delete the Overture cache for CHE?");
+        Assert.AreEqual(0, fixture.Admission.MaintenanceAttempts);
+        await InvokeButtonAsync(fixture.Renderer, "Confirm Delete");
+        WebStatusRenderingTests.RenderSnapshot rejected = await fixture.Renderer.ReadAsync();
+
+        Assert.IsTrue(File.Exists(cachePath));
+        Assert.AreEqual(1, fixture.Admission.MaintenanceAttempts);
+        Assert.IsNull(fixture.Admission.MaintenanceReservation);
+        Assert.AreEqual(0, fixture.Worker.Starts);
+        AssertMutationControls(rejected.Frames, disabled: false);
+        StringAssert.Contains(
+            rejected.Text,
+            busy
+                ? "Cache deletion could not start because another operation is active."
+                : "Cache deletion is unavailable while the application is stopping.");
+        StringAssert.Contains(rejected.Text, "CHE");
+        Assert.IsFalse(HasButton(rejected.Frames, "Cancel"));
+    }
+
+    [TestMethod]
+    [TestCategory("Change52")]
+    public async Task QueuedPageCallbacks_AfterDisposalDoNotRenderOrReloadStatus()
+    {
+        await using RenderedPageFixture fixture = await RenderedPageFixture.CreateAsync(
+            includeOverture: true,
+            includeGadm: false);
+        string cachePath = Path.Combine(
+            fixture.RootPath,
+            "overture-divisions",
+            "CHE.db");
+        int initialRenderCount = fixture.Renderer.RenderCount;
+        using var dispatcherEntered = new ManualResetEventSlim();
+        using var releaseDispatcher = new ManualResetEventSlim();
+        Task? dispatcherBlock = null;
+        Task? queuedRender = null;
+        Task? queuedReload = null;
+        Task? disposal = null;
+        try
+        {
+            dispatcherBlock = Task.Run(() =>
+                fixture.Renderer.Dispatcher.InvokeAsync(() =>
+                {
+                    dispatcherEntered.Set();
+                    if (!releaseDispatcher.Wait(Bound))
+                    {
+                        throw new TimeoutException("The dispatcher test hold was not released.");
+                    }
+                }));
+            Assert.IsTrue(
+                dispatcherEntered.Wait(Bound),
+                "the renderer dispatcher did not enter the non-yielding hold");
+
+            queuedRender = InvokePrivateTask(fixture.Page, "NotifyPageChangedAsync");
+            queuedReload = InvokePrivateTask(fixture.Page, "ReloadPageStateAsync");
+            Assert.IsFalse(queuedRender.IsCompleted);
+            Assert.IsFalse(queuedReload.IsCompleted);
+            File.Delete(cachePath);
+            disposal = fixture.Page.DisposeAsync().AsTask();
+            await disposal.WaitAsync(Bound);
+            Assert.IsFalse(queuedRender.IsCompleted);
+            Assert.IsFalse(queuedReload.IsCompleted);
+
+            releaseDispatcher.Set();
+            await Task.WhenAll(dispatcherBlock, queuedRender, queuedReload).WaitAsync(Bound);
+
+            Assert.AreEqual(initialRenderCount, fixture.Renderer.RenderCount);
+            Dictionary<string, OvertureDivisionStatus> status =
+                GetPrivateField<Dictionary<string, OvertureDivisionStatus>>(
+                    fixture.Page,
+                    "_overtureDivisionStatus");
+            Assert.IsTrue(status.ContainsKey("CHE"));
+            Assert.IsFalse(File.Exists(cachePath));
+        }
+        finally
+        {
+            releaseDispatcher.Set();
+            await DrainCleanupAsync(
+                () => dispatcherBlock?.WaitAsync(Bound) ?? Task.CompletedTask,
+                () => queuedRender?.WaitAsync(Bound) ?? Task.CompletedTask,
+                () => queuedReload?.WaitAsync(Bound) ?? Task.CompletedTask,
+                () => disposal?.WaitAsync(Bound)
+                    ?? fixture.Page.DisposeAsync().AsTask().WaitAsync(Bound));
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change52")]
+    public async Task RenderedDeleteAll_ShutdownAndPageDisposalAwaitRealMaintenanceOwnerWithoutStaleReload()
+    {
+        using var root = new TemporaryDirectory();
+        CreateOvertureCache(root.Path, "release-che", "CHE");
+        CreateOvertureCache(root.Path, "release-deu", "DEU");
+        string chePath = Path.Combine(root.Path, "overture-divisions", "CHE.db");
+        string deuPath = Path.Combine(root.Path, "overture-divisions", "DEU.db");
+        var overture = new OvertureDivisionCacheService(
+            NullLogger<OvertureDivisionCacheService>.Instance,
+            root.Path,
+            static iso3 => iso3 switch
+            {
+                "CHE" => "CH",
+                "DEU" => "DE",
+                _ => null
+            });
+        var gadm = new GadmDivisionCacheService(
+            NullLogger<GadmDivisionCacheService>.Instance,
+            root.Path);
+        await using var coordinator = new WorkerJobCoordinator(WorkerJobDescriptors.Registered);
+        var fileSystem = new OrderedBarrierDeletionFileSystem();
+        string bundledData = Path.Combine(AppContext.BaseDirectory, "data");
+        var command = new CacheDeletionCommand(
+            coordinator,
+            fileSystem,
+            new StorageOptions(root.Path, bundledData),
+            CountryCodeService.CreateForTest(bundledData),
+            NullLogger<CacheDeletionCommand>.Instance);
+        var commandReturned = new TaskCompletionSource<CacheDeletionOperationResult>(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        async Task<CacheDeletionOperationResult> ObserveDeleteAllAsync(
+            CacheMutationSource source,
+            IEnumerable<CacheDeletionTarget> targets)
+        {
+            CacheDeletionOperationResult result = await command.DeleteAllAsync(source, targets);
+            commandReturned.TrySetResult(result);
+            return result;
+        }
+
+        var deletionFactory = new CacheDeletionPageControllerFactory(command);
+        var worker = new RecordingWorkerClient();
+        var workerLifetime = new CacheMutationPageControllerHostLifetime();
+        var mutationFactory = new CacheMutationPageControllerFactory(
+            coordinator,
+            worker,
+            workerLifetime);
+        var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
+        SetInjected(page, "OvertureCache", overture);
+        SetInjected(page, "GadmCache", gadm);
+        SetInjected(page, "CacheMutations", mutationFactory);
+        SetInjected(page, "CacheDeletions", deletionFactory);
+        await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
+        await renderer.AttachAsync(page);
+        CacheDeletionPageController initializedController =
+            GetPrivateField<CacheDeletionPageController>(page, "_deletionController");
+        await initializedController.DisposeAsync();
+        var observedController = new CacheDeletionPageController(
+            command.DeleteAsync,
+            ObserveDeleteAllAsync,
+            () => InvokePrivateTask(page, "NotifyPageChangedAsync"),
+            () => InvokePrivateTask(page, "ReloadPageStateAsync"));
+        SetPrivateField(page, "_deletionController", observedController);
+
+        var ownerLedger = new List<ExclusiveHeavyOwnerSnapshot?>();
+        var ownerLedgerGate = new object();
+        coordinator.Changed += () =>
+        {
+            lock (ownerLedgerGate)
+            {
+                ownerLedger.Add(coordinator.ActiveOwner);
+            }
+        };
+        Task? click = null;
+        Task? disposal = null;
+        Task? shutdown = null;
+        try
+        {
+            await InvokeButtonAsync(renderer, "Delete All Overture Divisions");
+            click = InvokeButtonAsync(renderer, "Confirm Delete All");
+            await fileSystem.FirstDeleted.WaitAsync(Bound);
+            await fileSystem.SecondEntered.WaitAsync(Bound);
+
+            ExclusiveHeavyOwnerSnapshot.CacheMaintenance admittedOwner =
+                Assert.IsInstanceOfType<ExclusiveHeavyOwnerSnapshot.CacheMaintenance>(
+                    coordinator.ActiveOwner);
+            Assert.IsFalse(File.Exists(chePath));
+            Assert.IsTrue(File.Exists(deuPath));
+            Assert.IsFalse(click.IsCompleted);
+
+            shutdown = coordinator.BeginShutdown();
+            disposal = page.DisposeAsync().AsTask();
+            await renderer.ReadAsync();
+            int renderCountAtDisposal = renderer.RenderCount;
+
+            WorkerJobAdmissionResult workerAdmission = coordinator.TryAdmit(
+                new ProcessAssetsWorkerJobDispatch(
+                    new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual)));
+            WorkerJobAdmissionResult.Unavailable unavailable =
+                Assert.IsInstanceOfType<WorkerJobAdmissionResult.Unavailable>(workerAdmission);
+            Assert.AreEqual("worker-admission-stopped", unavailable.Code);
+            Assert.AreEqual(admittedOwner, coordinator.ActiveOwner);
+            Assert.AreEqual(0, worker.Starts);
+            Assert.IsFalse(shutdown.IsCompleted);
+            Assert.IsFalse(disposal.IsCompleted);
+            Assert.IsFalse(click.IsCompleted);
+            Assert.IsFalse(commandReturned.Task.IsCompleted);
+
+            fileSystem.ReleaseSecond();
+            CacheDeletionOperationResult finalized =
+                await commandReturned.Task.WaitAsync(Bound);
+            Assert.AreEqual(CacheDeletionOperationDisposition.Completed, finalized.Disposition);
+            Assert.AreEqual(2, finalized.DeletedCount);
+            Assert.AreEqual(0, finalized.MissingCount);
+            Assert.AreEqual(0, finalized.InvalidCount);
+            Assert.AreEqual(0, finalized.FailedCount);
+            CollectionAssert.AreEqual(
+                new[] { "CHE", "DEU" },
+                finalized.Targets.Select(target => target.Iso3).ToArray());
+            Assert.IsTrue(finalized.Targets.All(target =>
+                target.Disposition == CacheDeletionTargetDisposition.Deleted));
+
+            await Task.WhenAll(click, disposal, shutdown).WaitAsync(Bound);
+            Assert.IsFalse(File.Exists(chePath));
+            Assert.IsFalse(File.Exists(deuPath));
+            Assert.IsNull(coordinator.ActiveOwner);
+            Dictionary<string, OvertureDivisionStatus> pageStatus =
+                GetPrivateField<Dictionary<string, OvertureDivisionStatus>>(
+                    page,
+                    "_overtureDivisionStatus");
+            Assert.IsTrue(pageStatus.ContainsKey("CHE"));
+            Assert.IsTrue(pageStatus.ContainsKey("DEU"));
+            WebStatusRenderingTests.RenderSnapshot stalePage = await renderer.ReadAsync();
+            StringAssert.Contains(stalePage.Text, "CHE");
+            StringAssert.Contains(stalePage.Text, "DEU");
+            Assert.IsFalse(stalePage.Text.Contains(
+                "cache deletion completed",
+                StringComparison.OrdinalIgnoreCase));
+            Assert.AreEqual(renderCountAtDisposal, renderer.RenderCount);
+
+            ExclusiveHeavyOwnerSnapshot?[] ownerEvents;
+            lock (ownerLedgerGate)
+            {
+                ownerEvents = ownerLedger.ToArray();
+            }
+
+            Assert.IsGreaterThanOrEqualTo(3, ownerEvents.Length);
+            Assert.AreEqual(1, ownerEvents.Count(owner => owner is null));
+            Assert.IsTrue(ownerEvents
+                .Where(owner => owner is ExclusiveHeavyOwnerSnapshot.CacheMaintenance)
+                .All(owner => Equals(owner, admittedOwner)));
+        }
+        finally
+        {
+            fileSystem.ReleaseSecond();
+            await DrainCleanupAsync(
+                () =>
+                {
+                    worker.Session?.Complete(new CacheMutationWorkerOutcome.Cancelled());
+                    return Task.CompletedTask;
+                },
+                () => click?.WaitAsync(Bound) ?? Task.CompletedTask,
+                () => disposal?.WaitAsync(Bound)
+                    ?? page.DisposeAsync().AsTask().WaitAsync(Bound),
+                () => shutdown?.WaitAsync(Bound) ?? coordinator.BeginShutdown().WaitAsync(Bound));
+        }
     }
 
     private static void AssertGadmNoticeAndSeparateStatus(
@@ -513,11 +924,14 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         });
     }
 
-    private static void CreateOvertureCache(string root, string release)
+    private static void CreateOvertureCache(
+        string root,
+        string release,
+        string iso3 = "CHE")
     {
         string directory = Path.Combine(root, "overture-divisions");
         Directory.CreateDirectory(directory);
-        string path = Path.Combine(directory, "CHE.db");
+        string path = Path.Combine(directory, $"{iso3}.db");
         File.Delete(path);
         using var connection = new SqliteConnection($"Data Source={path};Pooling=false");
         connection.Open();
@@ -550,6 +964,20 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         command.Parameters.AddWithValue("$geometry", ValidPolygonWkb());
         command.Parameters.AddWithValue("$release", release);
         command.ExecuteNonQuery();
+    }
+
+    private static CacheDeletionPageControllerFactory CreateDeletionFactory(
+        string root,
+        IWorkerJobAdmissionGate admission)
+    {
+        string bundledData = Path.Combine(AppContext.BaseDirectory, "data");
+        var command = new CacheDeletionCommand(
+            admission,
+            new PhysicalCacheDeletionFileSystem(),
+            new StorageOptions(root, bundledData),
+            CountryCodeService.CreateForTest(bundledData),
+            NullLogger<CacheDeletionCommand>.Instance);
+        return new CacheDeletionPageControllerFactory(command);
     }
 
     private static byte[] ValidPolygonWkb()
@@ -696,11 +1124,42 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             .SetValue(page, value);
     }
 
+    private static void SetPrivateField(object instance, string name, object value)
+    {
+        instance.GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(instance, value);
+    }
+
+    private static T GetPrivateField<T>(object instance, string name)
+    {
+        return Assert.IsInstanceOfType<T>(instance.GetType()
+            .GetField(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .GetValue(instance));
+    }
+
+    private static Task InvokePrivateTask(object instance, string name)
+    {
+        return Assert.IsInstanceOfType<Task>(instance.GetType()
+            .GetMethod(name, BindingFlags.Instance | BindingFlags.NonPublic)!
+            .Invoke(instance, null));
+    }
+
     private sealed class RecordingAdmissionGate : IWorkerJobAdmissionGate
     {
+        private readonly TaskCompletionSource<RecordingMaintenanceReservation>
+            _maintenanceReservationAvailable = new(
+                TaskCreationOptions.RunContinuationsAsynchronously);
         internal WorkerJobDispatch? Dispatch { get; private set; }
         internal RecordingLease? Lease { get; private set; }
         internal WorkerJobAdmissionResult? Rejection { get; init; }
+        internal CacheMaintenanceAdmissionResult? MaintenanceRejection { get; init; }
+        internal TaskCompletionSource? MaintenanceRelease { get; init; }
+        internal int MaintenanceAttempts { get; private set; }
+        internal CacheMaintenanceRequestOrigin? MaintenanceOrigin { get; private set; }
+        internal RecordingMaintenanceReservation? MaintenanceReservation { get; private set; }
+        internal Task<RecordingMaintenanceReservation> MaintenanceReservationAvailable =>
+            _maintenanceReservationAvailable.Task;
 
         public WorkerJobAdmissionResult TryAdmit(WorkerJobDispatch dispatch)
         {
@@ -713,6 +1172,75 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             Lease = new RecordingLease(dispatch);
             return new WorkerJobAdmissionResult.Admitted(Lease);
         }
+
+        public CacheMaintenanceAdmissionResult TryReserveCacheMaintenance(
+            CacheMaintenanceRequestOrigin origin)
+        {
+            MaintenanceAttempts++;
+            MaintenanceOrigin = origin;
+            if (MaintenanceRejection is not null)
+            {
+                return MaintenanceRejection;
+            }
+
+            MaintenanceReservation = new RecordingMaintenanceReservation(MaintenanceRelease);
+            _maintenanceReservationAvailable.TrySetResult(MaintenanceReservation);
+            return new CacheMaintenanceAdmissionResult.Reserved(MaintenanceReservation);
+        }
+    }
+
+    private sealed class RecordingMaintenanceReservation(TaskCompletionSource? release)
+        : ICacheMaintenanceReservation
+    {
+        private readonly TaskCompletionSource _disposeObserved =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal int DisposeCount { get; private set; }
+        internal Task DisposeObserved => _disposeObserved.Task;
+
+        public async ValueTask DisposeAsync()
+        {
+            DisposeCount++;
+            _disposeObserved.TrySetResult();
+            if (release is not null)
+            {
+                await release.Task;
+            }
+        }
+    }
+
+    private sealed class OrderedBarrierDeletionFileSystem : ICacheDeletionFileSystem
+    {
+        private readonly PhysicalCacheDeletionFileSystem _inner = new();
+        private readonly TaskCompletionSource _firstDeleted =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _secondEntered =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _releaseSecond =
+            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal Task FirstDeleted => _firstDeleted.Task;
+        internal Task SecondEntered => _secondEntered.Task;
+
+        public ValueTask<CacheDeletionFileInspection> InspectAsync(
+            string sourceRoot,
+            string finalPath) => _inner.InspectAsync(sourceRoot, finalPath);
+
+        public async ValueTask DeleteAsync(string finalPath)
+        {
+            string iso3 = Path.GetFileNameWithoutExtension(finalPath);
+            if (string.Equals(iso3, "DEU", StringComparison.Ordinal))
+            {
+                _secondEntered.TrySetResult();
+                await _releaseSecond.Task;
+            }
+
+            await _inner.DeleteAsync(finalPath);
+            if (string.Equals(iso3, "CHE", StringComparison.Ordinal))
+            {
+                _firstDeleted.TrySetResult();
+            }
+        }
+
+        internal void ReleaseSecond() => _releaseSecond.TrySetResult();
     }
 
     private sealed class RecordingLease(WorkerJobDispatch dispatch) : IWorkerJobAdmissionLease
@@ -830,13 +1358,16 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         internal RecordingWorkerClient Worker { get; }
         internal ImmichReverseGeo.Web.Components.Pages.GeoBoundaries Page { get; }
         internal WebStatusRenderingTests.ComponentRenderer Renderer { get; }
+        internal string RootPath => _root.Path;
         internal Task? Click { get; set; }
 
         internal static async Task<RenderedPageFixture> CreateAsync(
             bool includeOverture,
             bool includeGadm,
             WorkerJobAdmissionResult? rejection = null,
-            TaskCompletionSource? startRelease = null)
+            TaskCompletionSource? startRelease = null,
+            CacheMaintenanceAdmissionResult? maintenanceRejection = null,
+            TaskCompletionSource? maintenanceRelease = null)
         {
             var root = new TemporaryDirectory();
             if (includeOverture)
@@ -856,7 +1387,12 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             var gadm = new GadmDivisionCacheService(
                 NullLogger<GadmDivisionCacheService>.Instance,
                 root.Path);
-            var admission = new RecordingAdmissionGate { Rejection = rejection };
+            var admission = new RecordingAdmissionGate
+            {
+                Rejection = rejection,
+                MaintenanceRejection = maintenanceRejection,
+                MaintenanceRelease = maintenanceRelease
+            };
             var worker = new RecordingWorkerClient { StartRelease = startRelease };
             var lifetime = new CacheMutationPageControllerHostLifetime();
             var factory = new CacheMutationPageControllerFactory(admission, worker, lifetime);
@@ -864,6 +1400,7 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             SetInjected(page, "OvertureCache", overture);
             SetInjected(page, "GadmCache", gadm);
             SetInjected(page, "CacheMutations", factory);
+            SetInjected(page, "CacheDeletions", CreateDeletionFactory(root.Path, admission));
             var renderer = new WebStatusRenderingTests.ComponentRenderer();
             await renderer.AttachAsync(page);
             return new RenderedPageFixture(root, admission, worker, page, renderer);
@@ -872,10 +1409,14 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         public async ValueTask DisposeAsync()
         {
             Worker.StartRelease?.TrySetResult();
+            Admission.MaintenanceRelease?.TrySetResult();
             await DrainCleanupAsync(
                 async () =>
                 {
-                    if (Click is not null && Admission.Rejection is null)
+                    if (Click is not null
+                        && !Click.IsCompleted
+                        && Admission.Dispatch is not null
+                        && Admission.Rejection is null)
                     {
                         await Worker.StartObserved.WaitAsync(Bound);
                         FakeSession session = await Worker.SessionAvailable.WaitAsync(Bound);
@@ -903,8 +1444,11 @@ public sealed class GeoBoundariesCacheMutationBindingTests
     {
         internal TemporaryDirectory()
         {
+            string temporaryRoot = OperatingSystem.IsMacOS()
+                ? "/private/tmp"
+                : System.IO.Path.GetTempPath();
             Path = System.IO.Path.Combine(
-                System.IO.Path.GetTempPath(),
+                temporaryRoot,
                 $"immich-reversegeo-geoboundaries-{Guid.NewGuid():N}");
             Directory.CreateDirectory(Path);
         }

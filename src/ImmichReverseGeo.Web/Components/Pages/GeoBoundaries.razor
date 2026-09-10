@@ -5,12 +5,54 @@
 @inject GadmDivisionCacheService GadmCache
 @inject OvertureDivisionCacheService OvertureCache
 @inject CacheMutationPageControllerFactory CacheMutations
+@inject CacheDeletionPageControllerFactory CacheDeletions
 
 <h2>Administrative Areas</h2>
 
-@if (_result is not null)
+@if (_deletionController?.State.Confirmation is { } confirmation)
 {
-    <div class="alert alert-success">@_result</div>
+    <div class="alert alert-info" role="dialog" aria-label="Confirm cache deletion">
+        <div>@confirmation.Prompt</div>
+        <div class="btn-row">
+            <button type="button" class="btn btn-danger"
+                    @onclick="() => ConfirmDeletion(confirmation.Generation)">
+                @(confirmation.IsBatch ? "Confirm Delete All" : "Confirm Delete")
+            </button>
+            <button type="button" class="btn btn-secondary"
+                    @onclick="() => DismissDeletion(confirmation.Generation)">
+                Keep caches
+            </button>
+        </div>
+    </div>
+}
+
+@if (_deletionController is not null
+    && _deletionController.State.Phase != CacheDeletionPagePhase.Idle
+    && _deletionController.State.Phase != CacheDeletionPagePhase.Confirming)
+{
+    var deletion = _deletionController.State;
+    <div class="alert @DeletionAlertClass" role="status" aria-live="polite">
+        @if (deletion.Status is not null)
+        {
+            <div>@deletion.Status</div>
+        }
+        @if (deletion.Error is not null)
+        {
+            <div>@deletion.Error</div>
+        }
+        @if (deletion.Result?.BusyOwner is ExclusiveHeavyOwnerBusyMetadata.Worker busyWorker)
+        {
+            <div>Active: @busyWorker.Job.CapabilityFamily / @busyWorker.Job.Origin / @busyWorker.Job.Lifecycle</div>
+        }
+        else if (deletion.Result?.BusyOwner is ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance)
+        {
+            <div>Active: cache maintenance</div>
+        }
+    </div>
+    @if (deletion.ReloadError is not null)
+    {
+        <div class="alert alert-error" role="status" aria-live="polite">@deletion.ReloadError</div>
+    }
 }
 
 @if (_cacheController is not null && _cacheController.State.Phase != CacheMutationPagePhase.Idle)
@@ -26,9 +68,13 @@
         {
             <div>@mutation.CurrentActivity</div>
         }
-        @if (mutation.BusyJob is not null)
+        @if (mutation.BusyOwner is ExclusiveHeavyOwnerBusyMetadata.Worker busyWorker)
         {
-            <div>Active: @mutation.BusyJob.CapabilityFamily / @mutation.BusyJob.Origin / @mutation.BusyJob.Lifecycle</div>
+            <div>Active: @busyWorker.Job.CapabilityFamily / @busyWorker.Job.Origin / @busyWorker.Job.Lifecycle</div>
+        }
+        else if (mutation.BusyOwner is ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance)
+        {
+            <div>Active: cache maintenance</div>
         }
         @if (mutation.CanCancel)
         {
@@ -131,9 +177,9 @@
 @code {
     private Dictionary<string, OvertureDivisionStatus> _overtureDivisionStatus = [];
     private Dictionary<string, GadmDivisionStatus> _gadmDivisionStatus = [];
-    private bool _busy;
     private CacheMutationPageController? _cacheController;
-    private string? _result;
+    private CacheDeletionPageController? _deletionController;
+    private bool _disposed;
     private CacheSortColumn _sortColumn = CacheSortColumn.Source;
     private bool _sortAscending = true;
     private CacheSourceFilter _selectedSourceFilter = CacheSourceFilter.All;
@@ -143,17 +189,41 @@
     {
         RefreshState();
         _cacheController = CacheMutations.Create(
-            () => InvokeAsync(StateHasChanged),
-            () => InvokeAsync(() =>
-            {
-                RefreshState();
-                StateHasChanged();
-            }));
+            NotifyPageChangedAsync,
+            ReloadPageStateAsync);
+        _deletionController = CacheDeletions.Create(
+            NotifyPageChangedAsync,
+            ReloadPageStateAsync);
         return Task.CompletedTask;
     }
 
+    protected override bool ShouldRender() =>
+        !System.Threading.Volatile.Read(ref _disposed);
+
+    private Task NotifyPageChangedAsync() => InvokeAsync(() =>
+    {
+        if (System.Threading.Volatile.Read(ref _disposed))
+        {
+            return;
+        }
+
+        StateHasChanged();
+    });
+
+    private Task ReloadPageStateAsync() => InvokeAsync(() =>
+    {
+        if (System.Threading.Volatile.Read(ref _disposed))
+        {
+            return;
+        }
+
+        RefreshState();
+        StateHasChanged();
+    });
+
     private bool MutationControlsDisabled =>
-        _busy || (_cacheController?.State.IsActive ?? false);
+        (_cacheController?.State.IsActive ?? false)
+        || (_deletionController?.State.ControlsDisabled ?? false);
 
     private string MutationAlertClass => _cacheController?.State.Phase switch
     {
@@ -161,6 +231,32 @@
         CacheMutationPagePhase.Failed => "alert-error",
         _ => "alert-info"
     };
+
+    private string DeletionAlertClass
+    {
+        get
+        {
+            CacheDeletionPageState? deletion = _deletionController?.State;
+            if (deletion?.Phase is CacheDeletionPagePhase.Deleting
+                or CacheDeletionPagePhase.Reloading
+                or CacheDeletionPagePhase.Busy)
+            {
+                return "alert-info";
+            }
+
+            if (deletion is
+                {
+                    Phase: CacheDeletionPagePhase.Completed,
+                    ReloadError: null,
+                    Result: { FailedCount: 0, InvalidCount: 0 }
+                })
+            {
+                return "alert-success";
+            }
+
+            return "alert-error";
+        }
+    }
 
     private void RefreshState()
     {
@@ -170,51 +266,28 @@
 
     private Task RedownloadOvertureDivision(string iso3)
     {
-        _result = null;
         return _cacheController?.RefreshAsync(CacheMutationSource.Overture, iso3)
             ?? Task.CompletedTask;
     }
 
     private Task DeleteOvertureDivision(string iso3)
     {
-        _busy = true;
-        try
-        {
-            OvertureCache.DeleteFile(iso3);
-            _result = $"Deleted Overture divisions cache for {iso3}.";
-            RefreshState();
-            return Task.CompletedTask;
-        }
-        finally
-        {
-            _busy = false;
-        }
+        _deletionController?.RequestDelete(
+            new CacheDeletionTarget(CacheMutationSource.Overture, iso3));
+        return Task.CompletedTask;
     }
 
     private Task DeleteAllOvertureDivisions()
     {
-        _busy = true;
-        try
-        {
-            var count = _overtureDivisionStatus.Count;
-            foreach (var iso3 in _overtureDivisionStatus.Keys.ToList())
-            {
-                OvertureCache.DeleteFile(iso3);
-            }
-
-            _result = $"Deleted Overture division caches for {count:N0} countr{(count == 1 ? "y" : "ies")}.";
-            RefreshState();
-            return Task.CompletedTask;
-        }
-        finally
-        {
-            _busy = false;
-        }
+        CacheDeletionTarget[] targets = _overtureDivisionStatus.Keys
+            .Select(iso3 => new CacheDeletionTarget(CacheMutationSource.Overture, iso3))
+            .ToArray();
+        _deletionController?.RequestDeleteAll(CacheMutationSource.Overture, targets);
+        return Task.CompletedTask;
     }
 
     private Task RedownloadGadmDivision(string iso3)
     {
-        _result = null;
         return _cacheController?.RefreshAsync(CacheMutationSource.Gadm, iso3)
             ?? Task.CompletedTask;
     }
@@ -224,40 +297,25 @@
 
     private Task DeleteGadmDivision(string iso3)
     {
-        _busy = true;
-        try
-        {
-            GadmCache.DeleteFile(iso3);
-            _result = $"Deleted GADM cache for {iso3}.";
-            RefreshState();
-            return Task.CompletedTask;
-        }
-        finally
-        {
-            _busy = false;
-        }
+        _deletionController?.RequestDelete(
+            new CacheDeletionTarget(CacheMutationSource.Gadm, iso3));
+        return Task.CompletedTask;
     }
 
     private Task DeleteAllGadmDivisions()
     {
-        _busy = true;
-        try
-        {
-            var count = _gadmDivisionStatus.Count;
-            foreach (var iso3 in _gadmDivisionStatus.Keys.ToList())
-            {
-                GadmCache.DeleteFile(iso3);
-            }
-
-            _result = $"Deleted GADM caches for {count:N0} countr{(count == 1 ? "y" : "ies")}.";
-            RefreshState();
-            return Task.CompletedTask;
-        }
-        finally
-        {
-            _busy = false;
-        }
+        CacheDeletionTarget[] targets = _gadmDivisionStatus.Keys
+            .Select(iso3 => new CacheDeletionTarget(CacheMutationSource.Gadm, iso3))
+            .ToArray();
+        _deletionController?.RequestDeleteAll(CacheMutationSource.Gadm, targets);
+        return Task.CompletedTask;
     }
+
+    private Task ConfirmDeletion(long generation) =>
+        _deletionController?.ConfirmAsync(generation) ?? Task.CompletedTask;
+
+    private void DismissDeletion(long generation) =>
+        _deletionController?.DismissConfirmation(generation);
 
     private Task DeleteCache(CacheRow row)
     {
@@ -397,10 +455,10 @@
 
     public async ValueTask DisposeAsync()
     {
-        if (_cacheController is not null)
-        {
-            await _cacheController.DisposeAsync();
-        }
+        System.Threading.Volatile.Write(ref _disposed, true);
+        Task cacheDisposal = _cacheController?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+        Task deletionDisposal = _deletionController?.DisposeAsync().AsTask() ?? Task.CompletedTask;
+        await Task.WhenAll(cacheDisposal, deletionDisposal);
     }
 
 }

@@ -114,10 +114,11 @@ public sealed class CacheMutationPageControllerTests
         var admission = new RecordingAdmissionGate(ledger)
         {
             Next = busy
-                ? new WorkerJobAdmissionResult.Busy(new WorkerJobBusyMetadata(
-                    WorkerJobCapabilityFamily.Processing,
-                    WorkerJobRequestOrigin.Scheduled,
-                    true))
+                ? new WorkerJobAdmissionResult.Busy(
+                    new ExclusiveHeavyOwnerBusyMetadata.Worker(new WorkerJobBusyMetadata(
+                        WorkerJobCapabilityFamily.Processing,
+                        WorkerJobRequestOrigin.Scheduled,
+                        true)))
                 : new WorkerJobAdmissionResult.Unavailable(
                     "worker-stopping",
                     "Worker admission is unavailable.")
@@ -150,15 +151,15 @@ public sealed class CacheMutationPageControllerTests
         if (busy)
         {
             Assert.AreEqual(WorkerJobCapabilityFamily.Processing,
-                controller.State.BusyJob!.CapabilityFamily);
+                controller.State.BusyOwner.RequireWorker().CapabilityFamily);
             Assert.AreEqual(WorkerJobRequestOrigin.Scheduled,
-                controller.State.BusyJob.Origin);
+                controller.State.BusyOwner.RequireWorker().Origin);
             Assert.AreEqual(WorkerJobLifecycle.Admitted,
-                controller.State.BusyJob.Lifecycle);
+                controller.State.BusyOwner.RequireWorker().Lifecycle);
         }
         else
         {
-            Assert.IsNull(controller.State.BusyJob);
+            Assert.IsNull(controller.State.BusyOwner);
         }
     }
 
@@ -306,10 +307,10 @@ public sealed class CacheMutationPageControllerTests
             Assert.AreEqual(0, completion.Count);
             Assert.AreEqual(CacheMutationPagePhase.Busy, contender.State.Phase);
             Assert.AreEqual(0, contenderWorker.Starts);
-            Assert.IsNotNull(coordinator.Snapshot.ActiveJob);
+            Assert.IsNotNull(coordinator.Snapshot.ActiveOwner);
             Assert.AreEqual(WorkerJobLifecycle.Running,
-                coordinator.Snapshot.ActiveJob.Lifecycle);
-            Assert.AreEqual(4242, coordinator.ActiveOwner!.ChildProcessId);
+                coordinator.Snapshot.ActiveOwner.RequireWorker().Lifecycle);
+            Assert.AreEqual(4242, coordinator.ActiveOwner.RequireWorker().ChildProcessId);
 
             ownerSession.Complete(new CacheMutationWorkerOutcome.Completed(Result()));
             await ownerRun.WaitAsync(Bound);
@@ -319,7 +320,7 @@ public sealed class CacheMutationPageControllerTests
             Assert.AreEqual("replacement-visible-to-reload", reloadedBytes);
             Assert.AreEqual(1, completion.Count);
             Assert.AreEqual(1, ownerSession.DisposeCount);
-            Assert.IsNull(coordinator.Snapshot.ActiveJob);
+            Assert.IsNull(coordinator.Snapshot.ActiveOwner);
         }
         finally
         {
@@ -697,7 +698,7 @@ public sealed class CacheMutationPageControllerTests
             Assert.IsNull(contender.State.JobId);
             Assert.AreEqual(1, contenderIdentityCalls);
             Assert.AreEqual(WorkerJobLifecycle.Stopping,
-                coordinator.Snapshot.ActiveJob!.Lifecycle);
+                coordinator.Snapshot.ActiveOwner.RequireWorker().Lifecycle);
 
             ownerSession.Complete(new CacheMutationWorkerOutcome.Cancelled());
             await Task.WhenAll(ownerRun, cancel!).WaitAsync(Bound);
@@ -708,7 +709,7 @@ public sealed class CacheMutationPageControllerTests
             Assert.AreEqual("replacement-visible-to-reload", reloadedBytes);
             Assert.AreEqual(0, completion.Count);
             Assert.AreEqual(1, ownerSession.DisposeCount);
-            Assert.IsNull(coordinator.Snapshot.ActiveJob);
+            Assert.IsNull(coordinator.Snapshot.ActiveOwner);
 
             retryRun = contender.RefreshAsync(CacheMutationSource.Gadm, "CHE");
             retrySession = await contenderWorker.WaitForSessionAsync();
@@ -720,7 +721,7 @@ public sealed class CacheMutationPageControllerTests
             Assert.AreEqual(CacheMutationOperation.Refresh, contenderWorker.Request.Operation);
             retrySession.Complete(new CacheMutationWorkerOutcome.Cancelled());
             await retryRun.WaitAsync(Bound);
-            Assert.IsNull(coordinator.Snapshot.ActiveJob);
+            Assert.IsNull(coordinator.Snapshot.ActiveOwner);
         }
         finally
         {
@@ -779,13 +780,13 @@ public sealed class CacheMutationPageControllerTests
             await ownerSession.StopRequested.WaitAsync(Bound);
 
             Assert.AreEqual(1, ownerSession.StopCount);
-            Assert.IsNotNull(coordinator.Snapshot.ActiveJob);
+            Assert.IsNotNull(coordinator.Snapshot.ActiveOwner);
             Assert.AreEqual(0, reloadCount);
             Assert.AreEqual(0, completion.Count);
 
             ownerSession.Complete(new CacheMutationWorkerOutcome.Cancelled());
             await Task.WhenAll(ownerRun, disposal!).WaitAsync(Bound);
-            Assert.IsNull(coordinator.Snapshot.ActiveJob);
+            Assert.IsNull(coordinator.Snapshot.ActiveOwner);
             Assert.AreEqual(0, reloadCount,
                 "Disposed pages suppress stale reload callbacks after owner cleanup.");
             Assert.AreEqual(0, completion.Count);
@@ -795,10 +796,10 @@ public sealed class CacheMutationPageControllerTests
             await reuseSession.CompletionObserved.WaitAsync(Bound);
             Assert.AreEqual(1, reuseWorker.Starts);
             Assert.AreEqual(WorkerJobKind.CacheMutation,
-                coordinator.Snapshot.ActiveJob!.JobKind);
+                coordinator.Snapshot.ActiveOwner.RequireWorker().JobKind);
             reuseSession.Complete(new CacheMutationWorkerOutcome.Cancelled());
             await reuseRun.WaitAsync(Bound);
-            Assert.IsNull(coordinator.Snapshot.ActiveJob);
+            Assert.IsNull(coordinator.Snapshot.ActiveOwner);
         }
         finally
         {
@@ -1026,6 +1027,10 @@ public sealed class CacheMutationPageControllerTests
             Lease = new RecordingLease(dispatch.Context, dispatch.Descriptor, _ledger);
             return new WorkerJobAdmissionResult.Admitted(Lease);
         }
+
+        public CacheMaintenanceAdmissionResult TryReserveCacheMaintenance(
+            CacheMaintenanceRequestOrigin origin) =>
+            throw new AssertFailedException("Worker refresh tests do not reserve cache deletion.");
     }
 
     private sealed class RecordingLease(

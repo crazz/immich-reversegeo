@@ -89,6 +89,11 @@ internal static class WebServiceCollectionExtensions
         services.AddSingleton<IWorkerJobArbitrationDiagnostics>(sp =>
             sp.GetRequiredService<WorkerJobCoordinator>());
         services.AddHostedService(sp => sp.GetRequiredService<WorkerJobCoordinator>());
+        services.AddSingleton<PhysicalCacheDeletionFileSystem>();
+        services.AddSingleton<ICacheDeletionFileSystem>(sp =>
+            sp.GetRequiredService<PhysicalCacheDeletionFileSystem>());
+        services.AddSingleton<CacheDeletionCommand>();
+        services.AddSingleton<CacheDeletionPageControllerFactory>();
 
         if (scheduledRunsEnabled)
         {

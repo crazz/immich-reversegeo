@@ -20,11 +20,12 @@ public sealed class WorkerJobCoordinatorTests
         WorkerJobAdmissionResult.Busy busy = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Busy>(
             coordinator.TryAdmit(lookup));
 
-        Assert.AreEqual(WorkerJobKind.ProcessAssets, busy.ActiveJob.JobKind);
-        Assert.AreEqual(WorkerJobCapabilityFamily.Processing, busy.ActiveJob.CapabilityFamily);
-        Assert.AreEqual(WorkerJobRequestOrigin.Manual, busy.ActiveJob.Origin);
-        Assert.IsTrue(busy.ActiveJob.IsCancellable);
-        Assert.AreEqual(WorkerJobLifecycle.Admitted, busy.ActiveJob.Lifecycle);
+        WorkerJobBusyMetadata activeJob = busy.ActiveOwner.RequireWorker();
+        Assert.AreEqual(WorkerJobKind.ProcessAssets, activeJob.JobKind);
+        Assert.AreEqual(WorkerJobCapabilityFamily.Processing, activeJob.CapabilityFamily);
+        Assert.AreEqual(WorkerJobRequestOrigin.Manual, activeJob.Origin);
+        Assert.IsTrue(activeJob.IsCancellable);
+        Assert.AreEqual(WorkerJobLifecycle.Admitted, activeJob.Lifecycle);
         await admitted.Lease.DisposeAsync();
 
         WorkerJobAdmissionResult.Admitted lookupAdmission =
@@ -56,7 +57,7 @@ public sealed class WorkerJobCoordinatorTests
         Assert.AreEqual(31, results.OfType<WorkerJobAdmissionResult.Busy>().Count());
 
         await admitted.Lease.DisposeAsync();
-        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
     }
 
     [TestMethod]
@@ -65,23 +66,25 @@ public sealed class WorkerJobCoordinatorTests
         await using var coordinator = CreateCoordinator();
         WorkerJobAdmissionResult.Admitted admitted = Admit(coordinator, LookupDispatch());
 
-        Assert.IsNotNull(coordinator.ActiveOwner?.AdmittedAtUtc);
-        Assert.IsNull(coordinator.ActiveOwner?.StartedAtUtc);
-        Assert.IsNull(coordinator.ActiveOwner?.ChildProcessId);
+        Assert.AreNotEqual(
+            default(DateTimeOffset),
+            coordinator.ActiveOwner.RequireWorker().AdmittedAtUtc);
+        Assert.IsNull(coordinator.ActiveOwner.RequireWorker().StartedAtUtc);
+        Assert.IsNull(coordinator.ActiveOwner.RequireWorker().ChildProcessId);
 
         Assert.IsTrue(admitted.Lease.TryAdvance(admitted.Lease.Context, WorkerJobLifecycle.Starting));
-        Assert.IsNotNull(coordinator.ActiveOwner?.StartedAtUtc);
-        Assert.IsNull(coordinator.ActiveOwner?.ChildProcessId, "starting without a child has no PID");
+        Assert.IsNotNull(coordinator.ActiveOwner.RequireWorker().StartedAtUtc);
+        Assert.IsNull(coordinator.ActiveOwner.RequireWorker().ChildProcessId, "starting without a child has no PID");
         Assert.IsTrue(admitted.Lease.TryAdvance(
             admitted.Lease.Context,
             WorkerJobLifecycle.Running,
             childProcessId: 4321));
-        Assert.AreEqual(4321, coordinator.ActiveOwner?.ChildProcessId);
+        Assert.AreEqual(4321, coordinator.ActiveOwner.RequireWorker().ChildProcessId);
         Assert.IsTrue(admitted.Lease.TryAdvance(admitted.Lease.Context, WorkerJobLifecycle.Finalizing));
 
         WorkerJobAdmissionResult.Busy busy = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Busy>(
             coordinator.TryAdmit(ProcessingDispatch(ProcessingRunTrigger.Scheduled)));
-        Assert.AreEqual(WorkerJobLifecycle.Finalizing, busy.ActiveJob.Lifecycle);
+        Assert.AreEqual(WorkerJobLifecycle.Finalizing, busy.ActiveOwner.RequireWorker().Lifecycle);
 
         await admitted.Lease.DisposeAsync();
         WorkerJobAdmissionResult.Admitted next = Admit(
@@ -263,7 +266,7 @@ public sealed class WorkerJobCoordinatorTests
             coordinator,
             ProcessingDispatch(ProcessingRunTrigger.Manual));
         await admitted.Lease.DisposeAsync();
-        Assert.AreEqual(next.Lease.Context.JobId, coordinator.ActiveOwner?.JobId, "stale release cannot clear a replacement owner");
+        Assert.AreEqual(next.Lease.Context.JobId, coordinator.ActiveOwner.RequireWorker().JobId, "stale release cannot clear a replacement owner");
         await next.Lease.DisposeAsync();
     }
 
@@ -278,15 +281,15 @@ public sealed class WorkerJobCoordinatorTests
             childProcessId: 9988));
 
         WorkerJobArbitrationDiagnosticSnapshot snapshot = coordinator.Snapshot;
-        Assert.IsNotNull(snapshot.ActiveJob);
-        string[] propertyNames = snapshot.ActiveJob.GetType().GetProperties()
+        WorkerJobBusyMetadata activeJob = snapshot.ActiveOwner.RequireWorker();
+        string[] propertyNames = activeJob.GetType().GetProperties()
             .Select(static property => property.Name)
             .ToArray();
         CollectionAssert.DoesNotContain(propertyNames, "JobId");
         CollectionAssert.DoesNotContain(propertyNames, "ChildProcessId");
         CollectionAssert.DoesNotContain(propertyNames, "ProcessId");
-        Assert.AreEqual(admitted.Lease.Context.JobId, coordinator.ActiveOwner?.JobId);
-        Assert.AreEqual(9988, coordinator.ActiveOwner?.ChildProcessId);
+        Assert.AreEqual(admitted.Lease.Context.JobId, coordinator.ActiveOwner.RequireWorker().JobId);
+        Assert.AreEqual(9988, coordinator.ActiveOwner.RequireWorker().ChildProcessId);
 
         await admitted.Lease.DisposeAsync();
     }
@@ -302,10 +305,10 @@ public sealed class WorkerJobCoordinatorTests
         try
         {
             Assert.AreNotEqual(firstAdmission.Lease.Context.JobId, secondAdmission.Lease.Context.JobId);
-            Assert.AreEqual(WorkerJobKind.CoordinateLookup, first.Snapshot.ActiveJob?.JobKind);
-            Assert.AreEqual(WorkerJobKind.CoordinateLookup, second.Snapshot.ActiveJob?.JobKind);
-            Assert.AreEqual(firstAdmission.Lease.Context.JobId, first.ActiveOwner?.JobId);
-            Assert.AreEqual(secondAdmission.Lease.Context.JobId, second.ActiveOwner?.JobId);
+            Assert.AreEqual(WorkerJobKind.CoordinateLookup, first.Snapshot.ActiveOwner.RequireWorker().JobKind);
+            Assert.AreEqual(WorkerJobKind.CoordinateLookup, second.Snapshot.ActiveOwner.RequireWorker().JobKind);
+            Assert.AreEqual(firstAdmission.Lease.Context.JobId, first.ActiveOwner.RequireWorker().JobId);
+            Assert.AreEqual(secondAdmission.Lease.Context.JobId, second.ActiveOwner.RequireWorker().JobId);
         }
         finally
         {
@@ -346,7 +349,7 @@ public sealed class WorkerJobCoordinatorTests
         WorkerJobAdmissionResult result = coordinator.TryAdmit(
             new FakeCacheMutationDispatch(canonicalMetadataButUnregistered));
         Assert.IsInstanceOfType<WorkerJobAdmissionResult.Unavailable>(result);
-        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
     }
 
     [TestMethod]

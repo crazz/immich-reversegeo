@@ -99,7 +99,7 @@ public sealed class WebProcessingGeodataBoundaryTests
         WorkerJobArbitrationDiagnosticSnapshot snapshot = diagnostics.Snapshot;
 
         Assert.IsTrue(snapshot.IsAccepting);
-        Assert.IsNull(snapshot.ActiveJob);
+        Assert.IsNull(snapshot.ActiveOwner);
         CollectionAssert.AreEquivalent(
             new[] { "add_Changed", "get_Snapshot", "remove_Changed" },
             typeof(IWorkerJobArbitrationDiagnostics).GetMethods()

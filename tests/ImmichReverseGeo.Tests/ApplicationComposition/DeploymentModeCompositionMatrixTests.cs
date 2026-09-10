@@ -142,6 +142,7 @@ public sealed class DeploymentModeCompositionMatrixTests
     }
 
     [TestMethod]
+    [TestCategory("Change52")]
     public async Task Composition_ProductionDescriptorsAndAliasFactoriesMatchEveryRoot()
     {
         await using var standard = WebFixture.Create(DeploymentMode.Standard);
@@ -843,6 +844,13 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertSingletonAliasDescriptors<WorkerJobCoordinator, IWorkerJobAdmissionGate>(descriptors);
         AssertSingletonAliasDescriptors<WorkerJobCoordinator, IWorkerJobArbitrationDiagnostics>(descriptors);
         AssertSingletonHostedAliasDescriptor<WorkerJobCoordinator>(descriptors);
+        AssertSingletonAliasDescriptors<PhysicalCacheDeletionFileSystem, ICacheDeletionFileSystem>(descriptors);
+        Assert.AreEqual(
+            ServiceLifetime.Singleton,
+            descriptors.Single(descriptor => descriptor.ServiceType == typeof(CacheDeletionCommand)).Lifetime);
+        Assert.AreEqual(
+            ServiceLifetime.Singleton,
+            descriptors.Single(descriptor => descriptor.ServiceType == typeof(CacheDeletionPageControllerFactory)).Lifetime);
         AssertSingletonAliasDescriptors<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(descriptors);
         AssertSingletonAliasDescriptors<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(descriptors);
         AssertSingletonHostedAliasDescriptor<CoordinateLookupPageControllerHostLifetime>(descriptors);
@@ -891,6 +899,13 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertAlias<WorkerJobCoordinator, IWorkerJobAdmissionGate>(provider);
         AssertAlias<WorkerJobCoordinator, IWorkerJobArbitrationDiagnostics>(provider);
         AssertHostedAlias<WorkerJobCoordinator>(provider);
+        AssertAlias<PhysicalCacheDeletionFileSystem, ICacheDeletionFileSystem>(provider);
+        Assert.AreSame(
+            provider.GetRequiredService<CacheDeletionCommand>(),
+            provider.GetRequiredService<CacheDeletionCommand>());
+        Assert.AreSame(
+            provider.GetRequiredService<CacheDeletionPageControllerFactory>(),
+            provider.GetRequiredService<CacheDeletionPageControllerFactory>());
         AssertAlias<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(provider);
         AssertAlias<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(provider);
         AssertAlias<CacheMutationWorkerClient, ICacheMutationWorkerClient>(provider);
@@ -969,7 +984,9 @@ public sealed class DeploymentModeCompositionMatrixTests
             typeof(ConfigCoordinateLookupSettingsSnapshotProvider),
             typeof(ICoordinateLookupSettingsSnapshotProvider), typeof(CoordinateLookupWorkerClient),
             typeof(ICoordinateLookupWorkerClient), typeof(CoordinateLookupPageControllerHostLifetime),
-            typeof(CoordinateLookupPageControllerFactory)
+            typeof(CoordinateLookupPageControllerFactory), typeof(CacheDeletionCommand),
+            typeof(ICacheDeletionFileSystem), typeof(PhysicalCacheDeletionFileSystem),
+            typeof(CacheDeletionPageControllerFactory)
         })
         {
             Assert.IsFalse(descriptors.Any(descriptor => descriptor.ServiceType == forbidden), forbidden.Name + "-absent");

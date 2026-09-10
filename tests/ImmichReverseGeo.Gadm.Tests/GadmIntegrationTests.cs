@@ -83,8 +83,8 @@ public class GadmIntegrationTests
                         continue;
                     }
 
-                    cache.DeleteFile(iso3);
                     SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
                 }
                 catch (Exception ex)
                 {

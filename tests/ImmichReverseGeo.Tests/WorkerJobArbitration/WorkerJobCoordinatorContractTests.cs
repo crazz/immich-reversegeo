@@ -24,11 +24,12 @@ public sealed class WorkerJobCoordinatorContractTests
 
             WorkerJobAdmissionResult.Busy busy = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Busy>(
                 coordinator.TryAdmit(CacheDispatch(cacheDescriptor)));
-            Assert.AreEqual(WorkerJobKind.CacheMutation, busy.ActiveJob.JobKind);
-            Assert.AreEqual(WorkerJobCapabilityFamily.CacheMaintenance, busy.ActiveJob.CapabilityFamily);
-            Assert.AreEqual(WorkerJobRequestOrigin.Manual, busy.ActiveJob.Origin);
-            Assert.IsTrue(busy.ActiveJob.IsCancellable);
-            Assert.AreEqual(WorkerJobLifecycle.Admitted, busy.ActiveJob.Lifecycle);
+            WorkerJobBusyMetadata activeJob = busy.ActiveOwner.RequireWorker();
+            Assert.AreEqual(WorkerJobKind.CacheMutation, activeJob.JobKind);
+            Assert.AreEqual(WorkerJobCapabilityFamily.CacheMaintenance, activeJob.CapabilityFamily);
+            Assert.AreEqual(WorkerJobRequestOrigin.Manual, activeJob.Origin);
+            Assert.IsTrue(activeJob.IsCancellable);
+            Assert.AreEqual(WorkerJobLifecycle.Admitted, activeJob.Lifecycle);
         }
         finally
         {
@@ -40,7 +41,7 @@ public sealed class WorkerJobCoordinatorContractTests
             Assert.IsInstanceOfType<WorkerJobAdmissionResult.Unavailable>(
                 coordinator.TryAdmit(CacheDispatch(cacheDescriptor)));
         Assert.AreEqual("worker-admission-stopped", unavailable.Code);
-        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
     }
 
     [TestMethod]
@@ -78,7 +79,7 @@ public sealed class WorkerJobCoordinatorContractTests
             }
         }
 
-        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
     }
 
     [TestMethod]
@@ -103,13 +104,14 @@ public sealed class WorkerJobCoordinatorContractTests
             WorkerJobAdmissionResult.Busy busy =
                 Assert.IsInstanceOfType<WorkerJobAdmissionResult.Busy>(
                     coordinator.TryAdmit(contenderDispatch));
-            Assert.AreEqual(ownerKind, busy.ActiveJob.JobKind);
+            WorkerJobBusyMetadata activeJob = busy.ActiveOwner.RequireWorker();
+            Assert.AreEqual(ownerKind, activeJob.JobKind);
             Assert.AreEqual(
                 owner.Lease.Descriptor.Arbitration.CapabilityFamily,
-                busy.ActiveJob.CapabilityFamily);
+                activeJob.CapabilityFamily);
             Assert.AreEqual(
                 owner.Lease.Context.Origin,
-                busy.ActiveJob.Origin);
+                activeJob.Origin);
         }
         finally
         {
@@ -129,7 +131,7 @@ public sealed class WorkerJobCoordinatorContractTests
             await reused.Lease.DisposeAsync();
         }
 
-        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
     }
 
     [TestMethod]
@@ -193,7 +195,7 @@ public sealed class WorkerJobCoordinatorContractTests
             }
         }
 
-        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
         Assert.IsInstanceOfType<WorkerJobAdmissionResult.Unavailable>(
             coordinator.TryAdmit(CacheDispatch(cacheDescriptor)));
     }
@@ -256,10 +258,11 @@ public sealed class WorkerJobCoordinatorContractTests
             WorkerJobAdmissionResult.Admitted winner = admitted[0];
             foreach (WorkerJobAdmissionResult.Busy rejected in busy)
             {
-                Assert.AreEqual(winner.Lease.Context.JobKind, rejected.ActiveJob.JobKind);
+                WorkerJobBusyMetadata activeJob = rejected.ActiveOwner.RequireWorker();
+                Assert.AreEqual(winner.Lease.Context.JobKind, activeJob.JobKind);
                 Assert.AreEqual(
                     winner.Lease.Descriptor.Arbitration.CapabilityFamily,
-                    rejected.ActiveJob.CapabilityFamily);
+                    activeJob.CapabilityFamily);
             }
         }
         finally
@@ -279,7 +282,7 @@ public sealed class WorkerJobCoordinatorContractTests
         }
 
         Assert.AreEqual(0, heldAdmissions.Current, $"round {round}: release boundary");
-        Assert.IsNull(coordinator.Snapshot.ActiveJob);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
     }
 
     private static async Task AssertCallerFinallyBoundaryAsync(OwnerBoundary boundary)
@@ -397,8 +400,8 @@ public sealed class WorkerJobCoordinatorContractTests
     {
         WorkerJobAdmissionResult.Busy busy = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Busy>(
             coordinator.TryAdmit(contender));
-        Assert.AreEqual(WorkerJobKind.CacheMutation, busy.ActiveJob.JobKind);
-        Assert.AreEqual(WorkerJobCapabilityFamily.CacheMaintenance, busy.ActiveJob.CapabilityFamily);
+        Assert.AreEqual(WorkerJobKind.CacheMutation, busy.ActiveOwner.RequireWorker().JobKind);
+        Assert.AreEqual(WorkerJobCapabilityFamily.CacheMaintenance, busy.ActiveOwner.RequireWorker().CapabilityFamily);
     }
 
     private static WorkerJobCoordinator CreateCoordinator(WorkerJobDescriptor cacheDescriptor)

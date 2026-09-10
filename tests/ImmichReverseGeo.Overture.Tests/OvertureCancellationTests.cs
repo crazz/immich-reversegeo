@@ -250,7 +250,7 @@ public class OvertureCancellationTests
     }
 
     [TestMethod]
-    public async Task CacheStatusReadinessValidationAndDeletion_PropagateMemoryButKeepOrdinaryFallbacks()
+    public async Task CacheStatusReadinessAndValidation_PropagateMemoryButKeepOrdinaryFallbacks()
     {
         var root = CreateTempDir();
         var cacheDir = Path.Combine(root, "overture-divisions");
@@ -261,12 +261,10 @@ public class OvertureCancellationTests
             var ordinary = CreateCache(root, new OvertureDivisionCacheTestHooks
             {
                 StatusReader = _ => throw new InvalidOperationException("ordinary"),
-                HasRowsOperation = (_, _) => throw new InvalidOperationException("ordinary"),
-                DeletionOperation = (_, _) => throw new InvalidOperationException("ordinary")
+                HasRowsOperation = (_, _) => throw new InvalidOperationException("ordinary")
             });
             Assert.AreEqual(0L, ordinary.GetStatus()["CHE"].RowCount);
             Assert.IsFalse(ordinary.HasData("CHE"));
-            ordinary.DeleteFile("CHE");
 
             var statusOom = CreateCache(root, new OvertureDivisionCacheTestHooks
             {
@@ -279,12 +277,6 @@ public class OvertureCancellationTests
                 HasRowsOperation = (_, _) => throw new OutOfMemoryException("controlled")
             });
             Assert.Throws<OutOfMemoryException>(() => readinessOom.HasData("CHE"));
-
-            var deletionOom = CreateCache(root, new OvertureDivisionCacheTestHooks
-            {
-                DeletionOperation = (_, _) => throw new OutOfMemoryException("controlled")
-            });
-            Assert.Throws<OutOfMemoryException>(() => deletionOom.DeleteFile("CHE"));
 
             File.Delete(Path.Combine(cacheDir, "CHE.db"));
             var validationOrdinary = CreateCache(root, new OvertureDivisionCacheTestHooks

@@ -58,35 +58,6 @@ public class GadmDivisionCacheServiceTests
     }
 
     [TestMethod]
-    public void DeleteFile_RemovesDbAndTempFiles()
-    {
-        var tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
-        var dbDir = Path.Combine(tempDir, "gadm-divisions");
-        Directory.CreateDirectory(dbDir);
-        var dbPath = Path.Combine(dbDir, "CHE.db");
-        var tmpPath = Path.Combine(dbDir, "CHE.abc.tmp");
-        File.WriteAllText(dbPath, "db");
-        File.WriteAllText(tmpPath, "tmp");
-
-        try
-        {
-            var svc = new GadmDivisionCacheService(
-                NullLogger<GadmDivisionCacheService>.Instance,
-                tempDir);
-            svc.DeleteFile("CHE");
-
-            Assert.IsFalse(File.Exists(dbPath));
-            Assert.IsFalse(File.Exists(tmpPath));
-        }
-        finally
-        {
-            if (Directory.Exists(tempDir))
-            {
-                Directory.Delete(tempDir, recursive: true);
-            }
-        }
-    }
-    [TestMethod]
     public void GetOrStartDownload_PreCancelledTokenDoesNotReturnReadyCache()
     {
         var tempDir = CreateTempDir();
@@ -168,7 +139,8 @@ public class GadmDivisionCacheServiceTests
             await Assert.ThrowsAsync<TaskCanceledException>(async () => await cancelled);
             await Assert.ThrowsAsync<InvalidOperationException>(async () => await liveWaiter);
             source.CancelWithOwnerToken = false;
-            var (retry, _) = svc.GetOrStartDownload("CHE"); source.Release(); await retry; svc.DeleteFile("CHE");
+            var (retry, _) = svc.GetOrStartDownload("CHE"); source.Release(); await retry;
+            File.Delete(Path.Combine(tempDir, "gadm-divisions", "CHE.db"));
             source.ResetGate();
             var (active, _) = svc.GetOrStartDownload("CHE"); await source.Entered.Task;
             using var waiter = new CancellationTokenSource();
@@ -204,7 +176,7 @@ public class GadmDivisionCacheServiceTests
             await Task.WhenAll(results.Select(x => x.Task));
             Assert.IsTrue(svc.HasData("CHE"));
             var ready = svc.GetOrStartDownload("CHE"); Assert.AreEqual(GadmDivisionEnsureResult.AlreadyReady, ready.Result); Assert.AreEqual(1, source.InvocationCount);
-            svc.DeleteFile("CHE"); source.ResetGate();
+            File.Delete(Path.Combine(tempDir, "gadm-divisions", "CHE.db")); source.ResetGate();
             var (afterDeletion, afterDeletionResult) = svc.GetOrStartDownload("CHE");
             Assert.AreEqual(GadmDivisionEnsureResult.StartedDownload, afterDeletionResult); Assert.AreNotSame(starter.Task, afterDeletion);
             source.Release(); await afterDeletion; Assert.AreEqual(2, source.InvocationCount);
@@ -1064,8 +1036,7 @@ public class GadmDivisionCacheServiceTests
                         GadmCacheExporter.ExportGeoPackageToSqlite(geoPackagePath, outputPath, iso3, ct),
                     static _ => new GadmDivisionStatus(0, null, null, null),
                     static (_, _) => false,
-                    File.Exists,
-                    static (_, _) => { });
+                    File.Exists);
 
                 var (task, result) = service.GetOrStartDownload("CHE");
                 Assert.AreEqual(GadmDivisionEnsureResult.StartedDownload, result);
@@ -1393,20 +1364,14 @@ public class GadmDivisionCacheServiceTests
             var status = new GadmDivisionCacheService(
                 NullLogger<GadmDivisionCacheService>.Instance, tempDir,
                 _ => throw new OutOfMemoryException("status"),
-                static (_, _) => false, static _ => false, static (_, _) => { });
+                static (_, _) => false, static _ => false);
             Assert.Throws<OutOfMemoryException>(() => status.GetStatus());
 
             var readiness = new GadmDivisionCacheService(
                 NullLogger<GadmDivisionCacheService>.Instance, tempDir,
                 static _ => new GadmDivisionStatus(0, null, null, null),
-                (_, _) => throw new OutOfMemoryException("readiness"), static _ => false, static (_, _) => { });
+                (_, _) => throw new OutOfMemoryException("readiness"), static _ => false);
             Assert.Throws<OutOfMemoryException>(() => readiness.HasData("CHE"));
-
-            var deletion = new GadmDivisionCacheService(
-                NullLogger<GadmDivisionCacheService>.Instance, tempDir,
-                static _ => new GadmDivisionStatus(0, null, null, null), static (_, _) => false, static _ => false,
-                (_, _) => throw new OutOfMemoryException("delete"));
-            Assert.Throws<OutOfMemoryException>(() => deletion.DeleteFile("CHE"));
 
             var validation = new GadmDivisionCacheService(
                 NullLogger<GadmDivisionCacheService>.Instance, tempDir,
@@ -1421,7 +1386,7 @@ public class GadmDivisionCacheServiceTests
                     return 1;
                 },
                 static _ => new GadmDivisionStatus(0, null, null, null), static (_, _) => false,
-                _ => throw new OutOfMemoryException("validation"), static (_, _) => { });
+                _ => throw new OutOfMemoryException("validation"));
             var (task, _) = validation.GetOrStartDownload("CHE");
             await Assert.ThrowsAsync<OutOfMemoryException>(async () => await task);
             Assert.AreEqual(0, Directory.GetFiles(directory, "CHE.*.tmp").Length);

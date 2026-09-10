@@ -10,6 +10,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 ## Unreleased
 
+- Administrative cache deletion now checks the app's local work slot, confirms the source, reports each file outcome, and refuses linked cache paths. Busy requests fail immediately and can be retried after the active operation finishes. See [Data tools](./using-the-app.md#deleting-administrative-caches).
 - Country detection now keeps supported territories as their own country identity instead of replacing them with the administering country.
 - Fixed the reported Hong Kong coordinates and expanded built-in coverage for Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.

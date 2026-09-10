@@ -462,6 +462,10 @@ public sealed class LookupPageRenderingTests
     {
         public WorkerJobAdmissionResult TryAdmit(WorkerJobDispatch dispatch) =>
             throw new AssertFailedException("Rendering does not admit a worker.");
+
+        public CacheMaintenanceAdmissionResult TryReserveCacheMaintenance(
+            CacheMaintenanceRequestOrigin origin) =>
+            throw new AssertFailedException("Rendering does not reserve cache deletion.");
     }
 
     private sealed class NeverWorkerClient : ICoordinateLookupWorkerClient

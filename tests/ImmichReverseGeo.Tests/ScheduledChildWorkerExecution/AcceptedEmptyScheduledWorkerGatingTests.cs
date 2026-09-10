@@ -30,7 +30,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         Assert.AreEqual(0, fixture.Observer.AdmissionCalls);
         Assert.AreEqual(0, fixture.Backend.ResolutionCalls);
         Assert.IsNull(fixture.Coordinator.ActiveRequest);
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
 
         detector.Decide(false);
@@ -63,7 +63,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         Assert.AreEqual(0, fixture.CancellationFactory.CreateCalls);
         Assert.AreEqual(0, fixture.Observer.AdmissionCalls);
         Assert.AreEqual(0, fixture.Backend.ResolutionCalls);
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
         Assert.AreEqual(1, fixture.Logger.ErrorCount);
         Assert.IsFalse(fixture.Logger.Messages.Any(static message =>
@@ -90,7 +90,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         Assert.AreEqual(0, fixture.CancellationFactory.CreateCalls);
         Assert.AreEqual(0, fixture.Observer.AdmissionCalls);
         Assert.AreEqual(0, fixture.Backend.ResolutionCalls);
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
     }
 
@@ -124,7 +124,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             Assert.AreEqual("cancellation-factory-startup", failure.Message);
             Assert.AreEqual(1, cancellationFactory.CreateCalls);
             Assert.AreEqual(0, backend.ResolutionCalls);
-            Assert.IsNull(workerCoordinator.Snapshot.ActiveJob);
+            Assert.IsNull(workerCoordinator.Snapshot.ActiveOwner);
 
             reuse = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Admitted>(
                 workerCoordinator.TryAdmit(LookupDispatch())).Lease;
@@ -169,7 +169,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             Assert.AreEqual("scheduled-registration-startup", failure.Message);
             Assert.AreEqual(1, cancellationFactory.Cancellation.DisposeCalls);
             Assert.AreEqual(0, backend.ResolutionCalls);
-            Assert.IsNull(workerCoordinator.Snapshot.ActiveJob);
+            Assert.IsNull(workerCoordinator.Snapshot.ActiveOwner);
 
             reuse = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Admitted>(
                 workerCoordinator.TryAdmit(LookupDispatch())).Lease;
@@ -220,7 +220,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             Assert.IsInstanceOfType<WorkerJobAdmissionResult.Unavailable>(detector.LookupAdmission);
             await Assert.ThrowsAsync<OperationCanceledException>(() => scheduled.WaitAsync(Bound));
             await Assert.ThrowsExactlyAsync<AggregateException>(() => shutdown.WaitAsync(Bound));
-            Assert.IsNull(workerCoordinator.Snapshot.ActiveJob);
+            Assert.IsNull(workerCoordinator.Snapshot.ActiveOwner);
         }
         finally
         {

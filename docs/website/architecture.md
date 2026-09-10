@@ -39,9 +39,9 @@ The background processor:
 
 ### Worker jobs and multiple containers
 
-Heavy jobs such as asset processing and coordinate Lookup run in an isolated child process. Within one Immich ReverseGeo web container, they share one local slot, so only one of these jobs runs at a time. A busy request is rejected immediately and can be tried again after the active job finishes.
+Heavy jobs such as asset processing and coordinate Lookup run in an isolated child process. Administrative cache deletion runs directly in the Web process, but reserves the same local slot while it removes the final cache files. A busy request is rejected immediately and can be tried again after the active operation finishes.
 
-This slot is local to each web container. If you run multiple web containers, each container has its own slot and its status describes only work in that container. Lookup and future cache maintenance can therefore overlap each other or asset processing in another container. Asset processing also keeps its PostgreSQL advisory lock, which prevents two processing workers from updating Immich at the same time across containers. Run one interactive web container if you need strict exclusion across all heavy jobs.
+This slot is local to each web container. If you run multiple web containers, an operation in one container can overlap processing, Lookup, cache refresh, or cache deletion in another container. Asset processing also keeps its PostgreSQL advisory lock, which prevents two processing workers from updating Immich at the same time across containers. Run one interactive web container if you need strict exclusion while changing a shared cache volume.
 
 ### Active data sources
 

@@ -42,7 +42,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
     private readonly Func<string, OvertureDivisionStatus> _statusReader;
     private readonly Func<string, string, bool> _hasRowsOperation;
     private readonly Func<string, bool> _validationOperation;
-    private readonly Action<string, string> _deletionOperation;
     private readonly Func<string?> _releaseDiscovery;
     private readonly Action _afterInFlightTaskAcquired;
     private readonly ICacheFilePublisher _filePublisher;
@@ -68,7 +67,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         _statusReader = ReadStatus;
         _hasRowsOperation = HasRows;
         _validationOperation = IsValidDb;
-        _deletionOperation = DeleteFileAndTemps;
         _releaseDiscovery = DiscoverLatestOvertureReleaseForCache;
         _afterInFlightTaskAcquired = static () => { };
         _filePublisher = new AtomicCacheFilePublisher();
@@ -87,7 +85,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         _statusReader = ReadStatus;
         _hasRowsOperation = HasRows;
         _validationOperation = IsValidDb;
-        _deletionOperation = DeleteFileAndTemps;
         _releaseDiscovery = DiscoverLatestOvertureReleaseForCache;
         _afterInFlightTaskAcquired = static () => { };
         _filePublisher = new AtomicCacheFilePublisher();
@@ -145,7 +142,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         _statusReader = hooks.StatusReader ?? _statusReader;
         _hasRowsOperation = hooks.HasRowsOperation ?? _hasRowsOperation;
         _validationOperation = hooks.ValidationOperation ?? _validationOperation;
-        _deletionOperation = hooks.DeletionOperation ?? _deletionOperation;
         _releaseDiscovery = hooks.ReleaseDiscovery ?? _releaseDiscovery;
         _afterInFlightTaskAcquired = hooks.AfterInFlightTaskAcquired ?? _afterInFlightTaskAcquired;
         _filePublisher = hooks.FilePublisher ?? _filePublisher;
@@ -205,12 +201,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         }
 
         return hasData;
-    }
-
-    public void DeleteFile(string iso3)
-    {
-        _readyCaches.TryRemove(iso3, out _);
-        RunDeletionOperation(GetDbPath(iso3), iso3);
     }
 
     public async ValueTask<CacheMutationSourceResult> ExecuteAsync(
@@ -1002,21 +992,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         }
     }
 
-    private void RunDeletionOperation(string path, string iso3)
-    {
-        try
-        {
-            _deletionOperation(path, iso3);
-        }
-        catch (OutOfMemoryException)
-        {
-            throw;
-        }
-        catch
-        {
-        }
-    }
-
     private string GetDbPath(string iso3)
     {
         return Path.Combine(_dataDir, "overture-divisions", $"{iso3}.db");
@@ -1091,21 +1066,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         return null;
     }
 
-    private static void DeleteFileAndTemps(string path, string iso3)
-    {
-        TryDelete(path);
-        var dir = Path.GetDirectoryName(path);
-        if (dir is null || !Directory.Exists(dir))
-        {
-            return;
-        }
-
-        foreach (var stale in Directory.GetFiles(dir, $"{iso3}.*.tmp"))
-        {
-            TryDelete(stale);
-        }
-    }
-
     private static void TryDeleteAfterFailure(string path)
     {
         try
@@ -1168,7 +1128,6 @@ internal sealed class OvertureDivisionCacheTestHooks
     public Func<string, OvertureDivisionStatus>? StatusReader { get; init; }
     public Func<string, string, bool>? HasRowsOperation { get; init; }
     public Func<string, bool>? ValidationOperation { get; init; }
-    public Action<string, string>? DeletionOperation { get; init; }
     public Func<string?>? ReleaseDiscovery { get; init; }
     public Action? AfterInFlightTaskAcquired { get; init; }
     public ICacheFilePublisher? FilePublisher { get; init; }

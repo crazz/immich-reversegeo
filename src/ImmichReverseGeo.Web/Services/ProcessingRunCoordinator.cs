@@ -335,10 +335,16 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         {
             if (reservation.Result == ProcessingRunAdmissionResult.AlreadyRunning)
             {
-                string message = reservation.Busy is null
-                    || reservation.Busy.CapabilityFamily == WorkerJobCapabilityFamily.Processing
-                    ? "Scheduled run skipped because a processing pass is already in progress."
-                    : "Scheduled run skipped because another background job is already using the heavy worker.";
+                string message = reservation.Busy switch
+                {
+                    ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance =>
+                        "Scheduled run skipped because cache maintenance is in progress.",
+                    null or ExclusiveHeavyOwnerBusyMetadata.Worker
+                    {
+                        Job.CapabilityFamily: WorkerJobCapabilityFamily.Processing
+                    } => "Scheduled run skipped because a processing pass is already in progress.",
+                    _ => "Scheduled run skipped because another background job is already using the heavy worker."
+                };
                 _state.AppendLog(message);
             }
 
@@ -774,7 +780,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private async ValueTask<(
         ProcessingRunAdmissionResult Result,
         ActiveRun? Handle,
-        WorkerJobBusyMetadata? Busy)> ReserveAsync(
+        ExclusiveHeavyOwnerBusyMetadata? Busy)> ReserveAsync(
         ProcessingRunTrigger trigger,
         CancellationToken linkedCancellationToken)
     {
@@ -796,7 +802,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         WorkerJobAdmissionResult admission = _workerCoordinator.TryAdmit(dispatch);
         if (admission is WorkerJobAdmissionResult.Busy busy)
         {
-            return (ProcessingRunAdmissionResult.AlreadyRunning, null, busy.ActiveJob);
+            return (ProcessingRunAdmissionResult.AlreadyRunning, null, busy.ActiveOwner);
         }
 
         if (admission is WorkerJobAdmissionResult.Unavailable)
@@ -844,7 +850,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         internal async ValueTask<(
             ProcessingRunAdmissionResult Result,
             ActiveRun? Handle,
-            WorkerJobBusyMetadata? Busy)> TryCommitAsync()
+            ExclusiveHeavyOwnerBusyMetadata? Busy)> TryCommitAsync()
         {
             try
             {

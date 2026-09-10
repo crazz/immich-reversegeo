@@ -26,8 +26,8 @@ public sealed class WorkerJobProducerContentionTests
 
         try
         {
-            Assert.AreEqual(WorkerJobKind.CoordinateLookup, fixture.WorkerCoordinator.Snapshot.ActiveJob?.JobKind);
-            Assert.AreEqual(WorkerJobLifecycle.Running, fixture.WorkerCoordinator.Snapshot.ActiveJob?.Lifecycle);
+            Assert.AreEqual(WorkerJobKind.CoordinateLookup, fixture.WorkerCoordinator.Snapshot.ActiveOwner.RequireWorker().JobKind);
+            Assert.AreEqual(WorkerJobLifecycle.Running, fixture.WorkerCoordinator.Snapshot.ActiveOwner.RequireWorker().Lifecycle);
             Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
 
             Assert.AreEqual(
@@ -44,7 +44,7 @@ public sealed class WorkerJobProducerContentionTests
             Assert.AreEqual(0, fixture.ProcessingBackend.Calls);
             Assert.AreEqual(1, fixture.LookupWorker.Starts);
             Assert.AreEqual(0, session.StopCalls, "processing contention does not preempt Lookup");
-            Assert.AreEqual(WorkerJobKind.CoordinateLookup, fixture.WorkerCoordinator.Snapshot.ActiveJob?.JobKind);
+            Assert.AreEqual(WorkerJobKind.CoordinateLookup, fixture.WorkerCoordinator.Snapshot.ActiveOwner.RequireWorker().JobKind);
             Assert.AreEqual(
                 1,
                 fixture.State.GetRecentLog().Count(line => line.EndsWith(
@@ -58,7 +58,7 @@ public sealed class WorkerJobProducerContentionTests
             await lookup.WaitAsync(Bound);
         }
 
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(
             ProcessingRunAdmissionResult.Accepted,
             await fixture.Processing.TriggerManualAsync().WaitAsync(Bound));
@@ -79,8 +79,8 @@ public sealed class WorkerJobProducerContentionTests
 
         try
         {
-            Assert.AreEqual(WorkerJobKind.ProcessAssets, fixture.WorkerCoordinator.Snapshot.ActiveJob?.JobKind);
-            Assert.AreEqual(active.RunId, fixture.WorkerCoordinator.ActiveOwner?.JobId);
+            Assert.AreEqual(WorkerJobKind.ProcessAssets, fixture.WorkerCoordinator.Snapshot.ActiveOwner.RequireWorker().JobKind);
+            Assert.AreEqual(active.RunId, fixture.WorkerCoordinator.ActiveOwner.RequireWorker().JobId);
 
             await fixture.Lookup.SubmitAsync(Submission()).WaitAsync(Bound);
 
@@ -98,7 +98,7 @@ public sealed class WorkerJobProducerContentionTests
         Assert.AreEqual(
             ScheduledTriggerResult.AcceptedAfterTerminal,
             await scheduled.WaitAsync(Bound));
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
         Assert.AreEqual(1, fixture.ProcessingBackend.Calls);
     }
 
@@ -131,7 +131,7 @@ public sealed class WorkerJobProducerContentionTests
         await fixture.ProcessingBackend.Entered.Task.WaitAsync(Bound);
         Assert.AreEqual(
             WorkerJobLifecycle.Starting,
-            fixture.WorkerCoordinator.Snapshot.ActiveJob?.Lifecycle);
+            fixture.WorkerCoordinator.Snapshot.ActiveOwner.RequireWorker().Lifecycle);
 
         switch (entryPoint)
         {
@@ -158,7 +158,7 @@ public sealed class WorkerJobProducerContentionTests
         await fixture.ProcessingBackend.CancellationObserved.Task.WaitAsync(Bound);
         Assert.AreEqual(
             WorkerJobLifecycle.Stopping,
-            fixture.WorkerCoordinator.Snapshot.ActiveJob?.Lifecycle,
+            fixture.WorkerCoordinator.Snapshot.ActiveOwner.RequireWorker().Lifecycle,
             "the shared owner must publish Stopping before cancellation reaches the backend");
         Assert.IsFalse(fixture.Processing.WaitForActiveRunAsync().IsCompleted);
         if (settlement is not null)
@@ -179,7 +179,7 @@ public sealed class WorkerJobProducerContentionTests
                 async () => await scheduled.WaitAsync(Bound));
         }
 
-        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveJob);
+        Assert.IsNull(fixture.WorkerCoordinator.Snapshot.ActiveOwner);
     }
 
     [TestMethod]
@@ -222,8 +222,11 @@ public sealed class WorkerJobProducerContentionTests
         int stoppingObservation = 0;
         void OnChanged()
         {
-            if (fixture.WorkerCoordinator.Snapshot.ActiveJob?.Lifecycle
-                    != WorkerJobLifecycle.Stopping
+            if (fixture.WorkerCoordinator.Snapshot.ActiveOwner is not
+                    ExclusiveHeavyOwnerBusyMetadata.Worker
+                    {
+                        Job.Lifecycle: WorkerJobLifecycle.Stopping
+                    }
                 || Interlocked.CompareExchange(ref stoppingObservation, 1, 0) != 0)
             {
                 return;

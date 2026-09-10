@@ -357,7 +357,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             WorkerJobAdmissionResult admission = _admission.TryAdmit(dispatch);
             if (admission is WorkerJobAdmissionResult.Busy busy)
             {
-                SetBusy(generation, busy.ActiveJob);
+                SetBusy(generation, busy.ActiveOwner);
                 return;
             }
 
@@ -676,11 +676,16 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
         Notify();
     }
 
-    private void SetBusy(long generation, WorkerJobBusyMetadata busy)
+    private void SetBusy(long generation, ExclusiveHeavyOwnerBusyMetadata busy)
     {
-        string owner = busy.CapabilityFamily == WorkerJobCapabilityFamily.Lookup
+        string owner = busy is ExclusiveHeavyOwnerBusyMetadata.Worker
+            {
+                Job.CapabilityFamily: WorkerJobCapabilityFamily.Lookup
+            }
             ? "another coordinate lookup"
-            : "another background job";
+            : busy is ExclusiveHeavyOwnerBusyMetadata.CacheMaintenance
+                ? "cache maintenance"
+                : "another background job";
         lock (_gate)
         {
             if (!CanMutate(generation))
