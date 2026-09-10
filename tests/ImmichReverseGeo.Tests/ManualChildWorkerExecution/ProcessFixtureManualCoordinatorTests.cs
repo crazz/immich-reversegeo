@@ -146,22 +146,83 @@ public sealed class ProcessFixtureManualCoordinatorTests
         await lease.Sink.WaitForAsync(@event => @event.Payload is LogEmittedPayload log
             && log.Message == $"fixture:unresponsive:{request.RunId:D}").WaitAsync(Bound);
 
-        int timerGeneration = clock.CreateCalls;
-        Task stop = fixture.Coordinator.StopActiveRun()
-            ?? throw new AssertFailedException("The unresponsive child must expose an active Stop operation.");
-        await clock.WaitForTimerCreatedAsync(timerGeneration + 1).WaitAsync(Bound);
-        clock.Advance(TimeSpan.FromSeconds(10));
-        await stop.WaitAsync(Bound);
-        await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
-        await lease.CompleteAsync().WaitAsync(Bound);
+        Task? stop = null;
+        var graceAdvanced = false;
+        Exception? bodyFailure = null;
+        try
+        {
+            int timerGeneration = clock.CreateCalls;
+            stop = fixture.Coordinator.StopActiveRun()
+                ?? throw new AssertFailedException("The unresponsive child must expose an active Stop operation.");
+            await clock.WaitForTimerCreatedAsync(timerGeneration + 1).WaitAsync(Bound);
+            await lease.Sink.WaitForAsync(@event => @event.Payload is LogEmittedPayload log
+                && log.Message == $"fixture:cancel-observed:{request.RunId:D}").WaitAsync(Bound);
+            Assert.IsFalse(lease.HasExited, "The complete cancel-observed frame must precede forced termination.");
+            Assert.IsFalse(stop.IsCompleted, "The admitted run must remain owned before its grace deadline.");
+            Assert.AreEqual(0, lease.TreeKillCalls);
 
-        ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)
-            ?? throw new AssertFailedException("The forced child termination must commit a finalization receipt.");
-        Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome);
-        Assert.AreEqual(1, lease.TreeKillCalls, "The shared grace deadline must issue one tree kill.");
-        Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount);
-        Assert.IsNull(fixture.Coordinator.ActiveRequest);
-        Assert.IsFalse(fixture.State.IsRunning);
+            clock.Advance(TimeSpan.FromSeconds(10));
+            graceAdvanced = true;
+            Assert.AreEqual(
+                ChildProcessKillOutcome.Requested,
+                await lease.TreeKillObserved.WaitAsync(Bound));
+            await stop.WaitAsync(Bound);
+            await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
+            ChildWorkerCompletionObservation completion = await lease.CompleteAsync().WaitAsync(Bound);
+
+            ChildWorkerCancellationFacts facts = lease.Session?.CancellationFacts
+                ?? throw new AssertFailedException("The stopped child must retain its cancellation facts.");
+            Assert.IsTrue(facts.RequestAccepted);
+            Assert.AreEqual(ChildWorkerTerminationIntent.Stop, facts.FirstIntent);
+            Assert.IsTrue(facts.GraceExpired);
+            Assert.IsTrue(facts.KillAttempted);
+            Assert.AreEqual(ChildProcessKillOutcome.Requested, facts.KillOutcome);
+            Assert.AreEqual(1, lease.TreeKillCalls, "The shared grace deadline must issue one tree kill.");
+            Assert.IsTrue(completion.ExitObserved);
+            Assert.IsNotNull(completion.ExitCode, "Forced termination must retain the actual platform exit status.");
+            Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(completion.StandardOutputFinality);
+            Assert.IsInstanceOfType<ChildWorkerStreamFinality.EndOfStream>(completion.StandardErrorFinality);
+            var protocol = Assert.IsInstanceOfType<ChildWorkerProtocolObservation.ProtocolFailure>(
+                completion.FirstProtocolObservation);
+            Assert.AreEqual(WorkerProtocolFailureDetail.MissingTerminal, protocol.Failure.Detail);
+
+            ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)
+                ?? throw new AssertFailedException("The forced child termination must commit a finalization receipt.");
+            Assert.AreEqual(ProcessingRunFinalizationOrigin.ControlPlane, receipt.Origin);
+            Assert.AreEqual(ProcessingRunOutcome.Cancelled, receipt.Result.Outcome);
+            Assert.IsNull(receipt.Result.FailureMessage);
+            Assert.AreSame(request, receipt.Result.Request);
+            Assert.AreEqual(0, fixture.ForbiddenHeavyResolutionCount);
+            Assert.IsNull(fixture.Coordinator.ActiveRequest);
+            Assert.IsFalse(fixture.State.IsRunning);
+            Assert.IsNull(fixture.State.LastError);
+        }
+        catch (Exception failure)
+        {
+            bodyFailure = failure;
+            throw;
+        }
+        finally
+        {
+            if (stop is not null)
+            {
+                try
+                {
+                    if (!graceAdvanced && !stop.IsCompleted)
+                    {
+                        clock.Advance(TimeSpan.FromSeconds(10));
+                    }
+
+                    await stop.WaitAsync(Bound);
+                    await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
+                }
+                catch when (bodyFailure is not null)
+                {
+                    // Preserve the first assertion while the fixture's async disposal
+                    // reaps the exact process and reports any independent cleanup failure.
+                }
+            }
+        }
     }
 
     private sealed record ProcessFixturePlan(string Scenario, bool Capture, string[] Options)
