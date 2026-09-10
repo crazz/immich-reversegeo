@@ -1052,7 +1052,7 @@ Build candidates in unique same-directory files, validate expected schema/table,
 
 **Dependencies and sequencing:** Requires finalized/applied 50 and 51 and binds at apply time to their exact landed resource-owner/admission/shutdown and handle/finality symbols; stop rather than add parallel locks, identities, or lifecycle owners if they differ. Block 52 has no dependency on block 53 and introduces no inventory cache or invalidation contract; preserving numbered order, block 53 later observes/adapts block 52's finalized deletion results for its own snapshot. Do not fold block 51 Ensure/Refresh/download/export or block 53 inventory implementation into this change. Block 52 precedes 53 and must finish before 55.
 
-**OpenSpec:** [`52-coordinate-cache-deletion-with-active-worker`](openspec/changes/52-coordinate-cache-deletion-with-active-worker/).
+**OpenSpec:** [`52-coordinate-cache-deletion-with-active-worker`](openspec/changes/archive/2026-09-10-52-coordinate-cache-deletion-with-active-worker/).
 
 ### 53. `refactor: add lightweight cache inventory service`
 
