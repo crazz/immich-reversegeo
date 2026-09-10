@@ -1068,7 +1068,7 @@ Build candidates in unique same-directory files, validate expected schema/table,
 
 **Dependencies and sequencing:** Preserve numbered order: finalize/apply 51, then finalize/apply parallel-owned 52 using its existing explicit deletion results and page reload, then apply 53. Block 53 alone adapts the landed 51/52 result surfaces to its private snapshot invalidation; neither prerequisite depends on, binds to, or calls block 53. Stop rather than create substitute completion/deletion contracts if landed symbols differ. Complete 53 before 55 removes heavy cache registrations.
 
-**OpenSpec:** [`53-add-lightweight-cache-inventory-service`](openspec/changes/53-add-lightweight-cache-inventory-service/).
+**OpenSpec:** [`53-add-lightweight-cache-inventory-service`](openspec/changes/archive/2026-09-10-53-add-lightweight-cache-inventory-service/).
 
 ### 54. `feat: coordinate database reset operations`
 
