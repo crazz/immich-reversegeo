@@ -1,5 +1,6 @@
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Core.WorkerJobs;
+using System.Runtime.ExceptionServices;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 using NetTopologySuite;
@@ -85,6 +86,11 @@ public class OvertureDivisionCacheServiceTests
             });
         Task<CacheMutationSourceResult>? worker = null;
         Task? legacy = null;
+        ExceptionDispatchInfo? primaryFailure = null;
+        Exception? cleanupFailure = null;
+        Exception? fixtureDeletionFailure = null;
+        var fixtureRetained = false;
+        string phase = "starting the worker-owned source flight";
 
         try
         {
@@ -93,8 +99,10 @@ public class OvertureDivisionCacheServiceTests
                 "CHE",
                 CacheMutationReporters.None,
                 CancellationToken.None).AsTask();
+            phase = "waiting for the validated candidate at the pre-publication gate";
             await candidateValidated.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
+            phase = "joining the legacy facade to the held worker-owned source flight";
             (legacy, OvertureDivisionEnsureResult admission) =
                 service.GetOrStartDownload("CHE");
             Assert.AreEqual(
@@ -104,22 +112,102 @@ public class OvertureDivisionCacheServiceTests
             Assert.AreEqual(1, exporter.OpenedOutputs.Count, "one-source-export-before-release");
 
             releasePublication.TrySetResult();
+            phase = "waiting for shared worker and legacy completion after publication release";
             await Task.WhenAll(worker, legacy).WaitAsync(TimeSpan.FromSeconds(5));
+            phase = "verifying the shared published result";
             Assert.AreEqual(CacheMutationDisposition.Published, worker.Result.Disposition);
             Assert.AreEqual(1, exporter.OpenedOutputs.Count, "one-shared-source-export");
             Assert.IsTrue(service.HasData("CHE"));
         }
+        catch (Exception exception)
+        {
+            exception.Data["SourceFlightTestPhase"] = phase;
+            primaryFailure = ExceptionDispatchInfo.Capture(exception);
+        }
         finally
         {
             releasePublication.TrySetResult();
+            var drained = worker is null && legacy is null;
             if (worker is not null || legacy is not null)
             {
-                await Task.WhenAll(
+                Task drain = Task.WhenAll(
                     worker ?? Task.FromResult<CacheMutationSourceResult>(null!),
-                    legacy ?? Task.CompletedTask).WaitAsync(TimeSpan.FromSeconds(5));
+                    legacy ?? Task.CompletedTask);
+                try
+                {
+                    await drain.WaitAsync(TimeSpan.FromSeconds(5));
+                    drained = true;
+                }
+                catch (Exception exception)
+                {
+                    exception.Data["SourceFlightTestPhase"] =
+                        "draining worker and legacy work after unconditional release";
+                    cleanupFailure = exception;
+                    drained = drain.IsCompleted;
+                }
             }
 
-            DeleteTempDir(tempDir);
+            if (drained)
+            {
+                try
+                {
+                    DeleteTempDir(tempDir);
+                }
+                catch (Exception exception)
+                {
+                    exception.Data["SourceFlightTestPhase"] =
+                        "deleting the fixture after completed source-flight drain";
+                    fixtureDeletionFailure = exception;
+                }
+            }
+            else
+            {
+                fixtureRetained = true;
+                (primaryFailure?.SourceException ?? cleanupFailure)!
+                    .Data["RetainedSourceFlightFixture"] = tempDir;
+            }
+        }
+
+        if (primaryFailure is not null)
+        {
+            Console.WriteLine($"Source-flight diagnostic: primary failure during phase '{phase}'.");
+            if (cleanupFailure is not null)
+            {
+                primaryFailure.SourceException.Data["SourceFlightCleanupFailure"] =
+                    cleanupFailure.ToString();
+                Console.WriteLine($"Source-flight cleanup also failed: {cleanupFailure}");
+            }
+
+            if (fixtureDeletionFailure is not null)
+            {
+                primaryFailure.SourceException.Data["SourceFlightFixtureDeletionFailure"] =
+                    fixtureDeletionFailure.ToString();
+                Console.WriteLine($"Source-flight fixture deletion also failed: {fixtureDeletionFailure}");
+            }
+
+            if (fixtureRetained)
+            {
+                Console.WriteLine($"Source-flight fixture retained because cleanup did not drain: {tempDir}");
+            }
+
+            primaryFailure.Throw();
+        }
+
+        if (cleanupFailure is not null)
+        {
+            Console.WriteLine($"Source-flight cleanup failed after unconditional release: {cleanupFailure}");
+            if (fixtureRetained)
+            {
+                Console.WriteLine($"Source-flight fixture retained because cleanup did not drain: {tempDir}");
+            }
+
+            ExceptionDispatchInfo.Capture(cleanupFailure).Throw();
+        }
+
+        if (fixtureDeletionFailure is not null)
+        {
+            Console.WriteLine($"Source-flight fixture deletion failed after completed drain: {fixtureDeletionFailure}");
+            ExceptionDispatchInfo.Capture(fixtureDeletionFailure).Throw();
         }
     }
 
