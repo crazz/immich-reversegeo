@@ -5,7 +5,7 @@ Lets the Web Data experience inspect administrative-cache storage safely and pre
 ## ADDED Requirements
 
 ### Requirement: Stable storage inventory contract
-The system SHALL expose immutable cache inventory snapshots whose entries use closed source values `Overture` and `Gadm`, canonical uppercase ASCII ISO3 identifiers, and closed statuses `Available`, `Absent`, `InProgress`, `Invalid`, `Unreadable`, or `Unsafe`. An entry SHALL include source, ISO3, status, nullable file size, nullable last-modified UTC time, nullable downloaded UTC time, nullable dataset version/release, whether recognized operation-owned temporary artifacts were observed, and a nullable safe diagnostic code. It SHALL NOT derive an area or geometry row count from a cache data table.
+The system SHALL expose immutable cache inventory snapshots whose entries use closed source values `Overture` and `Gadm`, canonical uppercase ASCII ISO3 identifiers, and closed statuses `Available`, `Absent`, `InProgress`, `Invalid`, `Unreadable`, or `Unsafe`. An entry SHALL include source, ISO3, status, nullable file size, nullable last-modified UTC time, nullable downloaded UTC time, nullable dataset version/release, whether recognized operation-owned temporary artifacts were observed, and a nullable safe diagnostic code. An exact result SHALL also state whether bounded temporary discovery completed, so a false temporary flag cannot imply proven absence after truncation. It SHALL NOT derive an area or geometry row count from a cache data table.
 
 #### Scenario: Existing cache has readable metadata
 - **WHEN** inventory inspects a canonical final cache whose SQLite schema identifies the expected source table and whose optional metadata is readable
@@ -17,7 +17,11 @@ The system SHALL expose immutable cache inventory snapshots whose entries use cl
 
 #### Scenario: Exact lookup is absent
 - **WHEN** an exact source-and-ISO3 lookup finds neither a final cache nor a recognized operation-owned temporary for that key
-- **THEN** it returns `Absent`, while a source listing does not synthesize rows for every possible country
+- **THEN** it returns `Absent` only when bounded temporary discovery completed, while a source listing does not synthesize rows for every possible country
+
+#### Scenario: Exact lookup discovery is truncated
+- **WHEN** an exact source-and-ISO3 lookup inspects its canonical final but bounded source discovery cannot prove whether a recognized temporary exists
+- **THEN** it marks discovery incomplete, may preserve positive final or temporary facts, and does not report `Absent` or present a false temporary flag as proof of absence
 
 ### Requirement: Partial, corrupt, and unreadable storage is explicit
 The system SHALL distinguish operation-owned in-progress artifacts, structurally invalid final databases, access failures, and unsafe path objects without treating any of them as a ready cache or attempting repair.
@@ -39,30 +43,34 @@ The system SHALL distinguish operation-owned in-progress artifacts, structurally
 - **THEN** it preserves other independently readable results and returns a source-level or entry-level `Unreadable` result without exposing the configured host path
 
 ### Requirement: Inventory inspection is contained and lightweight
-The system SHALL derive the two fixed source directories from storage configuration, inspect only immediate canonical candidate names, and perform only filesystem inspection plus read-only SQLite schema and `_meta`-style key reads. It SHALL NOT follow descendant directory links or candidate-file links and SHALL NOT resolve or invoke cache mutation services, exporters, DuckDB, GeoPackage readers, HTTP clients, resolvers, geometry readers, country indexes, processing state, or workers.
+The system SHALL derive the two fixed source directories from storage configuration, inspect only immediate canonical candidate names, and perform only filesystem inspection plus read-only SQLite schema and indexed `_meta`-style point reads. It SHALL reject links observed by bounded checks before and after an open and discard metadata from detected replacement races. Because the cross-platform SQLite string-path API is not an adversarial race-free no-follow primitive, the configured cache volume SHALL be writable only by trusted operators and Immich ReverseGeo. The inventory SHALL NOT resolve or invoke cache mutation services, exporters, DuckDB, GeoPackage readers, HTTP clients, resolvers, geometry readers, country indexes, processing state, or workers.
 
 #### Scenario: Inventory is first resolved
 - **WHEN** Web composition resolves the inventory service
 - **THEN** construction performs no scan, SQLite open, directory creation, worker launch, or heavy-service resolution
 
 #### Scenario: Candidate name attempts path escape
-- **WHEN** a directory entry is not an exact canonical final or finalized owned-temporary basename, resolves outside its fixed source directory, or is a symbolic link or reparse-point descendant
-- **THEN** inventory ignores the unrelated name or reports an exact canonical candidate as `Unsafe` and never follows or opens the target
+- **WHEN** a directory entry is not an exact canonical final or finalized owned-temporary basename, resolves outside its fixed source directory, or is observed as a symbolic link or reparse-point descendant before open
+- **THEN** inventory ignores the unrelated name or reports an exact canonical candidate as `Unsafe` without opening the observed link target, and discards metadata if bounded post-open checks detect a replacement race
 
 #### Scenario: SQLite metadata is inspected
 - **WHEN** inventory opens a final candidate
-- **THEN** it uses a read-only non-pooled connection, reads only schema and bounded metadata keys, disposes all readers and connections before returning, and retains no open or pooled database handle
+- **THEN** it uses a read-only non-pooled connection with a native per-connection value-byte limit, counts every immediate schema object against a schema-object bound before classification, accepts only the expected indexed `_meta(key TEXT PRIMARY KEY, value TEXT NOT NULL)` shape before bounded point lookups, reads only schema and bounded metadata values, disposes all readers and connections before returning, and retains no open or pooled database handle
 
 ### Requirement: Scanning and snapshot caching are bounded
-The system SHALL impose validated internal bounds on immediate candidate enumeration and metadata inspection, surface truncation or source-scan failure instead of silently claiming a complete inventory, and publish deterministic immutable snapshots. Concurrent readers MAY share one in-flight scan, but no filesystem watcher, startup scan, or unbounded background refresh SHALL be started.
+The system SHALL impose validated internal bounds on immediate entries visited, logical candidates, recognized temporaries per ISO, immediate SQLite schema objects of every type, managed metadata characters, and native SQLite value bytes, surface truncation or source-scan failure instead of silently claiming a complete inventory, and publish deterministic immutable snapshots. Every immediate entry, including junk, SHALL consume the visit budget. Concurrent readers MAY share one in-flight full scan, and every full or exact physical inspection SHALL pass through one fixed-capacity service-owned admission boundary, but no filesystem watcher, startup scan, or unbounded background refresh SHALL be started. Caller cancellation SHALL detach only that waiter, while service disposal SHALL cancel queued admission and drain queued and active inspection work.
 
 #### Scenario: Candidate bound is exceeded
 - **WHEN** a source directory contains more candidates than the configured internal scan bound
-- **THEN** the source result is marked truncated with a safe diagnostic and work stops at the bound
+- **THEN** inventory observes at most the visit bound plus one entries, disposes enumeration, discards every collected row for that source, and returns only a source-level truncated result with a safe diagnostic while the other source may continue
 
 #### Scenario: Concurrent pages request a refresh
 - **WHEN** multiple Web circuits request the same inventory generation concurrently
 - **THEN** they share bounded inspection work or receive immutable snapshots without mutating one another's view
+
+#### Scenario: Exact and full inspections overlap
+- **WHEN** exact lookups and a full refresh are requested concurrently, including duplicate exact keys and a caller that cancels its wait
+- **THEN** at most one physical scanner call runs at once, caller cancellation does not cancel service-owned work, and disposal cancels queued admission and drains all admitted work
 
 #### Scenario: Explicit Data access requests current storage
 - **WHEN** the Data experience initializes or explicitly rereads after an operation
@@ -80,7 +88,7 @@ The system SHALL tolerate a final file being atomically replaced or deleted duri
 - **THEN** inventory retries once and returns the resulting absent/in-progress state or a safe transient result without failing unrelated entries
 
 ### Requirement: Authoritative mutation invalidates cached inventory
-After finalized changes 51 and 52, the system SHALL use change-53-owned adapters to mark inventory dirty only from their existing explicit outcomes: change 51's successful cache-mutation completion after process/session finality, and each actual `Deleted` item in change 52's per-cache or delete-all result. Change 52 SHALL remain independent of inventory and its current explicit page reload SHALL remain unchanged; it SHALL NOT bind to a change-53 invalidator interface. Invalidation SHALL be generation-safe and idempotent, and the next inventory access SHALL observe storage again.
+After finalized changes 51 and 52, the system SHALL use change-53-owned adapters to mark inventory dirty only from their existing explicit outcomes: change 51's successful cache-mutation completion after process/session finality, and each actual `Deleted` item in change 52's per-cache or delete-all result. Change 52 SHALL remain independent of inventory and its current explicit page reload SHALL remain unchanged; it SHALL NOT bind to a change-53 invalidator interface. Invalidation SHALL be generation-safe and idempotent when no current-generation scan can publish. Once a scan starts, every later authoritative mutation invalidation, including one for a key already dirty when the scan began, SHALL fence that scan from reusable publication, and the next inventory access SHALL observe storage again.
 
 #### Scenario: Worker mutation completes successfully
 - **WHEN** change 51 reports an authoritative successful cache publication or already-ready completion after finalization
@@ -98,8 +106,12 @@ After finalized changes 51 and 52, the system SHALL use change-53-owned adapters
 - **WHEN** a successful mutation invalidates generation N while a generation-N scan is in flight
 - **THEN** that scan cannot clear the dirty marker or become the reusable generation-N-plus-one snapshot
 
+#### Scenario: Repeated mutation races with a dirty-key scan
+- **WHEN** a scan starts while a key is dirty and another successful mutation invalidates that same key before the scan publishes
+- **THEN** the later mutation advances the publication fence and the older observation cannot clear or replace the newer dirty evidence
+
 ### Requirement: Data UI and deployment modes use only the inventory read path
-In modes that host the Web Data experience, the system SHALL register one lazy singleton inventory and use it for initial Data summary and GeoBoundaries reads. The summary SHALL count `Available` caches; the table SHALL preserve source/ISO filtering and sorting while presenting ISO3, status, optional version/release, size, modification/download time, and safe diagnostics. Worker-only and run-once composition SHALL NOT register or initialize the Web inventory merely to execute jobs.
+In modes that host the Web Data experience, the system SHALL register one lazy singleton inventory and use it for initial Data summary and GeoBoundaries reads. The summary SHALL count `Available` caches; the table SHALL preserve source/ISO filtering and sorting while presenting ISO3, status, optional version/release, size, modification/download time, and safe diagnostics. A source-specific Delete All action SHALL be enabled and accepted by its server-side page handler only when that source snapshot is `Ready`; incomplete or missing source state SHALL fail closed without creating a deletion confirmation, while a complete peer source remains usable. Worker-only and run-once composition SHALL NOT register or initialize the Web inventory merely to execute jobs.
 
 #### Scenario: Web-only mode opens Data
 - **WHEN** a user opens Data in Web-only mode
@@ -108,6 +120,10 @@ In modes that host the Web Data experience, the system SHALL register one lazy s
 #### Scenario: Standard mode opens GeoBoundaries
 - **WHEN** a user opens GeoBoundaries in Standard mode
 - **THEN** it uses the same inventory DTOs and stable `Overture`/`GADM` labels, shows non-available states explicitly, and preserves GADM attribution and license copy independently of technical diagnostics
+
+#### Scenario: Incomplete source blocks Delete All
+- **WHEN** one source inventory is truncated, unreadable, unsafe, missing, or not yet loaded while the other source is complete
+- **THEN** the incomplete source's Delete All action is disabled and rejected before confirmation, a reported incomplete source shows recovery guidance, and the complete source retains its normal confirmation flow
 
 #### Scenario: Worker or run-once host starts
 - **WHEN** a non-Web role starts without a Data UI

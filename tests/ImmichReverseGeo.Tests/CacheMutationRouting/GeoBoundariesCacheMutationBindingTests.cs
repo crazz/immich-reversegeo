@@ -47,11 +47,11 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         var worker = new RecordingWorkerClient();
         var lifetime = new CacheMutationPageControllerHostLifetime();
         var factory = new CacheMutationPageControllerFactory(admission, worker, lifetime);
+        var inventory = CreateInventory(root.Path);
         var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
-        SetInjected(page, "OvertureCache", overture);
-        SetInjected(page, "GadmCache", gadm);
+        SetInjected(page, "CacheInventory", inventory);
         SetInjected(page, "CacheMutations", factory);
-        SetInjected(page, "CacheDeletions", CreateDeletionFactory(root.Path, admission));
+        SetInjected(page, "CacheDeletions", CreateDeletionFactory(root.Path, admission, inventory));
         await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
         await renderer.AttachAsync(page);
 
@@ -310,6 +310,121 @@ public sealed class GeoBoundariesCacheMutationBindingTests
     }
 
     [TestMethod]
+    [TestCategory("Change53")]
+    public async Task RenderedIncompleteSource_BlocksDeleteAllWhileReadyPeerKeepsNormalConfirmation()
+    {
+        await using RenderedPageFixture fixture = await RenderedPageFixture.CreateAsync(
+            includeOverture: true,
+            includeGadm: true,
+            inventoryOptions: new CacheInventoryOptions
+            {
+                MaxVisitedEntriesPerSource = 1,
+                MaxLogicalCandidatesPerSource = 1
+            },
+            overtureJunkEntries: 1);
+        string hiddenOvertureCache = Path.Combine(
+            fixture.RootPath,
+            "overture-divisions",
+            "CHE.db");
+        WebStatusRenderingTests.RenderSnapshot rendered = await fixture.Renderer.ReadAsync();
+
+        await InvokePrivateTask(fixture.Page, "DeleteAllOvertureDivisions");
+        CacheDeletionPageController deletion = GetPrivateField<CacheDeletionPageController>(
+            fixture.Page,
+            "_deletionController");
+        Assert.AreEqual(CacheDeletionPagePhase.Idle, deletion.State.Phase,
+            "server-handler-rejects-incomplete-source-before-confirmation");
+        Assert.IsNull(deletion.State.Confirmation);
+        Assert.AreEqual(0, fixture.Admission.MaintenanceAttempts);
+        Assert.IsTrue(File.Exists(hiddenOvertureCache),
+            "discarded-prefix-cache-is-never-treated-as-an-empty-delete-all");
+
+        Assert.IsTrue(HasButton(
+            rendered.Frames,
+            "Delete All Overture Divisions",
+            disabled: true));
+        Assert.IsTrue(HasButton(
+            rendered.Frames,
+            "Delete All GADM Caches",
+            disabled: false));
+        StringAssert.Contains(rendered.Text,
+            "Resolve the Overture cache directory issue and refresh before deleting all caches for this source.");
+
+        await InvokeButtonAsync(fixture.Renderer, "Delete All GADM Caches");
+        Assert.AreEqual(CacheDeletionPagePhase.Confirming, deletion.State.Phase);
+        Assert.AreEqual(CacheMutationSource.Gadm, deletion.State.Confirmation?.Source);
+        Assert.AreEqual(0, fixture.Admission.MaintenanceAttempts,
+            "ready-peer-retains-the-existing-confirmation-before-command-admission");
+    }
+
+    [TestMethod]
+    [TestCategory("Change53")]
+    [DataRow("Overture", "Truncated")]
+    [DataRow("Overture", "Unreadable")]
+    [DataRow("Overture", "Unsafe")]
+    [DataRow("Overture", null)]
+    [DataRow("Gadm", "Truncated")]
+    [DataRow("Gadm", "Unreadable")]
+    [DataRow("Gadm", "Unsafe")]
+    [DataRow("Gadm", null)]
+    public async Task DeleteAllHandler_FailsClosedForEveryNonReadyOrMissingSource(
+        string sourceName,
+        string? sourceStatusName)
+    {
+        CacheMutationSource source = Enum.Parse<CacheMutationSource>(sourceName);
+        CacheInventorySourceStatus? sourceStatus = sourceStatusName is null
+            ? null
+            : Enum.Parse<CacheInventorySourceStatus>(sourceStatusName);
+        using var root = new TemporaryDirectory();
+        string hiddenCache;
+        string handler;
+        if (source == CacheMutationSource.Overture)
+        {
+            CreateOvertureCache(root.Path, "hidden-release");
+            hiddenCache = Path.Combine(root.Path, "overture-divisions", "CHE.db");
+            handler = "DeleteAllOvertureDivisions";
+        }
+        else
+        {
+            CreateGadmCache(root.Path);
+            hiddenCache = Path.Combine(root.Path, "gadm-divisions", "CHE.db");
+            handler = "DeleteAllGadmDivisions";
+        }
+
+        var admission = new RecordingAdmissionGate();
+        await using CacheInventoryService inventory = CreateInventory(root.Path);
+        var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
+        CacheDeletionPageController controller = CreateDeletionFactory(
+            root.Path,
+            admission,
+            inventory).Create(
+                () => Task.CompletedTask,
+                () => Task.CompletedTask);
+        SetPrivateField(page, "_deletionController", controller);
+        SetPrivateField(
+            page,
+            "_sourceSnapshots",
+            sourceStatus is null
+                ? Array.Empty<CacheInventorySourceSnapshot>()
+                : new[]
+                {
+                    new CacheInventorySourceSnapshot(
+                        source,
+                        sourceStatus.Value,
+                        DiagnosticFor(sourceStatus.Value),
+                        [])
+                });
+
+        await InvokePrivateTask(page, handler);
+
+        Assert.AreEqual(CacheDeletionPagePhase.Idle, controller.State.Phase);
+        Assert.IsNull(controller.State.Confirmation);
+        Assert.AreEqual(0, admission.MaintenanceAttempts);
+        Assert.IsTrue(File.Exists(hiddenCache));
+        await page.DisposeAsync();
+    }
+
+    [TestMethod]
     [TestCategory("Change52")]
     public async Task RenderedPerCacheDelete_RoutesGadmIdentityThroughCommandAndReloadsFullSchemaStatus()
     {
@@ -485,11 +600,13 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             await Task.WhenAll(dispatcherBlock, queuedRender, queuedReload).WaitAsync(Bound);
 
             Assert.AreEqual(initialRenderCount, fixture.Renderer.RenderCount);
-            Dictionary<string, OvertureDivisionStatus> status =
-                GetPrivateField<Dictionary<string, OvertureDivisionStatus>>(
+            IReadOnlyList<CacheInventorySourceSnapshot> status =
+                GetPrivateField<IReadOnlyList<CacheInventorySourceSnapshot>>(
                     fixture.Page,
-                    "_overtureDivisionStatus");
-            Assert.IsTrue(status.ContainsKey("CHE"));
+                    "_sourceSnapshots");
+            Assert.IsTrue(status
+                .Single(source => source.Source == CacheMutationSource.Overture)
+                .Entries.Any(entry => entry.Iso3 == "CHE"));
             Assert.IsFalse(File.Exists(cachePath));
         }
         finally
@@ -545,7 +662,9 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             return result;
         }
 
-        var deletionFactory = new CacheDeletionPageControllerFactory(command);
+        var inventory = CreateInventory(root.Path);
+        var deletionFactory = new CacheInventoryDeletionPageControllerFactory(
+            new CacheInventoryDeletionOperations(command, inventory));
         var worker = new RecordingWorkerClient();
         var workerLifetime = new CacheMutationPageControllerHostLifetime();
         var mutationFactory = new CacheMutationPageControllerFactory(
@@ -553,8 +672,7 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             worker,
             workerLifetime);
         var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
-        SetInjected(page, "OvertureCache", overture);
-        SetInjected(page, "GadmCache", gadm);
+        SetInjected(page, "CacheInventory", inventory);
         SetInjected(page, "CacheMutations", mutationFactory);
         SetInjected(page, "CacheDeletions", deletionFactory);
         await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
@@ -631,12 +749,14 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             Assert.IsFalse(File.Exists(chePath));
             Assert.IsFalse(File.Exists(deuPath));
             Assert.IsNull(coordinator.ActiveOwner);
-            Dictionary<string, OvertureDivisionStatus> pageStatus =
-                GetPrivateField<Dictionary<string, OvertureDivisionStatus>>(
+            IReadOnlyList<CacheInventorySourceSnapshot> pageStatus =
+                GetPrivateField<IReadOnlyList<CacheInventorySourceSnapshot>>(
                     page,
-                    "_overtureDivisionStatus");
-            Assert.IsTrue(pageStatus.ContainsKey("CHE"));
-            Assert.IsTrue(pageStatus.ContainsKey("DEU"));
+                    "_sourceSnapshots");
+            CacheInventorySourceSnapshot overturePageStatus = pageStatus
+                .Single(source => source.Source == CacheMutationSource.Overture);
+            Assert.IsTrue(overturePageStatus.Entries.Any(entry => entry.Iso3 == "CHE"));
+            Assert.IsTrue(overturePageStatus.Entries.Any(entry => entry.Iso3 == "DEU"));
             WebStatusRenderingTests.RenderSnapshot stalePage = await renderer.ReadAsync();
             StringAssert.Contains(stalePage.Text, "CHE");
             StringAssert.Contains(stalePage.Text, "DEU");
@@ -966,9 +1086,10 @@ public sealed class GeoBoundariesCacheMutationBindingTests
         command.ExecuteNonQuery();
     }
 
-    private static CacheDeletionPageControllerFactory CreateDeletionFactory(
+    private static CacheInventoryDeletionPageControllerFactory CreateDeletionFactory(
         string root,
-        IWorkerJobAdmissionGate admission)
+        IWorkerJobAdmissionGate admission,
+        ICacheInventoryInvalidator invalidator)
     {
         string bundledData = Path.Combine(AppContext.BaseDirectory, "data");
         var command = new CacheDeletionCommand(
@@ -977,8 +1098,31 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             new StorageOptions(root, bundledData),
             CountryCodeService.CreateForTest(bundledData),
             NullLogger<CacheDeletionCommand>.Instance);
-        return new CacheDeletionPageControllerFactory(command);
+        return new CacheInventoryDeletionPageControllerFactory(
+            new CacheInventoryDeletionOperations(command, invalidator));
     }
+
+    private static CacheInventoryService CreateInventory(
+        string root,
+        CacheInventoryOptions? options = null) =>
+        new(new CacheInventoryStorageScanner(
+            new StorageOptions(root, Path.Combine(AppContext.BaseDirectory, "data")),
+            new PhysicalCacheInventoryFileSystem(),
+            new CacheInventorySqliteMetadataReader(),
+            options ?? new CacheInventoryOptions(),
+            TimeProvider.System));
+
+    private static CacheInventoryDiagnosticCode DiagnosticFor(
+        CacheInventorySourceStatus status) => status switch
+        {
+            CacheInventorySourceStatus.Truncated =>
+                CacheInventoryDiagnosticCode.EnumerationTruncated,
+            CacheInventorySourceStatus.Unreadable =>
+                CacheInventoryDiagnosticCode.SourceUnreadable,
+            CacheInventorySourceStatus.Unsafe =>
+                CacheInventoryDiagnosticCode.SourceUnsafe,
+            _ => throw new ArgumentOutOfRangeException(nameof(status))
+        };
 
     private static byte[] ValidPolygonWkb()
     {
@@ -1367,12 +1511,20 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             WorkerJobAdmissionResult? rejection = null,
             TaskCompletionSource? startRelease = null,
             CacheMaintenanceAdmissionResult? maintenanceRejection = null,
-            TaskCompletionSource? maintenanceRelease = null)
+            TaskCompletionSource? maintenanceRelease = null,
+            CacheInventoryOptions? inventoryOptions = null,
+            int overtureJunkEntries = 0)
         {
             var root = new TemporaryDirectory();
             if (includeOverture)
             {
                 CreateOvertureCache(root.Path, "old-release");
+                for (var index = 0; index < overtureJunkEntries; index++)
+                {
+                    File.WriteAllText(
+                        Path.Combine(root.Path, "overture-divisions", $"junk-{index}.txt"),
+                        "junk");
+                }
             }
 
             if (includeGadm)
@@ -1396,11 +1548,11 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             var worker = new RecordingWorkerClient { StartRelease = startRelease };
             var lifetime = new CacheMutationPageControllerHostLifetime();
             var factory = new CacheMutationPageControllerFactory(admission, worker, lifetime);
+            var inventory = CreateInventory(root.Path, inventoryOptions);
             var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
-            SetInjected(page, "OvertureCache", overture);
-            SetInjected(page, "GadmCache", gadm);
+            SetInjected(page, "CacheInventory", inventory);
             SetInjected(page, "CacheMutations", factory);
-            SetInjected(page, "CacheDeletions", CreateDeletionFactory(root.Path, admission));
+            SetInjected(page, "CacheDeletions", CreateDeletionFactory(root.Path, admission, inventory));
             var renderer = new WebStatusRenderingTests.ComponentRenderer();
             await renderer.AttachAsync(page);
             return new RenderedPageFixture(root, admission, worker, page, renderer);

@@ -2,10 +2,9 @@
 @rendermode InteractiveServer
 @implements IAsyncDisposable
 @using ImmichReverseGeo.Core.WorkerJobs
-@inject GadmDivisionCacheService GadmCache
-@inject OvertureDivisionCacheService OvertureCache
+@inject ICacheInventory CacheInventory
 @inject CacheMutationPageControllerFactory CacheMutations
-@inject CacheDeletionPageControllerFactory CacheDeletions
+@inject CacheInventoryDeletionPageControllerFactory CacheDeletions
 
 <h2>Administrative Areas</h2>
 
@@ -92,14 +91,21 @@
 <section class="settings-card wide-card">
     <h3>Administrative Area Caches</h3>
     <p class="section-intro">Downloaded Overture and optional GADM administrative caches are reused for processing and lookup. Use the filters below to inspect one source or search by country code.</p>
+    @foreach (CacheInventorySourceSnapshot source in _sourceSnapshots.Where(source => !source.IsComplete))
+    {
+        <p class="alert alert-error">
+            @SourceLabel(source.Source) cache inventory: @FormatSourceStatus(source).
+            Resolve the @SourceLabel(source.Source) cache directory issue and refresh before deleting all caches for this source.
+        </p>
+    }
     <div class="btn-row">
         <button @onclick="DeleteAllOvertureDivisions"
-                disabled="@MutationControlsDisabled"
+                disabled="@DeleteAllDisabled(CacheMutationSource.Overture)"
                 class="btn btn-danger">
             Delete All Overture Divisions
         </button>
         <button @onclick="DeleteAllGadmDivisions"
-                disabled="@MutationControlsDisabled"
+                disabled="@DeleteAllDisabled(CacheMutationSource.Gadm)"
                 class="btn btn-danger">
             Delete All GADM Caches
         </button>
@@ -136,10 +142,11 @@
                 <tr>
                     <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.Source)"><span>Source</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.Source)</span></button></th>
                     <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.Country)"><span>Country</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.Country)</span></button></th>
-                    <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.AreaCount)"><span>Area Count</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.AreaCount)</span></button></th>
+                    <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.Status)"><span>Status</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.Status)</span></button></th>
                     <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.Version)"><span>Version / Release</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.Version)</span></button></th>
                     <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.Size)"><span>Size</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.Size)</span></button></th>
                     <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.DownloadedAt)"><span>Downloaded At</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.DownloadedAt)</span></button></th>
+                    <th><button type="button" class="table-sort-btn" @onclick="() => SortBy(CacheSortColumn.LastModified)"><span>Last Modified</span><span class="sort-indicator">@SortIndicator(CacheSortColumn.LastModified)</span></button></th>
                     <th></th>
                 </tr>
             </thead>
@@ -149,10 +156,11 @@
                     <tr>
                         <td><span class="source-badge @row.SourceCssClass">@row.SourceLabel</span></td>
                         <td><code>@row.Iso3</code></td>
-                        <td>@row.RowCount.ToString("N0")</td>
+                        <td>@FormatEntryStatus(row.Entry)</td>
                         <td>@(row.Version ?? "—")</td>
                         <td>@FormatFileSize(row.FileSizeBytes)</td>
-                        <td>@row.DownloadedAt?.ToString("u")</td>
+                        <td>@FormatTimestamp(row.DownloadedAt)</td>
+                        <td>@FormatTimestamp(row.LastModifiedUtc)</td>
                         <td class="table-actions-cell">
                             <button @onclick="() => DeleteCache(row)"
                                     disabled="@MutationControlsDisabled"
@@ -175,8 +183,8 @@
 </div>
 
 @code {
-    private Dictionary<string, OvertureDivisionStatus> _overtureDivisionStatus = [];
-    private Dictionary<string, GadmDivisionStatus> _gadmDivisionStatus = [];
+    private IReadOnlyList<CacheInventorySourceSnapshot> _sourceSnapshots =
+        Array.Empty<CacheInventorySourceSnapshot>();
     private CacheMutationPageController? _cacheController;
     private CacheDeletionPageController? _deletionController;
     private bool _disposed;
@@ -185,16 +193,15 @@
     private CacheSourceFilter _selectedSourceFilter = CacheSourceFilter.All;
     private string _countrySearch = string.Empty;
 
-    protected override Task OnInitializedAsync()
+    protected override async Task OnInitializedAsync()
     {
-        RefreshState();
         _cacheController = CacheMutations.Create(
             NotifyPageChangedAsync,
             ReloadPageStateAsync);
         _deletionController = CacheDeletions.Create(
             NotifyPageChangedAsync,
             ReloadPageStateAsync);
-        return Task.CompletedTask;
+        await RefreshStateAsync();
     }
 
     protected override bool ShouldRender() =>
@@ -210,20 +217,26 @@
         StateHasChanged();
     });
 
-    private Task ReloadPageStateAsync() => InvokeAsync(() =>
+    private Task ReloadPageStateAsync() => InvokeAsync(async () =>
     {
         if (System.Threading.Volatile.Read(ref _disposed))
         {
             return;
         }
 
-        RefreshState();
+        await RefreshStateAsync();
         StateHasChanged();
     });
 
     private bool MutationControlsDisabled =>
         (_cacheController?.State.IsActive ?? false)
         || (_deletionController?.State.ControlsDisabled ?? false);
+
+    private bool DeleteAllDisabled(CacheMutationSource source) =>
+        MutationControlsDisabled || !CanDeleteAll(source);
+
+    private bool CanDeleteAll(CacheMutationSource source) =>
+        _sourceSnapshots.FirstOrDefault(snapshot => snapshot.Source == source)?.IsComplete == true;
 
     private string MutationAlertClass => _cacheController?.State.Phase switch
     {
@@ -258,10 +271,10 @@
         }
     }
 
-    private void RefreshState()
+    private async Task RefreshStateAsync()
     {
-        _overtureDivisionStatus = OvertureCache.GetStatus();
-        _gadmDivisionStatus = GadmCache.GetStatus();
+        CacheInventorySnapshot snapshot = await CacheInventory.RefreshAsync();
+        _sourceSnapshots = snapshot.Sources;
     }
 
     private Task RedownloadOvertureDivision(string iso3)
@@ -279,8 +292,13 @@
 
     private Task DeleteAllOvertureDivisions()
     {
-        CacheDeletionTarget[] targets = _overtureDivisionStatus.Keys
-            .Select(iso3 => new CacheDeletionTarget(CacheMutationSource.Overture, iso3))
+        if (!CanDeleteAll(CacheMutationSource.Overture))
+        {
+            return Task.CompletedTask;
+        }
+
+        CacheDeletionTarget[] targets = Entries(CacheMutationSource.Overture)
+            .Select(entry => new CacheDeletionTarget(CacheMutationSource.Overture, entry.Iso3))
             .ToArray();
         _deletionController?.RequestDeleteAll(CacheMutationSource.Overture, targets);
         return Task.CompletedTask;
@@ -304,8 +322,13 @@
 
     private Task DeleteAllGadmDivisions()
     {
-        CacheDeletionTarget[] targets = _gadmDivisionStatus.Keys
-            .Select(iso3 => new CacheDeletionTarget(CacheMutationSource.Gadm, iso3))
+        if (!CanDeleteAll(CacheMutationSource.Gadm))
+        {
+            return Task.CompletedTask;
+        }
+
+        CacheDeletionTarget[] targets = Entries(CacheMutationSource.Gadm)
+            .Select(entry => new CacheDeletionTarget(CacheMutationSource.Gadm, entry.Iso3))
             .ToArray();
         _deletionController?.RequestDeleteAll(CacheMutationSource.Gadm, targets);
         return Task.CompletedTask;
@@ -321,8 +344,8 @@
     {
         return row.Source switch
         {
-            CacheSource.Overture => DeleteOvertureDivision(row.Iso3),
-            CacheSource.Gadm => DeleteGadmDivision(row.Iso3),
+            CacheMutationSource.Overture => DeleteOvertureDivision(row.Iso3),
+            CacheMutationSource.Gadm => DeleteGadmDivision(row.Iso3),
             _ => Task.CompletedTask
         };
     }
@@ -331,25 +354,25 @@
     {
         return row.Source switch
         {
-            CacheSource.Overture => RedownloadOvertureDivision(row.Iso3),
-            CacheSource.Gadm => RedownloadGadmDivision(row.Iso3),
+            CacheMutationSource.Overture => RedownloadOvertureDivision(row.Iso3),
+            CacheMutationSource.Gadm => RedownloadGadmDivision(row.Iso3),
             _ => Task.CompletedTask
         };
     }
 
     private IReadOnlyList<CacheRow> GetFilteredRows()
     {
-        var rows = _overtureDivisionStatus
-            .Select(pair => new CacheRow(CacheSource.Overture, pair.Key, "Overture", pair.Value.RowCount, pair.Value.Release, pair.Value.FileSizeBytes, pair.Value.DownloadedAt))
-            .Concat(_gadmDivisionStatus.Select(pair => new CacheRow(CacheSource.Gadm, pair.Key, "GADM", pair.Value.RowCount, pair.Value.Version, pair.Value.FileSizeBytes, pair.Value.DownloadedAt)));
+        IEnumerable<CacheRow> rows = _sourceSnapshots
+            .SelectMany(source => source.Entries)
+            .Select(entry => new CacheRow(entry));
 
         if (_selectedSourceFilter == CacheSourceFilter.Overture)
         {
-            rows = rows.Where(row => row.Source == CacheSource.Overture);
+            rows = rows.Where(row => row.Source == CacheMutationSource.Overture);
         }
         else if (_selectedSourceFilter == CacheSourceFilter.Gadm)
         {
-            rows = rows.Where(row => row.Source == CacheSource.Gadm);
+            rows = rows.Where(row => row.Source == CacheMutationSource.Gadm);
         }
 
         if (!string.IsNullOrWhiteSpace(_countrySearch))
@@ -360,10 +383,11 @@
         IOrderedEnumerable<CacheRow> ordered = _sortColumn switch
         {
             CacheSortColumn.Country => rows.OrderBy(row => row.Iso3, StringComparer.OrdinalIgnoreCase),
-            CacheSortColumn.AreaCount => rows.OrderBy(row => row.RowCount),
+            CacheSortColumn.Status => rows.OrderBy(row => row.Entry.Status),
             CacheSortColumn.Version => rows.OrderBy(row => row.Version ?? string.Empty, StringComparer.OrdinalIgnoreCase),
             CacheSortColumn.Size => rows.OrderBy(row => row.FileSizeBytes ?? -1),
-            CacheSortColumn.DownloadedAt => rows.OrderBy(row => row.DownloadedAt ?? DateTime.MinValue),
+            CacheSortColumn.DownloadedAt => rows.OrderBy(row => row.DownloadedAt ?? DateTimeOffset.MinValue),
+            CacheSortColumn.LastModified => rows.OrderBy(row => row.LastModifiedUtc ?? DateTimeOffset.MinValue),
             _ => rows.OrderBy(row => row.SourceLabel, StringComparer.OrdinalIgnoreCase)
         };
 
@@ -413,27 +437,71 @@
             : $"{size:0.##} {units[unitIndex]}";
     }
 
-    private sealed record CacheRow(
-        CacheSource Source,
-        string Iso3,
-        string SourceLabel,
-        long RowCount,
-        string? Version,
-        long? FileSizeBytes,
-        DateTime? DownloadedAt)
+    private IEnumerable<CacheInventoryEntry> Entries(CacheMutationSource source) =>
+        _sourceSnapshots
+            .Where(snapshot => snapshot.Source == source)
+            .SelectMany(snapshot => snapshot.Entries);
+
+    private static string FormatEntryStatus(CacheInventoryEntry entry)
     {
-        public string SourceCssClass => Source switch
+        string status = entry.Status switch
         {
-            CacheSource.Overture => "source-overture",
-            CacheSource.Gadm => "source-gadm",
-            _ => string.Empty
+            CacheInventoryEntryStatus.InProgress => "In progress",
+            _ => entry.Status.ToString()
         };
+        if (entry.HasTemporaryArtifacts && entry.Status != CacheInventoryEntryStatus.InProgress)
+        {
+            status += " (operation in progress)";
+        }
+
+        return entry.DiagnosticCode is null
+            ? status
+            : $"{status}: {FormatDiagnostic(entry.DiagnosticCode.Value)}";
     }
 
-    private enum CacheSource
+    private static string FormatSourceStatus(CacheInventorySourceSnapshot source) =>
+        source.DiagnosticCode is null
+            ? source.Status.ToString()
+            : $"{source.Status}: {FormatDiagnostic(source.DiagnosticCode.Value)}";
+
+    private static string FormatDiagnostic(CacheInventoryDiagnosticCode code) => code switch
     {
-        Overture,
-        Gadm
+        CacheInventoryDiagnosticCode.EnumerationTruncated => "too many directory entries",
+        CacheInventoryDiagnosticCode.LogicalCandidateLimitExceeded => "too many cache candidates",
+        CacheInventoryDiagnosticCode.TemporaryArtifactLimitExceeded => "too many temporary files",
+        CacheInventoryDiagnosticCode.InvalidDatabase => "database could not be read",
+        CacheInventoryDiagnosticCode.MissingExpectedTable => "required cache schema is missing",
+        CacheInventoryDiagnosticCode.InvalidMetadataSchema => "cache metadata schema is invalid",
+        CacheInventoryDiagnosticCode.InvalidMetadataValue => "cache metadata is invalid",
+        CacheInventoryDiagnosticCode.SchemaObjectLimitExceeded => "cache schema is too large",
+        CacheInventoryDiagnosticCode.CandidateChanged => "file changed during inspection",
+        CacheInventoryDiagnosticCode.CandidateUnsafe or CacheInventoryDiagnosticCode.SourceUnsafe =>
+            "unsafe linked or non-file path",
+        _ => "storage could not be read"
+    };
+
+    private static string SourceLabel(CacheMutationSource source) =>
+        source == CacheMutationSource.Overture ? "Overture" : "GADM";
+
+    private static string FormatTimestamp(DateTimeOffset? value) =>
+        value?.ToString("u") ?? "—";
+
+    private sealed record CacheRow(CacheInventoryEntry Entry)
+    {
+        public CacheMutationSource Source => Entry.Source;
+        public string Iso3 => Entry.Iso3;
+        public string SourceLabel => GeoBoundaries.SourceLabel(Source);
+        public string? Version => Entry.DatasetVersion;
+        public long? FileSizeBytes => Entry.SizeBytes;
+        public DateTimeOffset? DownloadedAt => Entry.DownloadedUtc;
+        public DateTimeOffset? LastModifiedUtc => Entry.LastModifiedUtc;
+
+        public string SourceCssClass => Source switch
+        {
+            CacheMutationSource.Overture => "source-overture",
+            CacheMutationSource.Gadm => "source-gadm",
+            _ => string.Empty
+        };
     }
 
     private enum CacheSourceFilter
@@ -447,10 +515,11 @@
     {
         Source,
         Country,
-        AreaCount,
+        Status,
         Version,
         Size,
-        DownloadedAt
+        DownloadedAt,
+        LastModified
     }
 
     public async ValueTask DisposeAsync()

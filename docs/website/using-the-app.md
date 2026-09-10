@@ -65,6 +65,16 @@ The Data area contains maintenance tools that change downloaded caches or Immich
 | `Re-download GADM cache` | Replaces one downloaded GADM country cache with a fresh copy. |
 | `Delete All GADM Caches` | Removes every downloaded GADM cache so they will be fetched again on demand later. |
 
+### Administrative cache inventory
+
+Open **Administrative Areas** to inspect downloaded Overture and GADM caches. The table shows each discovered country cache, its current storage status, version or release when available, file size, download time, and last-modified time. It does not scan administrative-area rows to calculate an area count, so opening the page does not load the geographic data.
+
+Use the source and country filters to narrow the list. `Available` means the expected cache schema can be read. `In progress` means Immich ReverseGeo found temporary work for a cache that has not been published yet. `Invalid`, `Unreadable`, or `Unsafe` identifies a cache that should not be used as ready data. If a source is marked `Truncated`, the directory exceeded the inventory safety limit; the page discards that source's partial list instead of presenting it as complete. Refresh the page after cache work finishes to read storage again.
+
+`Delete All` is available separately for each source only when that source's inventory is complete. If a source is truncated, unreadable, or unsafe, correct the reported cache-directory issue and refresh the page before deleting all caches for that source. A complete source remains available even when the other source is incomplete.
+
+Keep the `/data` volume writable only by Immich ReverseGeo and trusted administrators. The inventory refuses links it observes and discards detected file replacements, but it is not a security boundary against an untrusted process changing a path during the read.
+
 ### Deleting administrative caches
 
 Select a delete action, then confirm the named source. Deletion removes only the selected final `.db` file; it does not clear temporary work from a refresh. `Delete All` continues past ordinary filesystem failures and reports separate Deleted, Missing, Invalid, and Failed counts.

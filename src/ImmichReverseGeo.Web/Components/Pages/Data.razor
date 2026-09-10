@@ -1,7 +1,7 @@
 @page "/data"
 @rendermode InteractiveServer
-@inject GadmDivisionCacheService GadmCache
-@inject OvertureDivisionCacheService OvertureCache
+@using ImmichReverseGeo.Core.WorkerJobs
+@inject ICacheInventory CacheInventory
 @inject SkippedAssetsRepository Skipped
 
 <h2>Data Management</h2>
@@ -19,6 +19,10 @@
             <span class="data-card-meta">@_overtureDivisionCountryCount Overture cache(s), @_gadmDivisionCountryCount GADM cache(s)</span>
         </a>
     </div>
+    @foreach (string warning in _inventoryWarnings)
+    {
+        <p class="alert alert-error">@warning</p>
+    }
 </section>
 
 <section class="settings-card">
@@ -43,6 +47,7 @@
     private string? _skipClearResult;
     private int _overtureDivisionCountryCount;
     private int _gadmDivisionCountryCount;
+    private IReadOnlyList<string> _inventoryWarnings = Array.Empty<string>();
 
     protected override async Task OnInitializedAsync()
     {
@@ -59,8 +64,17 @@
 
     private async Task RefreshPageState()
     {
-        _overtureDivisionCountryCount = OvertureCache.GetStatus().Count;
-        _gadmDivisionCountryCount = GadmCache.GetStatus().Count;
+        CacheInventorySnapshot inventory = await CacheInventory.RefreshAsync();
+        _overtureDivisionCountryCount = CountAvailable(
+            inventory,
+            CacheMutationSource.Overture);
+        _gadmDivisionCountryCount = CountAvailable(
+            inventory,
+            CacheMutationSource.Gadm);
+        _inventoryWarnings = inventory.Sources
+            .Where(source => !source.IsComplete)
+            .Select(FormatSourceWarning)
+            .ToArray();
         try
         {
             _skippedCount = await Skipped.GetCountAsync();
@@ -69,5 +83,27 @@
         {
             /* SQLite not yet initialised — ignore */
         }
+    }
+
+    private static int CountAvailable(
+        CacheInventorySnapshot inventory,
+        CacheMutationSource source) =>
+        inventory.Sources
+            .Single(result => result.Source == source)
+            .Entries
+            .Count(entry => entry.Status == CacheInventoryEntryStatus.Available);
+
+    private static string FormatSourceWarning(CacheInventorySourceSnapshot source)
+    {
+        string sourceName = source.Source == CacheMutationSource.Overture ? "Overture" : "GADM";
+        string reason = source.DiagnosticCode switch
+        {
+            CacheInventoryDiagnosticCode.EnumerationTruncated => "too many directory entries",
+            CacheInventoryDiagnosticCode.LogicalCandidateLimitExceeded => "too many cache candidates",
+            CacheInventoryDiagnosticCode.TemporaryArtifactLimitExceeded => "too many temporary files",
+            CacheInventoryDiagnosticCode.SourceUnsafe => "unsafe linked or non-directory storage",
+            _ => "storage could not be read"
+        };
+        return $"{sourceName} cache inventory is incomplete: {reason}.";
     }
 }

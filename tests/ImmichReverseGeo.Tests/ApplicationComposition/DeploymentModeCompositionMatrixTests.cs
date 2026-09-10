@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Reflection;
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
@@ -30,6 +31,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
+using Microsoft.Data.Sqlite;
 
 namespace ImmichReverseGeo.Tests.ApplicationComposition;
 
@@ -219,6 +221,101 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertAlias<WorkerNdjsonProcessingEventReporter, IProcessingEventReporter>(worker.Provider);
         await worker.Provider.GetRequiredService<IWorkerReadinessPublisher>().PublishAsync(CancellationToken.None);
         AssertHostedAlias<InternalWorkerLifecycleService>(worker.Provider);
+    }
+
+    [TestMethod]
+    [TestCategory("Change53")]
+    public async Task WebModes_ResolveOneLazyInventoryWithoutHeavyOrStorageSideEffects()
+    {
+        foreach (DeploymentMode mode in new[] { DeploymentMode.Standard, DeploymentMode.WebOnly })
+        {
+            await using var fixture = WebFixture.Create(
+                mode,
+                validRuntimeFiles: true,
+                sentinelExternal: true);
+
+            ICacheInventory inventory = fixture.Provider.GetRequiredService<ICacheInventory>();
+            ICacheInventoryInvalidator invalidator =
+                fixture.Provider.GetRequiredService<ICacheInventoryInvalidator>();
+
+            Assert.IsTrue(ReferenceEquals(inventory, invalidator),
+                mode + "-one-inventory-singleton");
+            Assert.AreEqual(0, fixture.ForbiddenResolutions,
+                mode + "-inventory-resolution-keeps-heavy-leaves-lazy");
+            Assert.IsFalse(Directory.Exists(Path.Combine(
+                    fixture.Root,
+                    "data",
+                    "overture-divisions")),
+                mode + "-inventory-resolution-no-source-directory-create");
+            Assert.IsFalse(Directory.Exists(Path.Combine(
+                    fixture.Root,
+                    "data",
+                    "gadm-divisions")),
+                mode + "-inventory-resolution-no-source-directory-create");
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change53")]
+    public async Task WebModePages_RenderThroughProductionInventoryWithoutHeavyOrWorkerWork()
+    {
+        await using (var webOnly = WebFixture.Create(
+            DeploymentMode.WebOnly,
+            validRuntimeFiles: true,
+            sentinelExternal: true))
+        {
+            CreateMinimalInventoryDatabase(webOnly.Root, "CHE", "web-only-release");
+            var page = new ImmichReverseGeo.Web.Components.Pages.Data();
+            SetInjected(page, "CacheInventory",
+                webOnly.Provider.GetRequiredService<ICacheInventory>());
+            SetInjected(page, "Skipped",
+                webOnly.Provider.GetRequiredService<SkippedAssetsRepository>());
+            await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
+
+            await renderer.AttachAsync(page);
+            WebStatusRenderingTests.RenderSnapshot rendered = await renderer.ReadAsync();
+
+            StringAssert.Contains(rendered.Text, "1 Overture cache(s), 0 GADM cache(s)");
+            Assert.AreEqual(0, webOnly.ForbiddenResolutions,
+                "web-only-data-does-not-resolve-heavy-cache-services");
+            Assert.AreEqual(0, webOnly.Children.Count,
+                "web-only-data-does-not-launch-processing-child");
+        }
+
+        await using (var standard = WebFixture.Create(
+            DeploymentMode.Standard,
+            validRuntimeFiles: true,
+            sentinelExternal: true,
+            childProcessBoundary: new NoLaunchChildProcessFactory()))
+        {
+            CreateMinimalInventoryDatabase(standard.Root, "CHE", "standard-release");
+            var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
+            SetInjected(page, "CacheInventory",
+                standard.Provider.GetRequiredService<ICacheInventory>());
+            SetInjected(page, "CacheMutations",
+                standard.Provider.GetRequiredService<CacheMutationPageControllerFactory>());
+            SetInjected(page, "CacheDeletions",
+                standard.Provider.GetRequiredService<CacheInventoryDeletionPageControllerFactory>());
+            await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
+
+            await renderer.AttachAsync(page);
+            WebStatusRenderingTests.RenderSnapshot rendered = await renderer.ReadAsync();
+
+            StringAssert.Contains(rendered.Text, "CHE");
+            StringAssert.Contains(rendered.Text, "Available");
+            StringAssert.Contains(rendered.Text, "standard-release");
+            Assert.AreEqual(0, standard.ForbiddenResolutions,
+                "standard-geoboundaries-does-not-resolve-heavy-cache-services");
+            Assert.AreEqual(0, standard.Children.Count,
+                "standard-geoboundaries-does-not-launch-processing-child");
+            Assert.AreEqual(0,
+                standard.Provider.GetRequiredService<IChildProcessFactory>() is
+                    NoLaunchChildProcessFactory boundary
+                        ? boundary.StartCalls
+                        : -1,
+                "standard-geoboundaries-does-not-launch-cache-worker");
+            await page.DisposeAsync();
+        }
     }
 
     [TestMethod]
@@ -800,6 +897,36 @@ public sealed class DeploymentModeCompositionMatrixTests
         Assert.IsTrue(results.All(result => result.Disposal.Count == 1), "parallel-every-provider-disposed-once");
     }
 
+    private static void CreateMinimalInventoryDatabase(
+        string fixtureRoot,
+        string iso3,
+        string release)
+    {
+        string directory = Path.Combine(fixtureRoot, "data", "overture-divisions");
+        Directory.CreateDirectory(directory);
+        string path = Path.Combine(directory, iso3 + ".db");
+        using var connection = new SqliteConnection($"Data Source={path};Pooling=false");
+        connection.Open();
+        using SqliteCommand command = connection.CreateCommand();
+        command.CommandText = """
+            CREATE TABLE division_area (id INTEGER);
+            CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            INSERT INTO _meta (key, value) VALUES ('downloadedAt', '2026-09-10T00:00:00Z');
+            INSERT INTO _meta (key, value) VALUES ('release', $release);
+            """;
+        command.Parameters.AddWithValue("$release", release);
+        command.ExecuteNonQuery();
+    }
+
+    private static void SetInjected(object component, string propertyName, object value)
+    {
+        PropertyInfo property = component.GetType().GetProperty(
+            propertyName,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+            ?? throw new AssertFailedException($"Missing injected property {propertyName}.");
+        property.SetValue(component, value);
+    }
+
     private static void AssertWebDescriptors(IReadOnlyList<ServiceDescriptor> descriptors, bool scheduler)
     {
         foreach (Type webService in new[]
@@ -845,16 +972,27 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertSingletonAliasDescriptors<WorkerJobCoordinator, IWorkerJobArbitrationDiagnostics>(descriptors);
         AssertSingletonHostedAliasDescriptor<WorkerJobCoordinator>(descriptors);
         AssertSingletonAliasDescriptors<PhysicalCacheDeletionFileSystem, ICacheDeletionFileSystem>(descriptors);
+        AssertSingletonAliasDescriptors<PhysicalCacheInventoryFileSystem, ICacheInventoryFileSystem>(descriptors);
+        AssertSingletonAliasDescriptors<CacheInventorySqliteMetadataReader, ICacheInventoryMetadataReader>(descriptors);
+        AssertSingletonAliasDescriptors<CacheInventoryStorageScanner, ICacheInventoryStorageScanner>(descriptors);
+        AssertSingletonAliasDescriptors<CacheInventoryService, ICacheInventory>(descriptors);
+        AssertSingletonAliasDescriptors<CacheInventoryService, ICacheInventoryInvalidator>(descriptors);
         Assert.AreEqual(
             ServiceLifetime.Singleton,
             descriptors.Single(descriptor => descriptor.ServiceType == typeof(CacheDeletionCommand)).Lifetime);
         Assert.AreEqual(
             ServiceLifetime.Singleton,
             descriptors.Single(descriptor => descriptor.ServiceType == typeof(CacheDeletionPageControllerFactory)).Lifetime);
+        Assert.AreEqual(
+            ServiceLifetime.Singleton,
+            descriptors.Single(descriptor => descriptor.ServiceType == typeof(CacheInventoryDeletionOperations)).Lifetime);
+        Assert.AreEqual(
+            ServiceLifetime.Singleton,
+            descriptors.Single(descriptor => descriptor.ServiceType == typeof(CacheInventoryDeletionPageControllerFactory)).Lifetime);
         AssertSingletonAliasDescriptors<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(descriptors);
         AssertSingletonAliasDescriptors<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(descriptors);
         AssertSingletonHostedAliasDescriptor<CoordinateLookupPageControllerHostLifetime>(descriptors);
-        AssertSingletonAliasDescriptors<CacheMutationWorkerClient, ICacheMutationWorkerClient>(descriptors);
+        AssertSingletonAliasDescriptors<CacheInventoryMutationWorkerClient, ICacheMutationWorkerClient>(descriptors);
         AssertSingletonHostedAliasDescriptor<CacheMutationPageControllerHostLifetime>(descriptors);
         Assert.AreEqual(scheduler ? 7 : 6, descriptors.Count(descriptor => descriptor.ServiceType == typeof(IHostedService)), "web-hosted-alias-count");
         Assert.AreEqual(scheduler ? 1 : 0, descriptors.Count(descriptor => descriptor.ServiceType == typeof(ProcessingBackgroundService)), "scheduler-descriptor");
@@ -900,15 +1038,23 @@ public sealed class DeploymentModeCompositionMatrixTests
         AssertAlias<WorkerJobCoordinator, IWorkerJobArbitrationDiagnostics>(provider);
         AssertHostedAlias<WorkerJobCoordinator>(provider);
         AssertAlias<PhysicalCacheDeletionFileSystem, ICacheDeletionFileSystem>(provider);
+        AssertAlias<PhysicalCacheInventoryFileSystem, ICacheInventoryFileSystem>(provider);
+        AssertAlias<CacheInventorySqliteMetadataReader, ICacheInventoryMetadataReader>(provider);
+        AssertAlias<CacheInventoryStorageScanner, ICacheInventoryStorageScanner>(provider);
+        AssertAlias<CacheInventoryService, ICacheInventory>(provider);
+        AssertAlias<CacheInventoryService, ICacheInventoryInvalidator>(provider);
         Assert.AreSame(
             provider.GetRequiredService<CacheDeletionCommand>(),
             provider.GetRequiredService<CacheDeletionCommand>());
         Assert.AreSame(
             provider.GetRequiredService<CacheDeletionPageControllerFactory>(),
             provider.GetRequiredService<CacheDeletionPageControllerFactory>());
+        Assert.AreSame(
+            provider.GetRequiredService<CacheInventoryDeletionPageControllerFactory>(),
+            provider.GetRequiredService<CacheInventoryDeletionPageControllerFactory>());
         AssertAlias<ConfigCoordinateLookupSettingsSnapshotProvider, ICoordinateLookupSettingsSnapshotProvider>(provider);
         AssertAlias<CoordinateLookupWorkerClient, ICoordinateLookupWorkerClient>(provider);
-        AssertAlias<CacheMutationWorkerClient, ICacheMutationWorkerClient>(provider);
+        AssertAlias<CacheInventoryMutationWorkerClient, ICacheMutationWorkerClient>(provider);
         AssertHostedAlias<ProcessingRunCoordinator>(provider);
         AssertHostedAlias<ChildWorkerStartupValidator>(provider);
         AssertHostedAlias<CoordinateLookupPageControllerHostLifetime>(provider);
@@ -986,7 +1132,14 @@ public sealed class DeploymentModeCompositionMatrixTests
             typeof(ICoordinateLookupWorkerClient), typeof(CoordinateLookupPageControllerHostLifetime),
             typeof(CoordinateLookupPageControllerFactory), typeof(CacheDeletionCommand),
             typeof(ICacheDeletionFileSystem), typeof(PhysicalCacheDeletionFileSystem),
-            typeof(CacheDeletionPageControllerFactory)
+            typeof(CacheDeletionPageControllerFactory), typeof(CacheInventoryOptions),
+            typeof(ICacheInventoryFileSystem), typeof(PhysicalCacheInventoryFileSystem),
+            typeof(ICacheInventoryMetadataReader), typeof(CacheInventorySqliteMetadataReader),
+            typeof(ICacheInventoryStorageScanner), typeof(CacheInventoryStorageScanner),
+            typeof(ICacheInventory), typeof(ICacheInventoryInvalidator),
+            typeof(CacheInventoryService), typeof(CacheInventoryDeletionOperations),
+            typeof(CacheInventoryDeletionPageControllerFactory),
+            typeof(CacheInventoryMutationWorkerClient)
         })
         {
             Assert.IsFalse(descriptors.Any(descriptor => descriptor.ServiceType == forbidden), forbidden.Name + "-absent");
@@ -1294,6 +1447,20 @@ public sealed class DeploymentModeCompositionMatrixTests
         }
     }
 
+    private sealed class NoLaunchChildProcessFactory : IChildProcessFactory
+    {
+        private int _startCalls;
+        internal int StartCalls => Volatile.Read(ref _startCalls);
+
+        public ValueTask<IChildProcess?> StartAsync(
+            ChildProcessStartDescriptor descriptor,
+            CancellationToken cancellationToken)
+        {
+            Interlocked.Increment(ref _startCalls);
+            throw new AssertFailedException("production-page-must-not-launch-worker");
+        }
+    }
+
     private static void ArmWebExternalSentinels(IServiceCollection services, ResolutionSentinel sentinel)
     {
         services.RemoveAll<IProcessingRunExecutor>();
@@ -1400,7 +1567,13 @@ public sealed class DeploymentModeCompositionMatrixTests
         internal ValidRuntimeSource? RuntimeSource { get; }
         internal DisposalReceipt Disposal { get; }
 
-        internal static WebFixture Create(DeploymentMode mode, bool scheduledWork = false, ProcessingScheduleSnapshot? savedSchedule = null, bool validRuntimeFiles = false, bool sentinelExternal = false)
+        internal static WebFixture Create(
+            DeploymentMode mode,
+            bool scheduledWork = false,
+            ProcessingScheduleSnapshot? savedSchedule = null,
+            bool validRuntimeFiles = false,
+            bool sentinelExternal = false,
+            IChildProcessFactory? childProcessBoundary = null)
         {
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change45-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
@@ -1460,6 +1633,11 @@ public sealed class DeploymentModeCompositionMatrixTests
             {
                 sentinel = new ResolutionSentinel();
                 ArmWebExternalSentinels(services, sentinel);
+            }
+            if (childProcessBoundary is not null)
+            {
+                services.RemoveAll<IChildProcessFactory>();
+                services.AddSingleton(childProcessBoundary);
             }
             services.AddSingleton(_ => disposal);
 

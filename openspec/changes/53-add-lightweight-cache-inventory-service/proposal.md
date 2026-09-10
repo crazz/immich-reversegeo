@@ -4,10 +4,10 @@ The Data pages currently obtain cache status from services that also own downloa
 
 ## What Changes
 
-- Add a lazy, read-only cache inventory for the two fixed administrative-cache stores, backed only by storage configuration, filesystem facts, and narrowly bounded SQLite schema/metadata reads.
+- Add a lazy, read-only cache inventory for the two fixed administrative-cache stores, backed only by storage configuration, filesystem facts, and narrowly bounded SQLite schema/metadata reads, including all-schema-object and per-connection value-byte limits.
 - Define immutable Web DTOs with a closed source and status model plus ISO3, size, modification time, optional downloaded time and dataset version/release, temporary-artifact indication, and safe diagnostic state. Deliberately stop deriving area counts because `COUNT(*)` is not lightweight metadata.
-- Constrain inspection to canonical immediate child names under the configured source directories; reject links and unsafe paths, distinguish absent/in-progress/invalid/unreadable states, and never repair or delete files.
-- Bound enumeration and metadata work, coalesce concurrent scans, cache only immutable snapshots, and use generation-based invalidation so publication/deletion races cannot republish a known-stale snapshot.
+- Constrain inspection to canonical immediate child names under the configured source directories; reject links observed by bounded pre/post checks, distinguish absent/in-progress/invalid/unreadable states, and never repair or delete files. Treat configured cache storage as writable only by trusted operators and Immich ReverseGeo because the cross-platform SQLite string-path API cannot make an adversarial check/open link swap impossible.
+- Bound enumeration by counting every immediate entry, including junk, and discard the entire source prefix when the visit, logical-candidate, or per-ISO temporary bound is exceeded. Coalesce concurrent scans, cache only immutable snapshots, and use generation-based invalidation so publication/deletion races or a repeated mutation during a scan cannot republish a known-stale snapshot.
 - Migrate the Data summary and GeoBoundaries table to the inventory, including status-aware display and explicit rereads, without starting a worker or resolving a cache, exporter, DuckDB, geometry, or country index.
 - After finalized changes 51 and 52, add change-53-owned adapters that consume their existing explicit completion/deletion results and invalidate inventory only for authoritative successful mutation or actual `Deleted` outcomes; neither prerequisite depends on the inventory or binds to a change-53 interface.
 

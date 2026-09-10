@@ -6,6 +6,7 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Replaced Administrative Areas row-count scans with a lazy bounded cache inventory that reports file status, size, modification time, optional download/version metadata, temporary work, and safe storage diagnostics without loading geodata.
 - Coordinated Administrative Areas cache deletion with local processing, Lookup, and cache-refresh work; deletion now reports deterministic per-file outcomes and refuses unsafe linked paths.
 - Expanded the bundled Overture country artifact to include `dependency` boundaries and canonical Alpha-2, Alpha-3, and display-name identities.
 - Fixed offline country detection for Hong Kong and added validated distinct-territory coverage for Macao, Greenland, the Faroe Islands, the Crown Dependencies, selected US and UK territories, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.

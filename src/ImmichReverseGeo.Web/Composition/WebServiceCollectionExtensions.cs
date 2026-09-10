@@ -94,6 +94,23 @@ internal static class WebServiceCollectionExtensions
             sp.GetRequiredService<PhysicalCacheDeletionFileSystem>());
         services.AddSingleton<CacheDeletionCommand>();
         services.AddSingleton<CacheDeletionPageControllerFactory>();
+        services.AddSingleton<CacheInventoryOptions>();
+        services.AddSingleton<PhysicalCacheInventoryFileSystem>();
+        services.AddSingleton<ICacheInventoryFileSystem>(sp =>
+            sp.GetRequiredService<PhysicalCacheInventoryFileSystem>());
+        services.AddSingleton<CacheInventorySqliteMetadataReader>();
+        services.AddSingleton<ICacheInventoryMetadataReader>(sp =>
+            sp.GetRequiredService<CacheInventorySqliteMetadataReader>());
+        services.AddSingleton<CacheInventoryStorageScanner>();
+        services.AddSingleton<ICacheInventoryStorageScanner>(sp =>
+            sp.GetRequiredService<CacheInventoryStorageScanner>());
+        services.AddSingleton<CacheInventoryService>();
+        services.AddSingleton<ICacheInventory>(sp =>
+            sp.GetRequiredService<CacheInventoryService>());
+        services.AddSingleton<ICacheInventoryInvalidator>(sp =>
+            sp.GetRequiredService<CacheInventoryService>());
+        services.AddSingleton<CacheInventoryDeletionOperations>();
+        services.AddSingleton<CacheInventoryDeletionPageControllerFactory>();
 
         if (scheduledRunsEnabled)
         {
@@ -128,12 +145,15 @@ internal static class WebServiceCollectionExtensions
             sp.GetRequiredService<CoordinateLookupPageControllerHostLifetime>());
         services.AddSingleton<CoordinateLookupPageControllerFactory>();
         services.AddSingleton<CacheMutationWorkerClient>();
-        services.AddSingleton<ICacheMutationWorkerClient>(sp =>
-            sp.GetRequiredService<CacheMutationWorkerClient>());
         services.AddSingleton<CacheMutationPageControllerHostLifetime>();
         services.AddHostedService(sp =>
             sp.GetRequiredService<CacheMutationPageControllerHostLifetime>());
         services.AddSingleton<CacheMutationPageControllerFactory>();
+        services.AddSingleton<CacheInventoryMutationWorkerClient>(sp => new(
+            sp.GetRequiredService<CacheMutationWorkerClient>(),
+            sp.GetRequiredService<ICacheInventoryInvalidator>()));
+        services.AddSingleton<ICacheMutationWorkerClient>(sp =>
+            sp.GetRequiredService<CacheInventoryMutationWorkerClient>());
         services.AddSingleton(sp => new ImmichReverseGeo.Web.WorkerFailureRecovery.WorkerRunControlPlane(
             sp.GetRequiredService<IWorkerCommandInvocationBuilder>(),
             sp.GetRequiredService<IChildWorkerLauncher>(),
