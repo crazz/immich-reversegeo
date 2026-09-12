@@ -2,6 +2,8 @@
 
 See `proposal.md` for the rejection rationale and `specs/persisted-watermarked-work-detection/spec.md` for the no-go contract. Finalized change 61 selected no watermark and requires change 58's exact full-eligibility `EXISTS` detector to remain the frequent-check correctness path. There is therefore no approved source or ordering from which a cursor design can be derived.
 
+Decision verification is anchored to completed change 61 at repository revision `cfbb389a75bcf4e7f322ef17ee31a428a905b787`: its [source research and reproducible PostgreSQL counterexample](https://github.com/crazz/immich-reversegeo/blob/cfbb389a75bcf4e7f322ef17ee31a428a905b787/docs/maintainer/immich-watermark-source-research.md) reject scalar and tuple advancement under inverse commit order. The mutation and recovery matrices remain future acceptance gates, not passing evidence for a new source. No revised evidence satisfying all six revisit criteria was presented in this continuation, so the no-go decision remains in force.
+
 ## Goals / Non-Goals
 
 **Goals:**
