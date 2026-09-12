@@ -7,7 +7,7 @@ Change 57 deliberately leaves scheduled full-eligibility detection count-backed 
 - Replace only change 57's count-backed full-eligibility detector implementation with a PostgreSQL existence probe that returns a boolean and cannot expose an exact count.
 - Preserve the exact current predicate: an inner join from `asset` to `asset_exif` on quoted `"assetId"`, both city and country null, both latitude and longitude non-null, and asset `"deletedAt"` null.
 - Keep the probe independent of processing/overwrite settings and skipped-asset storage. The current product has no overwrite eligibility setting; skipped IDs remain included in database eligibility and are still consumed from one worker-owned snapshot later in processing.
-- Preserve change 57's request/result contract, cancellation and failure distinction, safe bounded diagnostics, advisory race semantics, local finalization, and Standard-only scheduled call site. Query failure has no false/no-work fallback.
+- Preserve change 57's request/result contract, cancellation and failure distinction, safe bounded diagnostics, advisory race semantics, applied50/57 pre-admission logger-only closure, positive admission lifecycle, and Standard-only scheduled call site. Query failure has no false/no-work fallback.
 - Keep Dashboard statistics and the processing worker on their existing exact-count operation; do not change worker totals, batching, or parallelism.
 - Add repository correctness, real-PostgreSQL integration, and opt-in EXPLAIN ANALYZE/performance coverage that records useful evidence without asserting unstable plan nodes, costs, timings, or buffer counts.
 - Add no schema object, index, geodata access, public setting, worker-protocol field, or telemetry owned by adjacent numbered changes.

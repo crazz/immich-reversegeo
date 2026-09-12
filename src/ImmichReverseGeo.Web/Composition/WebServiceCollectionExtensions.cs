@@ -125,11 +125,11 @@ internal static class WebServiceCollectionExtensions
 
         if (scheduledRunsEnabled)
         {
-            services.AddSingleton<IScheduledRunWorkCounter>(sp => new RepositoryScheduledRunWorkCounter(
+            services.AddSingleton<IScheduledRunWorkProbe>(sp => new RepositoryScheduledRunWorkProbe(
                 () => sp.GetRequiredService<ImmichDbRepository>()));
-            services.AddSingleton(sp => new CountBackedProcessingWorkDetector(
-                sp.GetRequiredService<IScheduledRunWorkCounter>().GetUnprocessedCountAsync));
-            services.AddSingleton<IProcessingWorkDetector>(sp => sp.GetRequiredService<CountBackedProcessingWorkDetector>());
+            services.AddSingleton(sp => new ExistenceProcessingWorkDetector(
+                sp.GetRequiredService<IScheduledRunWorkProbe>().HasUnprocessedAssetsAsync));
+            services.AddSingleton<IProcessingWorkDetector>(sp => sp.GetRequiredService<ExistenceProcessingWorkDetector>());
             services.AddProcessingControlPlaneServices();
         }
         else

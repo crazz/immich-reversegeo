@@ -10,6 +10,7 @@ namespace ImmichReverseGeo.Tests;
 
 [TestClass]
 [TestCategory("Change57")]
+[TestCategory("Change58")]
 public sealed class ProcessingWorkDetectionTests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(30);
@@ -89,29 +90,28 @@ public sealed class ProcessingWorkDetectionTests
     }
 
     [TestMethod]
-    [DataRow(0L, false)]
-    [DataRow(1L, true)]
-    [DataRow(long.MaxValue, true)]
-    public async Task AdapterCallsOneCountWithExactTokenAndConstantSafeMetadata(long count, bool expected)
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task AdapterCallsOneExistenceReadWithExactTokenAndConstantSafeMetadata(bool expected)
     {
         using var cancellation = new CancellationTokenSource();
         int calls = 0;
-        var adapter = new CountBackedProcessingWorkDetector(token =>
+        var adapter = new ExistenceProcessingWorkDetector(token =>
         {
             Assert.AreEqual(cancellation.Token, token);
             Interlocked.Increment(ref calls);
-            return Task.FromResult(count);
+            return Task.FromResult(expected);
         });
         Assert.AreEqual(0, calls);
         ProcessingWorkDetectionResult result = await adapter.DetectAsync(
             ProcessingWorkDetectorStub.Request(), cancellation.Token).WaitAsync(Bound);
         Assert.AreEqual(expected, result.HasWork);
-        Assert.AreEqual(ProcessingWorkDetectorKind.CountBacked, result.Diagnostics.ImplementationKind);
+        Assert.AreEqual(ProcessingWorkDetectorKind.Existence, result.Diagnostics.ImplementationKind);
         Assert.AreEqual(ProcessingWorkDetectionCoverage.FullEligibility, result.Diagnostics.Coverage);
         Assert.IsFalse(result.Diagnostics.UsedFallback);
         Assert.AreEqual(1, calls);
         await Assert.ThrowsExactlyAsync<ArgumentNullException>(() => adapter.DetectAsync(null!, cancellation.Token));
-        Assert.AreEqual(1, calls, "Invalid requests never reach the count boundary.");
+        Assert.AreEqual(1, calls, "Invalid requests never reach the existence boundary.");
     }
 
     [TestMethod]
@@ -119,10 +119,10 @@ public sealed class ProcessingWorkDetectionTests
     {
         using var firstToken = new CancellationTokenSource();
         using var secondToken = new CancellationTokenSource();
-        var firstRead = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
-        var secondRead = new TaskCompletionSource<long>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstRead = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRead = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         var entered = new System.Collections.Concurrent.ConcurrentQueue<CancellationToken>();
-        var adapter = new CountBackedProcessingWorkDetector(token =>
+        var adapter = new ExistenceProcessingWorkDetector(token =>
         {
             entered.Enqueue(token);
             return token == firstToken.Token ? firstRead.Task : secondRead.Task;
@@ -132,22 +132,22 @@ public sealed class ProcessingWorkDetectionTests
         try
         {
             CollectionAssert.AreEqual(new[] { firstToken.Token, secondToken.Token }, entered.ToArray(), "Both real adapter reads entered before completion.");
-            secondRead.SetResult(0);
+            secondRead.SetResult(false);
             Assert.IsFalse((await second.WaitAsync(Bound)).HasWork);
             Assert.IsFalse(first.IsCompleted, "First read is held by its explicit uncompleted source after both reads entered.");
-            firstRead.SetResult(3);
+            firstRead.SetResult(true);
             Assert.IsTrue((await first.WaitAsync(Bound)).HasWork);
         }
         finally
         {
-            firstRead.TrySetResult(0);
-            secondRead.TrySetResult(0);
+            firstRead.TrySetResult(false);
+            secondRead.TrySetResult(false);
             await Task.WhenAll(first, second).WaitAsync(Bound);
         }
-        FieldInfo[] fields = typeof(CountBackedProcessingWorkDetector).GetFields(BindingFlags.Instance | BindingFlags.NonPublic);
+        FieldInfo[] fields = typeof(ExistenceProcessingWorkDetector).GetFields(BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.AreEqual(1, fields.Length);
         Assert.IsTrue(fields[0].IsInitOnly);
-        Assert.AreEqual(typeof(Func<CancellationToken, Task<long>>), fields[0].FieldType);
+        Assert.AreEqual(typeof(Func<CancellationToken, Task<bool>>), fields[0].FieldType);
     }
 
     [TestMethod]
@@ -155,15 +155,15 @@ public sealed class ProcessingWorkDetectionTests
     {
         using var fixture = ControlPlaneRolePolicyTests.RoleDescriptors.Create(BoundaryRole.Standard);
         var counter = new Counter();
-        fixture.Services.RemoveAll<IScheduledRunWorkCounter>();
-        fixture.Services.AddSingleton<IScheduledRunWorkCounter>(counter);
+        fixture.Services.RemoveAll<IScheduledRunWorkProbe>();
+        fixture.Services.AddSingleton<IScheduledRunWorkProbe>(counter);
         using ServiceProvider provider = fixture.Services.BuildServiceProvider();
-        var concrete = provider.GetRequiredService<CountBackedProcessingWorkDetector>();
+        var concrete = provider.GetRequiredService<ExistenceProcessingWorkDetector>();
         var detector = provider.GetRequiredService<IProcessingWorkDetector>();
         Assert.AreSame(concrete, detector);
         Assert.AreSame(detector, provider.GetRequiredService<IProcessingWorkDetector>());
         Assert.AreEqual(0, counter.Calls);
-        foreach (Type type in new[] { typeof(CountBackedProcessingWorkDetector), typeof(IProcessingWorkDetector) })
+        foreach (Type type in new[] { typeof(ExistenceProcessingWorkDetector), typeof(IProcessingWorkDetector) })
         {
             Assert.AreEqual(ServiceLifetime.Singleton, fixture.Services.Single(d => d.ServiceType == type).Lifetime);
             Assert.IsFalse(typeof(IHostedService).IsAssignableFrom(type));
@@ -175,7 +175,7 @@ public sealed class ProcessingWorkDetectionTests
         {
             using var other = ControlPlaneRolePolicyTests.RoleDescriptors.Create(role);
             Assert.IsFalse(other.Services.Any(d => d.ServiceType == typeof(IProcessingWorkDetector)
-                || d.ServiceType == typeof(CountBackedProcessingWorkDetector)), role.ToString());
+                || d.ServiceType == typeof(ExistenceProcessingWorkDetector)), role.ToString());
         }
     }
 
@@ -240,14 +240,14 @@ public sealed class ProcessingWorkDetectionTests
         Assert.IsFalse(typeof(T).IsPublic);
     }
 
-    private sealed class Counter : IScheduledRunWorkCounter
+    private sealed class Counter : IScheduledRunWorkProbe
     {
         private int _calls;
         internal int Calls => Volatile.Read(ref _calls);
-        public Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken)
+        public Task<bool> HasUnprocessedAssetsAsync(CancellationToken cancellationToken)
         {
             Interlocked.Increment(ref _calls);
-            return Task.FromResult(1L);
+            return Task.FromResult(true);
         }
     }
 }

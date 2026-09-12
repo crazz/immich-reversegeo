@@ -65,7 +65,7 @@ public sealed class WebOnlyDeploymentModeTests
                 typeof(ProcessingBackgroundService),
                 typeof(IScheduledRunTrigger),
                 typeof(IProcessingScheduleConfiguration),
-                typeof(IScheduledRunWorkCounter),
+                typeof(IScheduledRunWorkProbe),
                 typeof(IProcessingWorkDetector),
                 typeof(IProcessingRunExecutor),
                 typeof(ProcessingRunExecutor)

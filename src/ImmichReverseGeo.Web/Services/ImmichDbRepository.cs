@@ -13,6 +13,31 @@ namespace ImmichReverseGeo.Web.Services;
 public class ImmichDbRepository(NpgsqlDataSource dataSource, ILogger<ImmichDbRepository> logger)
     : IProcessingAssetRepository, IImmichLocationResetStore, ILocationValueOptionsReader
 {
+    private const string UnprocessedAssetsExistenceSql = """
+        SELECT EXISTS (
+            SELECT 1 FROM asset a
+            INNER JOIN asset_exif e ON e."assetId" = a.id
+            WHERE e.city IS NULL AND e.country IS NULL
+              AND e.latitude IS NOT NULL AND e.longitude IS NOT NULL
+              AND a."deletedAt" IS NULL
+        )
+        """;
+
+    /// <summary>Observes database eligibility without counting or reserving work.</summary>
+    public async Task<bool> HasUnprocessedAssetsAsync(CancellationToken ct = default)
+    {
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(UnprocessedAssetsExistenceSql, conn);
+        return DecodeExistenceResult(await cmd.ExecuteScalarAsync(ct));
+    }
+
+    internal static bool DecodeExistenceResult(object? value)
+    {
+        return value is bool hasWork
+            ? hasWork
+            : throw new InvalidOperationException("The eligibility query did not return a boolean.");
+    }
+
     /// <summary>
     /// Returns the next batch of assets with null city/country using keyset pagination.
     /// Caller passes AssetCursor.Initial for the first page.

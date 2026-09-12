@@ -1172,7 +1172,7 @@ public sealed class DeploymentModeCompositionMatrixTests
                 typeof(ProcessingBackgroundService),
                 typeof(IScheduledRunTrigger),
                 typeof(IProcessingWorkDetector),
-                typeof(IScheduledRunWorkCounter),
+                typeof(IScheduledRunWorkProbe),
                 typeof(IProcessingScheduleConfiguration)
             })
             {
@@ -1252,7 +1252,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             typeof(ProcessingBackgroundService),
             typeof(IScheduledRunTrigger),
             typeof(IProcessingWorkDetector),
-            typeof(IScheduledRunWorkCounter),
+            typeof(IScheduledRunWorkProbe),
             typeof(IProcessingScheduleConfiguration)
         ];
         return descriptors.Count(descriptor => scheduledTypes.Contains(descriptor.ServiceType));

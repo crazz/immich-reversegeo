@@ -117,4 +117,4 @@ jobs:
       - name: Run Change 31 PostgreSQL integration tests
         env:
           IMMICH_REVERSEGEO_TEST_POSTGRES_CONNECTION_STRING: Host=localhost;Port=${{ job.services.postgres.ports[5432] }};Database=change31_test;Username=change31;Password=change31;Pooling=true
-        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --settings integration.runsettings --filter "(TestCategory=Change31|TestCategory=Change54|TestCategory=Change57)&TestCategory=Integration"
+        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --settings integration.runsettings --filter "(TestCategory=Change31|TestCategory=Change54|TestCategory=Change57|TestCategory=Change58)&TestCategory=Integration"

@@ -4,26 +4,26 @@ using System.Threading.Tasks;
 
 namespace ImmichReverseGeo.Web.Services;
 
-internal interface IScheduledRunWorkCounter
+internal interface IScheduledRunWorkProbe
 {
-    Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken);
+    Task<bool> HasUnprocessedAssetsAsync(CancellationToken cancellationToken);
 }
 
-internal sealed class RepositoryScheduledRunWorkCounter(Func<ImmichDbRepository> getRepository) : IScheduledRunWorkCounter
+internal sealed class RepositoryScheduledRunWorkProbe(Func<ImmichDbRepository> getRepository) : IScheduledRunWorkProbe
 {
-    public Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken)
+    public Task<bool> HasUnprocessedAssetsAsync(CancellationToken cancellationToken)
     {
-        return getRepository().GetUnprocessedCountAsync(cancellationToken);
+        return getRepository().HasUnprocessedAssetsAsync(cancellationToken);
     }
 }
 
-internal sealed class CountBackedProcessingWorkDetector : IProcessingWorkDetector
+internal sealed class ExistenceProcessingWorkDetector : IProcessingWorkDetector
 {
-    private readonly Func<CancellationToken, Task<long>> _getUnprocessedCount;
+    private readonly Func<CancellationToken, Task<bool>> _hasUnprocessedAssets;
 
-    public CountBackedProcessingWorkDetector(Func<CancellationToken, Task<long>> getUnprocessedCount)
+    public ExistenceProcessingWorkDetector(Func<CancellationToken, Task<bool>> hasUnprocessedAssets)
     {
-        _getUnprocessedCount = getUnprocessedCount ?? throw new ArgumentNullException(nameof(getUnprocessedCount));
+        _hasUnprocessedAssets = hasUnprocessedAssets ?? throw new ArgumentNullException(nameof(hasUnprocessedAssets));
     }
 
     public async Task<ProcessingWorkDetectionResult> DetectAsync(
@@ -31,13 +31,13 @@ internal sealed class CountBackedProcessingWorkDetector : IProcessingWorkDetecto
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(request);
-        // This Web-side count is advisory; an eligible worker repeats the authoritative
-        // count under its own advisory lock before processing.
-        long unprocessedCount = await _getUnprocessedCount(cancellationToken);
+        // This observation is advisory; the worker still counts eligible assets
+        // under its own advisory lock before processing.
+        bool hasWork = await _hasUnprocessedAssets(cancellationToken);
         return new ProcessingWorkDetectionResult(
-            unprocessedCount > 0,
+            hasWork,
             new ProcessingWorkDetectionDiagnostics(
-                ProcessingWorkDetectorKind.CountBacked,
+                ProcessingWorkDetectorKind.Existence,
                 ProcessingWorkDetectionCoverage.FullEligibility,
                 usedFallback: false));
     }

@@ -5,7 +5,7 @@ Scheduled work gating avoids an unnecessary exact pre-launch count while retaini
 ## ADDED Requirements
 
 ### Requirement: Count-free bounded scheduled preflight
-The system SHALL evaluate an admitted internal scheduled full-eligibility request with a bounded existence observation and SHALL return only the established boolean launch decision and bounded safe diagnostics. A successful observation SHALL NOT return, publish, or derive an exact or estimated count. Dashboard statistics and manual-run progress SHALL retain exact-count behavior, and the processing worker SHALL retain its independent authoritative exact count and zero gate.
+The system SHALL evaluate an internal scheduled full-eligibility request before identity creation or admission with a bounded existence observation and SHALL return only the established boolean launch decision and bounded safe diagnostics. A successful observation SHALL NOT return, publish, or derive an exact or estimated count. Dashboard statistics and manual-run progress SHALL retain exact-count behavior, and the processing worker SHALL retain its independent authoritative exact count and zero gate.
 
 #### Scenario: Scheduled preflight finds work
 - **WHEN** at least one row satisfies current full eligibility at the time of the scheduled observation
@@ -13,7 +13,7 @@ The system SHALL evaluate an admitted internal scheduled full-eligibility reques
 
 #### Scenario: Scheduled preflight finds no work
 - **WHEN** no row satisfies current full eligibility at the time of the scheduled observation
-- **THEN** the detector reports no work without invoking an exact count and the existing identity-checked local zero-work finalizer completes the occurrence without resolving a backend or launching a worker
+- **THEN** the detector reports no work without invoking an exact count and the existing pre-admission logger-only no-work closure completes the occurrence without a run identity, admission, or ProcessingState lifecycle without resolving a backend or launching a worker
 
 #### Scenario: Exact count remains user-facing and authoritative
 - **WHEN** Dashboard statistics are requested or an admitted worker starts processing
@@ -35,18 +35,18 @@ The existence observation SHALL report work exactly when at least one non-delete
 - **THEN** the scheduled observation still reports work without reading skipped storage and the launched worker applies its unchanged authoritative count and skipped-ID snapshot semantics
 
 ### Requirement: Cancellation and query failures never become no work
-The existence observation SHALL pass the admitted cancellation token through connection opening and command execution. Matching cancellation SHALL propagate as cancellation, and connection, timeout, SQL, schema, result-conversion, or other unexpected query failures SHALL propagate as failure. Neither outcome SHALL produce a successful false result, use the exact count as fallback, launch a replacement path, or retry the occurrence automatically. Any command-timeout policy already established by the landed lightweight PostgreSQL boundary SHALL remain unchanged; this change SHALL NOT introduce a new timeout setting.
+The existence observation SHALL pass the existing linked preflight cancellation token through connection opening and command execution. Matching cancellation SHALL propagate as cancellation, and connection, timeout, SQL, schema, result-conversion, or other unexpected query failures SHALL propagate as failure. Neither outcome SHALL produce a successful false result, use the exact count as fallback, launch a replacement path, or retry the occurrence automatically. Any command-timeout policy already established by the landed lightweight PostgreSQL boundary SHALL remain unchanged; this change SHALL NOT introduce a new timeout setting.
 
 #### Scenario: Observation is cancelled
-- **WHEN** the admitted cancellation token is cancelled before the observation completes
-- **THEN** cancellation remains distinct from no work and the existing scheduled predispatch cancellation finalizer closes the matching occurrence
+- **WHEN** the existing linked preflight cancellation token is cancelled before the observation completes
+- **THEN** cancellation remains distinct from no work and the existing pre-admission cancellation/drain path closes the occurrence without creating a run identity or ProcessingState lifecycle
 
 #### Scenario: Observation query fails
 - **WHEN** opening the connection or executing or decoding the existence query fails
-- **THEN** failure remains distinct from no work and the existing scheduled predispatch failure finalizer closes the matching occurrence with no count fallback or worker launch
+- **THEN** failure remains distinct from no work and the existing pre-admission logger-only failure path closes the occurrence without creating a run identity or ProcessingState lifecycle with no count fallback or worker launch
 
 ### Requirement: Observation remains advisory and side-effect free
-The existence result SHALL describe only one completed database observation; it SHALL NOT reserve rows or create an atomic snapshot with worker execution. It SHALL perform no Immich or schema mutation, skipped-store access, processing-configuration access, batch work, worker-request enrichment, detector persistence, backend resolution, protocol activity, geodata/cache/airport access, or worker launch. The existing pending-state, detector-call, local-finalization-or-child-dispatch order and matching-handle cleanup SHALL remain unchanged.
+The existence result SHALL describe only one completed database observation; it SHALL NOT reserve rows or create an atomic snapshot with worker execution. It SHALL perform no Immich or schema mutation, skipped-store access, processing-configuration access, batch work, worker-request enrichment, detector persistence, backend resolution, protocol activity, geodata/cache/airport access, or worker launch. The applied50/57 pre-admission detector order, logger-only local closure, and positive-admission pending/state-arm/child-dispatch order with matching-handle cleanup SHALL remain unchanged.
 
 #### Scenario: Work disappears after positive observation
 - **WHEN** the existence observation reports work but the worker's later authoritative count returns zero

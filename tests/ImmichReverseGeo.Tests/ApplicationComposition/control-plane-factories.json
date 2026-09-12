@@ -67,14 +67,14 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_19",
+    "Key": "ImmichReverseGeo.Web.Services.ExistenceProcessingWorkDetector|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_19",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
-    "Service": "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector",
+    "Service": "ImmichReverseGeo.Web.Services.ExistenceProcessingWorkDetector",
     "Lifetime": "Singleton",
     "Dependencies": [
-      "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector",
-      "ImmichReverseGeo.Web.Services.IScheduledRunWorkCounter",
-      "System.Func\u00602[System.Threading.CancellationToken,System.Threading.Tasks.Task\u00601[System.Int64]]"
+      "ImmichReverseGeo.Web.Services.ExistenceProcessingWorkDetector",
+      "ImmichReverseGeo.Web.Services.IScheduledRunWorkProbe",
+      "System.Func\u00602[System.Threading.CancellationToken,System.Threading.Tasks.Task\u00601[System.Boolean]]"
     ]
   },
   {
@@ -238,7 +238,7 @@
     "Service": "ImmichReverseGeo.Web.Services.IProcessingWorkDetector",
     "Lifetime": "Singleton",
     "Dependencies": [
-      "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector"
+      "ImmichReverseGeo.Web.Services.ExistenceProcessingWorkDetector"
     ]
   },
   {
@@ -251,14 +251,14 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.IScheduledRunWorkCounter|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_18",
+    "Key": "ImmichReverseGeo.Web.Services.IScheduledRunWorkProbe|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_18",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
-    "Service": "ImmichReverseGeo.Web.Services.IScheduledRunWorkCounter",
+    "Service": "ImmichReverseGeo.Web.Services.IScheduledRunWorkProbe",
     "Lifetime": "Singleton",
     "Dependencies": [
       "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec__DisplayClass3_1",
       "ImmichReverseGeo.Web.Services.ImmichDbRepository",
-      "ImmichReverseGeo.Web.Services.RepositoryScheduledRunWorkCounter",
+      "ImmichReverseGeo.Web.Services.RepositoryScheduledRunWorkProbe",
       "System.Func\u00601[ImmichReverseGeo.Web.Services.ImmichDbRepository]"
     ]
   },

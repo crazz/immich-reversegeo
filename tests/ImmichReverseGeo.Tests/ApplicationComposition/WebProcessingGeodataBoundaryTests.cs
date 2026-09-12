@@ -48,7 +48,7 @@ public sealed class WebProcessingGeodataBoundaryTests
             typeof(ProcessingBackgroundService),
             typeof(IScheduledRunTrigger),
             typeof(IProcessingWorkDetector),
-            typeof(IScheduledRunWorkCounter)
+            typeof(IScheduledRunWorkProbe)
         })
         {
             Assert.AreEqual(0, fixture.ProductionDescriptors.Count(descriptor => descriptor.ServiceType == absent), absent.Name);
@@ -449,8 +449,8 @@ public sealed class WebProcessingGeodataBoundaryTests
 
             if (!preserveProductionCounter)
             {
-                services.RemoveAll<IScheduledRunWorkCounter>();
-                services.AddSingleton<IScheduledRunWorkCounter>(countRepository);
+                services.RemoveAll<IScheduledRunWorkProbe>();
+                services.AddSingleton<IScheduledRunWorkProbe>(countRepository);
             }
             services.AddSingleton(events);
             services.RemoveAll<IProcessingRunCoordinatorObserver>();
@@ -543,16 +543,16 @@ public sealed class WebProcessingGeodataBoundaryTests
         }
     }
 
-    private sealed class RecordingCountRepository(long count, ConcurrentQueue<string> events) : IScheduledRunWorkCounter
+    private sealed class RecordingCountRepository(long count, ConcurrentQueue<string> events) : IScheduledRunWorkProbe
     {
         internal int Calls { get; private set; }
 
-        public Task<long> GetUnprocessedCountAsync(CancellationToken cancellationToken)
+        public Task<bool> HasUnprocessedAssetsAsync(CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Calls++;
             events.Enqueue("count");
-            return Task.FromResult(count);
+            return Task.FromResult(count > 0);
         }
     }
 
@@ -803,9 +803,9 @@ public sealed class WebProcessingGeodataBoundaryTests
         {
             return path.Count >= 5
                 && path[^5] == typeof(IProcessingWorkDetector)
-                && path[^4] == typeof(CountBackedProcessingWorkDetector)
-                && path[^3] == typeof(IScheduledRunWorkCounter)
-                && path[^2] == typeof(RepositoryScheduledRunWorkCounter)
+                && path[^4] == typeof(ExistenceProcessingWorkDetector)
+                && path[^3] == typeof(IScheduledRunWorkProbe)
+                && path[^2] == typeof(RepositoryScheduledRunWorkProbe)
                 && path[^1] == typeof(ImmichDbRepository);
         }
 
@@ -839,11 +839,11 @@ public sealed class WebProcessingGeodataBoundaryTests
             {
                 _opaqueFactories.Add(serviceType.Name + ": UnclassifiedFactory");
             }
-            if (dependencies.Contains(typeof(RepositoryScheduledRunWorkCounter)))
+            if (dependencies.Contains(typeof(RepositoryScheduledRunWorkProbe)))
             {
-                _edges[typeof(RepositoryScheduledRunWorkCounter)] = dependencies
-                    .Where(type => type != typeof(RepositoryScheduledRunWorkCounter)).ToArray();
-                return _edges[serviceType] = [typeof(RepositoryScheduledRunWorkCounter)];
+                _edges[typeof(RepositoryScheduledRunWorkProbe)] = dependencies
+                    .Where(type => type != typeof(RepositoryScheduledRunWorkProbe)).ToArray();
+                return _edges[serviceType] = [typeof(RepositoryScheduledRunWorkProbe)];
             }
             return _edges[serviceType] = dependencies;
         }

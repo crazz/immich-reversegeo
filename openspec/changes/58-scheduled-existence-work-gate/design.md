@@ -1,8 +1,8 @@
 ## Context
 
-See [proposal.md](proposal.md), [specs/scheduled-work-gating/spec.md](specs/scheduled-work-gating/spec.md), and change 57's processing-work-detection contract. Change 57 establishes `IProcessingWorkDetector.DetectAsync(ProcessingWorkDetectionRequest, CancellationToken)`, immutable request/result/diagnostic types, one Standard scheduled predispatch call site, and a stateless singleton adapter that temporarily calls the exact count. Block 58 changes only that adapter's full-eligibility database observation.
+See [proposal.md](proposal.md), [specs/scheduled-work-gating/spec.md](specs/scheduled-work-gating/spec.md), and change 57's processing-work-detection contract. Change 57 establishes `IProcessingWorkDetector.DetectAsync(ProcessingWorkDetectionRequest, CancellationToken)`, immutable request/result/diagnostic types, one Standard scheduled pre-admission call site, and a stateless singleton adapter that temporarily calls the exact count. Block 58 changes only that adapter's full-eligibility database observation.
 
-The inspected baseline repository operation is `ImmichDbRepository.GetUnprocessedCountAsync(CancellationToken)`. It inner-joins `asset` and `asset_exif` on `e."assetId" = a.id` and requires null city/country, present latitude/longitude, and null `a."deletedAt"`. It has no SQL parameters, explicit command timeout, overwrite option, or skipped-ID predicate. The current configuration has no overwrite eligibility setting. Skipped IDs are loaded later once per non-empty worker run and do not change the repository count. No repository migration or checked-in Immich index evidence exists, and current tests contain no real-PostgreSQL repository, EXPLAIN, or performance coverage.
+The inspected baseline repository operation is `ImmichDbRepository.GetUnprocessedCountAsync(CancellationToken)`. It inner-joins `asset` and `asset_exif` on `e."assetId" = a.id` and requires null city/country, present latitude/longitude, and null `a."deletedAt"`. It has no SQL parameters, explicit command timeout, overwrite option, or skipped-ID predicate. The current configuration has no overwrite eligibility setting. Skipped IDs are loaded later once per non-empty worker run and do not change the repository count. The landed Change57 includes a real-PostgreSQL predicate fixture, using the existing isolated Change31 schema harness. Its minimal schema has primary keys and the EXIF foreign key, but omits unrelated production columns/indexes; it is not a complete Immich schema certification. Block58 will reuse it and record pinned upstream schema evidence. EXPLAIN/performance coverage is still absent.
 
 Apply must first confirm that change 57 is landed and bind to its exact names and repository abstraction. If its eligibility predicate or command-timeout policy differs from this inspected evidence, stop and reconcile rather than silently changing eligibility or inventing a second detector seam.
 
@@ -66,7 +66,7 @@ The exact count includes database-eligible IDs even if they appear in `skipped.d
 
 ### 4. Preserve cancellation, timeout, and failure semantics with no fallback
 
-Pass the exact admitted token to both `OpenConnectionAsync` and scalar execution. Decode the scalar strictly as PostgreSQL boolean using the repository's established Npgsql pattern; null or unexpected result type fails rather than mapping to false. Dispose connection and command normally.
+Pass the exact existing linked preflight token to both `OpenConnectionAsync` and scalar execution. Decode the scalar strictly as PostgreSQL boolean using the repository's established Npgsql pattern; null or unexpected result type fails rather than mapping to false. Dispose connection and command normally.
 
 The inspected code sets no explicit `NpgsqlCommand.CommandTimeout`, so block 58 adds no timeout setting and retains the data source/Npgsql default. If the applied change-57 repository boundary already establishes an explicit timeout, the existence command must inherit/copy that exact policy rather than reset, lengthen, or disable it. Timeout, connection, SQL, schema, decoding, and other faults propagate to change 57's established failure path. Matching cancellation propagates to its cancellation path. There is no catch-to-false, exact-count fallback, retry, stale cache, or alternate query.
 
@@ -94,7 +94,7 @@ Block 60 may later turn the finalized query into a maintainer procedure. Block 5
 - [Count and existence predicates drift] → Keep explicit SQL parity cases and compare boolean outcome with `count > 0` over the same integration fixture.
 - [Skipped-only rows launch an apparently empty worker] → Preserve the existing database-eligibility/skipped-snapshot boundary and test it at detector/coordinator/worker seams rather than filtering in Web.
 - [Planner assertions become flaky] → Assert semantic execution and parseability only; record variable plan metrics without gating on unstable details.
-- [Query failure suppresses schedules] → Propagate failure through the established local failure finalizer; never return false or fall back.
+- [Query failure suppresses schedules] → Propagate failure through the established pre-admission logger-only failure closure; never return false or fall back.
 - [Prerequisite names or predicate changed when change 57 landed] → Inventory the landed detector/repository/schema first and stop for reconciliation rather than creating duplicate APIs or silently changing semantics.
 
 ## Migration Plan
@@ -107,3 +107,9 @@ Block 60 may later turn the finalized query into a maintainer procedure. Block 5
 6. Run focused tests, integration/performance tests explicitly, the normal suite, strict OpenSpec validation/status, and a block-58-only diff review proving block 59, worker count, settings, skipped storage, schema, and geodata are unchanged.
 
 Rollback restores the count-backed adapter call. There is no schema, data, settings, protocol, index, or persisted-state migration.
+
+## Applied prerequisite reconciliation
+
+Change57 is archived at54f59b36f2e42edd1c793a4d99309c4f53832e63 after successful exact-SHA CI. Its approved contract has no RunId/JobId before detection. No-work, cancellation and failure have no ProcessingState lifecycle; only positive detection attempts admission. Preserve that superseding50/57 order throughout58. Required exact56 policy/factory entries follow renamed lightweight adapters; structural enforcement and archived57 artifacts remain unchanged.
+
+Pinned upstream schema witness: Immich v3.2.0, commit1b6098c9dbfffe978bec2d414606ed7a4c8e019a, asset.table.ts andasset-exif.table.ts. Required fields/nullability andprimary EXIFforeignkey match the minimal fixture. Upstream also declares city/GiST andother indexes; the fixture deliberately does not reproduce them or promise a plan/index recommendation. This witness does not declare a new overall supported-version range.
