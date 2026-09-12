@@ -1190,7 +1190,7 @@ Correlate plan evidence with bounded event 5901 fields while distinguishing Post
 
 **Dependencies and sequencing** — Requires applied/finalized 57–59 and must re-read their landed code/tests before authoring; stop on divergence. This block changes documentation only, defers runtime/implementation documentation and all database tuning or detector redesign, and must not inspect or edit parallel block 61 or any later block.
 
-**OpenSpec** — [`60-document-postgresql-detector-query-plans`](openspec/changes/60-document-postgresql-detector-query-plans/)
+**OpenSpec** — [`60-document-postgresql-detector-query-plans`](openspec/changes/archive/2026-09-12-60-document-postgresql-detector-query-plans/)
 
 ### 61. `research: select a safe watermark source`
 
