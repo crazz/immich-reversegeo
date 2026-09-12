@@ -1172,7 +1172,7 @@ Emit below-threshold `HasWork`, `NoWork`, and `Cancelled` events at Information;
 
 **Dependencies and sequencing** — Requires applied 57 and finalized 58 and must not alter either detector behavior or the existence query. Hand block 60 exact `strategy=postgres-exists-v1`, exact `database_operation=eligibility-existence-probe`, and the explicit runtime-unavailable plan facts so its redacted maintainer procedure can supply query-plan, buffer, physical-read, and index evidence. Do not edit block 60 here.
 
-**OpenSpec** — [`59-instrument-work-detector-cost`](openspec/changes/59-instrument-work-detector-cost/)
+**OpenSpec** — [`59-instrument-work-detector-cost`](openspec/changes/archive/2026-09-12-59-instrument-work-detector-cost/)
 
 ### 60. `docs: add PostgreSQL query-plan diagnostic procedure`
 
