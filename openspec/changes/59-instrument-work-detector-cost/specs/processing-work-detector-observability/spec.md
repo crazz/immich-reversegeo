@@ -68,7 +68,7 @@ For a successful existence-strategy result, the terminal measurement SHALL recor
 Detector observability SHALL use structured application logging only. It SHALL NOT add a metrics/exporter dependency, create or alter timeout policy, update processing state or the user-facing log ring, change scheduling or eligibility, resolve a worker backend, launch or suppress a worker, mutate database or configuration state, or add UI behavior.
 
 #### Scenario: Standard scheduled detection is observed
-- **WHEN** the Standard scheduler invokes its admitted detector seam
+- **WHEN** the Standard scheduler invokes its pre-admission detector seam
 - **THEN** logging observes the call while the existing detector and coordinator remain solely responsible for the work decision and lifecycle
 
 #### Scenario: Non-scheduled paths bypass detection

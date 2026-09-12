@@ -801,8 +801,9 @@ public sealed class WebProcessingGeodataBoundaryTests
 
         private static bool IsAllowedScheduledRepositoryPath(IReadOnlyList<Type> path)
         {
-            return path.Count >= 5
-                && path[^5] == typeof(IProcessingWorkDetector)
+            return path.Count >= 6
+                && path[^6] == typeof(IProcessingWorkDetector)
+                && path[^5] == typeof(InstrumentedProcessingWorkDetector)
                 && path[^4] == typeof(ExistenceProcessingWorkDetector)
                 && path[^3] == typeof(IScheduledRunWorkProbe)
                 && path[^2] == typeof(RepositoryScheduledRunWorkProbe)

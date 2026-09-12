@@ -158,12 +158,12 @@ public sealed class ProcessingWorkDetectionTests
         fixture.Services.RemoveAll<IScheduledRunWorkProbe>();
         fixture.Services.AddSingleton<IScheduledRunWorkProbe>(counter);
         using ServiceProvider provider = fixture.Services.BuildServiceProvider();
-        var concrete = provider.GetRequiredService<ExistenceProcessingWorkDetector>();
+        var concrete = provider.GetRequiredService<InstrumentedProcessingWorkDetector>();
         var detector = provider.GetRequiredService<IProcessingWorkDetector>();
         Assert.AreSame(concrete, detector);
         Assert.AreSame(detector, provider.GetRequiredService<IProcessingWorkDetector>());
         Assert.AreEqual(0, counter.Calls);
-        foreach (Type type in new[] { typeof(ExistenceProcessingWorkDetector), typeof(IProcessingWorkDetector) })
+        foreach (Type type in new[] { typeof(ExistenceProcessingWorkDetector), typeof(InstrumentedProcessingWorkDetector), typeof(IProcessingWorkDetector) })
         {
             Assert.AreEqual(ServiceLifetime.Singleton, fixture.Services.Single(d => d.ServiceType == type).Lifetime);
             Assert.IsFalse(typeof(IHostedService).IsAssignableFrom(type));
@@ -175,6 +175,7 @@ public sealed class ProcessingWorkDetectionTests
         {
             using var other = ControlPlaneRolePolicyTests.RoleDescriptors.Create(role);
             Assert.IsFalse(other.Services.Any(d => d.ServiceType == typeof(IProcessingWorkDetector)
+                || d.ServiceType == typeof(InstrumentedProcessingWorkDetector)
                 || d.ServiceType == typeof(ExistenceProcessingWorkDetector)), role.ToString());
         }
     }

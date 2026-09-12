@@ -129,7 +129,11 @@ internal static class WebServiceCollectionExtensions
                 () => sp.GetRequiredService<ImmichDbRepository>()));
             services.AddSingleton(sp => new ExistenceProcessingWorkDetector(
                 sp.GetRequiredService<IScheduledRunWorkProbe>().HasUnprocessedAssetsAsync));
-            services.AddSingleton<IProcessingWorkDetector>(sp => sp.GetRequiredService<ExistenceProcessingWorkDetector>());
+            services.AddSingleton(sp => new InstrumentedProcessingWorkDetector(
+                sp.GetRequiredService<ExistenceProcessingWorkDetector>(),
+                sp.GetRequiredService<TimeProvider>(),
+                sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<InstrumentedProcessingWorkDetector>>()));
+            services.AddSingleton<IProcessingWorkDetector>(sp => sp.GetRequiredService<InstrumentedProcessingWorkDetector>());
             services.AddProcessingControlPlaneServices();
         }
         else
