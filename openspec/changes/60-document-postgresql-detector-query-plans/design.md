@@ -1,6 +1,6 @@
 ## Context
 
-See [proposal.md](proposal.md) and [specs/postgresql-detector-diagnostics/spec.md](specs/postgresql-detector-diagnostics/spec.md). Finalized change 58 defines one parameterless scalar PostgreSQL `EXISTS` operation with exact full-eligibility parity; finalized change 59 names it `strategy=postgres-exists-v1` / `database_operation=eligibility-existence-probe` and emits event 5901 duration/outcome evidence while intentionally omitting plans, buffers, rows scanned, and index claims. The current source tree still shows the pre-58 exact-count repository query, so documentation implementation must wait for changes 58–59 to be applied and then bind to landed code/tests rather than treating this planning copy as runtime truth.
+See [proposal.md](proposal.md) and [specs/postgresql-detector-diagnostics/spec.md](specs/postgresql-detector-diagnostics/spec.md). Applied change 58 defines one parameterless scalar PostgreSQL `EXISTS` operation with exact full-eligibility parity; applied change 59 names it `strategy=postgres-exists-v1` / `database_operation=eligibility-existence-probe` and emits event 5901 duration/outcome evidence while intentionally omitting plans, buffers, rows scanned, and index claims. Both changes are finalized. The documentation binds to their landed repository constant, compiled-boundary/parity/performance tests, and instrumentation schema; the repository leaves the data-source command timeout unchanged.
 
 This change authors maintainer documentation only. It does not execute diagnostics now, alter runtime behavior, or edit public product docs during planning.
 
@@ -36,7 +36,9 @@ Timeout values are conservative examples to review with the DBA and staging base
 
 At apply time, re-read the applied change-58 repository operation and the tests that prove query/predicate parity and run the performance fixture. Copy the SQL statement verbatim, preserving this finalized logical shape:
 
-`SELECT EXISTS (SELECT 1 FROM asset AS a INNER JOIN asset_exif AS e ON e."assetId" = a.id WHERE e.city IS NULL AND e.country IS NULL AND e.latitude IS NOT NULL AND e.longitude IS NOT NULL AND a."deletedAt" IS NULL);`
+`SELECT EXISTS (SELECT 1 FROM asset a INNER JOIN asset_exif e ON e."assetId" = a.id WHERE e.city IS NULL AND e.country IS NULL AND e.latitude IS NOT NULL AND e.longitude IS NOT NULL AND a."deletedAt" IS NULL)`
+
+This is the landed constant's token sequence, with formatting collapsed only. The runnable diagnostic adds the statement terminator required by its surrounding transaction script.
 
 Wrap only that statement with `EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON)`. Record the exact source/test paths and strategy literals on the page. Review the doc query token-for-token (ignoring formatting only) against both sources. If landed names, predicate, parameters, timeout policy, or supported schema differ, stop and reconcile block 60; do not “improve” the diagnostic with `LIMIT`, planner hints, rewritten joins, parameters, or an assumed index.
 
