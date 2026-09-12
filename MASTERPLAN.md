@@ -1218,7 +1218,7 @@ Correlate plan evidence with bounded event 5901 fields while distinguishing Post
 
 **Dependencies and sequencing** — Closed by finalized block 61. Reopen only through new or revised evidence that satisfies every block 61 compatibility, zero-miss, commit-inversion, restart/replay/corruption, schema-drift, multi-container, bounded-cost, and source-specific operational criterion, followed by an explicitly revised block 62 proposal. Until then preserve block 58 `EXISTS`; block 63 cannot relax this gate.
 
-**OpenSpec** — [`62-add-persisted-watermarked-detector`](openspec/changes/62-add-persisted-watermarked-detector/)
+**OpenSpec** — [`62-add-persisted-watermarked-detector`](openspec/changes/archive/2026-09-12-62-add-persisted-watermarked-detector/)
 
 ### 63. `feat: add periodic full reconciliation` — **withdrawn / no-go**
 
