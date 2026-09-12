@@ -2,6 +2,8 @@
 
 See `proposal.md` for the withdrawn premise and `specs/periodic-eligibility-reconciliation/spec.md` for the no-go contract. Finalized block 61 found no safe polling watermark, made block 62 no-go, and required block 58's exact full-eligibility `EXISTS` observation to remain on every scheduled check. The accepted scheduling design therefore has one schedule and one full-current-state correctness path, not a frequent tail that needs a slower repair pass.
 
+Verification uses repository revision `6b46138e250899eb042f866f31332223d9afa3d6`, after completed changes 61 and 62. The [landed scheduling loop](https://github.com/crazz/immich-reversegeo/blob/6b46138e250899eb042f866f31332223d9afa3d6/src/ImmichReverseGeo.Web/Services/ProcessingSchedule.cs) consumes one enabled cron snapshot, and the [scheduled-work contract](https://github.com/crazz/immich-reversegeo/blob/6b46138e250899eb042f866f31332223d9afa3d6/openspec/specs/scheduled-work-gating/spec.md) retains full eligibility, pre-admission no-work closure and worker-owned authority. Existing daily and weekly editor presets configure that same schedule; they are not a second reconciliation cadence. No new evidence reopens the watermark gate in this continuation.
+
 ## Goals / Non-Goals
 
 **Goals:**
