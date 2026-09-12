@@ -1,4 +1,4 @@
-namespace ImmichReverseGeo.Overture.Models;
+namespace ImmichReverseGeo.Core.Countries;
 
 public sealed record CountryIdentity(
     string DisplayName,

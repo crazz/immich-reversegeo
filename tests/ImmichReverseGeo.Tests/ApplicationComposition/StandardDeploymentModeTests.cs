@@ -92,9 +92,9 @@ public sealed class StandardDeploymentModeTests
         {
             typeof(ImmichDbRepository),
             typeof(SkippedAssetsRepository),
-            typeof(OvertureDivisionsService),
-            typeof(OverturePlacesService),
-            typeof(GadmDivisionsService),
+            typeof(ICacheInventory),
+            typeof(CacheDeletionCommand),
+            typeof(CacheMutationPageControllerFactory),
             typeof(ConfigService)
         })
         {

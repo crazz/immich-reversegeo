@@ -1,7 +1,7 @@
 using System;
 using System.Collections.Generic;
 
-namespace ImmichReverseGeo.Gadm.Services;
+namespace ImmichReverseGeo.Core.Countries;
 
 public static class GadmCountryCodeMapper
 {

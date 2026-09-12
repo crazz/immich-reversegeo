@@ -68,8 +68,8 @@ internal static class WebServiceCollectionExtensions
                 sp.GetRequiredService<ProcessAssetsWebStatus>());
         }
 
-        // Transitional Web dependency until Change 55 moves heavy work out of this root.
-        services.AddReusableHeavyComposition();
+        services.AddSingleton<SkippedAssetsRepository>();
+        services.AddSingleton<ImmichDbRepository>();
 
         services.AddRazorComponents()
             .AddInteractiveServerComponents();

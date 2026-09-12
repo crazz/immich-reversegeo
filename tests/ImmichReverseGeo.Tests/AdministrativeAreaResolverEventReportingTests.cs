@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.Countries;
 using System.Collections.Concurrent;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
@@ -602,7 +603,7 @@ public sealed class AdministrativeAreaResolverEventReportingTests
             }
             reporter ??= new RecordingProcessingEventReporter();
             signals ??= new ActivitySignals(reporter);
-            var catalog = CountryIdentityCatalog.Load(Path.Combine(FindRepoRoot(), "src/ImmichReverseGeo.Web/bundled-data/iso3166.json"));
+            var catalog = CountryIdentityCatalog.Load(Path.Combine(FindRepoRoot(), "src/ImmichReverseGeo.Core/Countries/iso3166.json"));
             var overture = new OvertureDivisionCacheService(NullLogger<OvertureDivisionCacheService>.Instance, root, iso => catalog.FindByAlpha3(iso)?.Alpha2, new OvertureDivisionCacheTestHooks { SourceOperation = OSource });
             var gadm = CreateGadmCache(root, GSource);
             var storage = new StorageOptions(root, root); var places = new OverturePlacesService(NullLogger<OverturePlacesService>.Instance, root, root); var divisions = new OvertureDivisionsService(NullLogger<OvertureDivisionsService>.Instance, places, root, root, alpha => catalog.FindByAlpha2(alpha)?.Alpha3);

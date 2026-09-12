@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.Countries;
 using System.Collections.Concurrent;
 using System.Reflection;
 using ImmichReverseGeo.Core.Models;
@@ -544,7 +545,7 @@ public class AdministrativeAreaResolverTerritoryTests
     private static string GetIdentityCatalogPath()
     {
         var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-        return Path.Combine(repoRoot, "src", "ImmichReverseGeo.Web", "bundled-data", "iso3166.json");
+        return Path.Combine(repoRoot, "src", "ImmichReverseGeo.Core", "Countries", "iso3166.json");
     }
 
 }

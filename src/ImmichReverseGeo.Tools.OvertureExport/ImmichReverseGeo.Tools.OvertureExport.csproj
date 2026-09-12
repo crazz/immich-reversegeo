@@ -14,8 +14,4 @@
     <ProjectReference Include="..\\ImmichReverseGeo.Overture\\ImmichReverseGeo.Overture.csproj" />
   </ItemGroup>
 
-  <ItemGroup>
-    <Content Include="..\\ImmichReverseGeo.Web\\bundled-data\\iso3166.json" Link="bundled-data\\iso3166.json" CopyToOutputDirectory="PreserveNewest" />
-  </ItemGroup>
-
 </Project>

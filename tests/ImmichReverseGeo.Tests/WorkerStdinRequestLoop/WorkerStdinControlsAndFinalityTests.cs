@@ -687,7 +687,7 @@ public sealed class WorkerStdinControlsAndFinalityTests
         var activeRoots = new[]
         {
             "src/ImmichReverseGeo.Core",
-            "src/ImmichReverseGeo.Web/WorkerHost",
+            "src/ImmichReverseGeo.Worker/WorkerHost",
             "src/ImmichReverseGeo.Web/Services",
             "src/ImmichReverseGeo.Web/Composition"
         };
@@ -699,16 +699,16 @@ public sealed class WorkerStdinControlsAndFinalityTests
         var activeSource = string.Join("\n", activeFiles.Select(File.ReadAllText));
         var requestSource = File.ReadAllText(Path.Combine(
             root,
-            "src/ImmichReverseGeo.Web/WorkerHost/WorkerStdinRequestLoop/WorkerStdinRequestSource.cs"));
+            "src/ImmichReverseGeo.Worker/WorkerHost/WorkerStdinRequestLoop/WorkerStdinRequestSource.cs"));
         var frameReader = File.ReadAllText(Path.Combine(
             root,
-            "src/ImmichReverseGeo.Web/WorkerHost/WorkerStdinRequestLoop/WorkerStdinFrameReader.cs"));
+            "src/ImmichReverseGeo.Worker/WorkerHost/WorkerStdinRequestLoop/WorkerStdinFrameReader.cs"));
         var composition = File.ReadAllText(Path.Combine(
             root,
-            "src/ImmichReverseGeo.Web/Composition/InternalWorkerServiceCollectionExtensions.cs"));
+            "src/ImmichReverseGeo.Worker/Composition/InternalWorkerServiceCollectionExtensions.cs"));
         var availability = File.ReadAllText(Path.Combine(
             root,
-            "src/ImmichReverseGeo.Web/WorkerHost/TransitionalWorkerTransport.cs"));
+            "src/ImmichReverseGeo.Worker/WorkerHost/TransitionalWorkerTransport.cs"));
 
         Assert.AreEqual(0, Count(activeSource, "Console.OpenStandardInput()"), "stdin-structure-no-uncancellable-console-input");
         Assert.AreEqual(1, Count(requestSource, "new AnonymousPipeClientStream("), "stdin-structure-one-cancellable-pipe-input");

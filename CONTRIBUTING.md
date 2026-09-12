@@ -21,6 +21,8 @@ npm run test
 
 The local web app runs on `http://localhost:5122`.
 
+`npm run start` launches `src/ImmichReverseGeo.Host`, which selects the existing Web, worker, or Run-once role. The Web components compile into the lightweight `ImmichReverseGeo.Web.ControlPlane` library; heavy execution lives in `ImmichReverseGeo.Worker`. Publish `src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj` for a runnable application. Its executable remains `ImmichReverseGeo.Web`, and local development keeps the Web project's working directory.
+
 Development defaults:
 
 - data dir: `./localdata`

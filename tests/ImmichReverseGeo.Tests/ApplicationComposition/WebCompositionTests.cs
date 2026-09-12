@@ -48,11 +48,9 @@ public sealed class WebCompositionTests
                 typeof(ISkippedAssetsCountReader),
                 typeof(ImmichDbRepository),
                 typeof(SkippedAssetsRepository),
-                typeof(GadmDivisionsService),
-                typeof(GadmDivisionCacheService),
-                typeof(OverturePlacesService),
-                typeof(OvertureDivisionCacheService),
-                typeof(OvertureDivisionsService),
+                typeof(ICacheInventory),
+                typeof(CacheDeletionCommand),
+                typeof(CacheMutationPageControllerFactory),
                 typeof(ConfigService),
                 typeof(CityResolverProfileCatalogService),
                 typeof(CountryCodeService)
@@ -207,7 +205,7 @@ public sealed class WebCompositionTests
     }
 
     [TestMethod]
-    public void WebComposition_PreservesControlPlaneAndHeavyAliasIdentity()
+    public void WebComposition_PreservesControlPlaneAliasesWithoutHeavyOwners()
     {
         var fixtureRoot = CreateBundledIdentityFixture();
         try
@@ -223,7 +221,6 @@ public sealed class WebCompositionTests
             var coordinator = provider.GetRequiredService<ProcessingRunCoordinator>();
             var background = provider.GetRequiredService<ProcessingBackgroundService>();
             var repository = provider.GetRequiredService<ImmichDbRepository>();
-            var overtureCache = provider.GetRequiredService<OvertureDivisionCacheService>();
             var hostedDescriptors = services
                 .Where(descriptor => descriptor.ServiceType == typeof(IHostedService))
                 .ToArray();
@@ -244,7 +241,7 @@ public sealed class WebCompositionTests
             Assert.AreSame(background, applicationHostedEntries[1].Service, "background-hosted-alias");
             Assert.AreNotSame(applicationHostedEntries[0].Service, applicationHostedEntries[1].Service, "distinct-hosted-owners");
             Assert.AreSame(repository, provider.GetRequiredService<ImmichDbRepository>(), "repository-singleton");
-            Assert.AreSame(overtureCache, provider.GetRequiredService<OvertureDivisionCacheService>(), "cache-singleton-identity");
+            Assert.IsNull(provider.GetService<OvertureDivisionCacheService>(), "heavy-cache-unregistered");
             Assert.IsNull(provider.GetService<IProcessingRunExecutor>(), "executor-unreachable");
             Assert.IsNull(provider.GetService<IProcessingAssetRepository>(), "execution-repository-alias-unreachable");
         }

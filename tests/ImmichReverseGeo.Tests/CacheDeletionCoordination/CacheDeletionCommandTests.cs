@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.Countries;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.Services;
@@ -376,7 +377,7 @@ public sealed class CacheDeletionCommandTests
         foreach (string iso3 in countries.GetKnownIso3Codes())
         {
             Assert.IsNotNull(countries.FindByAlpha3(iso3), $"Overture identity missing for {iso3}");
-            string gadm = ImmichReverseGeo.Gadm.Services.GadmCountryCodeMapper.ToGadmCode(iso3);
+            string gadm = GadmCountryCodeMapper.ToGadmCode(iso3);
             Assert.AreEqual(3, gadm.Length, $"GADM mapping length for {iso3}");
             Assert.IsTrue(gadm.All(character => character is >= 'A' and <= 'Z'),
                 $"GADM mapping must stay canonical for {iso3}");

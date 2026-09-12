@@ -39,6 +39,72 @@ namespace ImmichReverseGeo.Tests.ApplicationComposition;
 [TestCategory("Change45")]
 public sealed class DeploymentModeCompositionMatrixTests
 {
+    [TestMethod]
+    [TestCategory("Change55")]
+    public async Task WebModes_ActualStartupDoesNotMaterializeDatabaseInventoryOrGeodata()
+    {
+        foreach (DeploymentMode mode in new[] { DeploymentMode.Standard, DeploymentMode.WebOnly })
+        {
+            int forbiddenActivations = 0;
+            object Forbidden(string category)
+            {
+                Interlocked.Increment(ref forbiddenActivations);
+                throw new AssertFailedException("startup -> forbidden " + category);
+            }
+            var process = new NoLaunchChildProcessFactory();
+            await using var fixture = WebFixture.Create(mode, validRuntimeFiles: true,
+                sentinelExternal: true, childProcessBoundary: process,
+                configureServices: services =>
+                {
+                    services.RemoveAll<Npgsql.NpgsqlDataSource>();
+                    services.AddSingleton<Npgsql.NpgsqlDataSource>(_ => (Npgsql.NpgsqlDataSource)Forbidden("PostgreSQL"));
+                    services.RemoveAll<ICacheInventoryStorageScanner>();
+                    services.AddSingleton<ICacheInventoryStorageScanner>(_ => (ICacheInventoryStorageScanner)Forbidden("inventory"));
+                    foreach (Type type in new[] { typeof(OvertureDivisionsService), typeof(OvertureDivisionCacheService),
+                        typeof(OverturePlacesService), typeof(GadmDivisionsService), typeof(GadmDivisionCacheService) })
+                    {
+                        services.AddSingleton(type, _ => Forbidden(type.Name));
+                    }
+                });
+            await fixture.Application.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(1, fixture.ListenerStarts, mode + "-actual-host-ready");
+            Assert.AreEqual(0, forbiddenActivations, mode + "-no-eager-activation");
+            Assert.AreEqual(0, fixture.ForbiddenResolutions, mode + "-no-executor");
+            Assert.AreEqual(0, process.StartCalls, mode + "-no-child");
+            await fixture.Application.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change55")]
+    public async Task WebModes_EveryComponentInjectionGraphResolvesWithoutHeavyOrChildWork()
+    {
+        foreach (DeploymentMode mode in new[] { DeploymentMode.Standard, DeploymentMode.WebOnly })
+        {
+            var process = new NoLaunchChildProcessFactory();
+            await using var fixture = WebFixture.Create(mode, validRuntimeFiles: true,
+                sentinelExternal: true, childProcessBoundary: process);
+            await using var scope = fixture.Provider.CreateAsyncScope();
+            Type[] components = typeof(StandardWebApplication).Assembly.GetTypes()
+                .Where(type => !type.IsAbstract && typeof(Microsoft.AspNetCore.Components.IComponent).IsAssignableFrom(type)).ToArray();
+            foreach (Type type in components)
+            {
+                object component = ActivatorUtilities.CreateInstance(scope.ServiceProvider, type);
+                foreach (PropertyInfo property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                {
+                    if (property.IsDefined(typeof(Microsoft.AspNetCore.Components.InjectAttribute), inherit: true))
+                    {
+                        property.SetValue(component, scope.ServiceProvider.GetRequiredService(property.PropertyType));
+                    }
+                }
+            }
+            Assert.IsGreaterThanOrEqualTo(10, components.Length, mode + "-all-compiled-components");
+            Assert.AreEqual(0, fixture.ForbiddenResolutions, mode + "-no-heavy-construction");
+            Assert.AreEqual(0, process.StartCalls, mode + "-no-child");
+            Assert.IsFalse(Directory.Exists(Path.Combine(fixture.Root, "data", "overture-divisions")));
+            Assert.IsFalse(Directory.Exists(Path.Combine(fixture.Root, "data", "gadm-divisions")));
+        }
+    }
     private static readonly DateTimeOffset Now = new(2026, 9, 8, 0, 0, 0, TimeSpan.Zero);
 
     [TestMethod]
@@ -320,7 +386,7 @@ public sealed class DeploymentModeCompositionMatrixTests
 
     [TestMethod]
     [TestCategory("Change51")]
-    public async Task Composition_WebRootsRetainCacheFacadesWithoutWorkerMutationAdapters()
+    public async Task Composition_WebRootsRetainLightweightCacheControlsWithoutWorkerOwners()
     {
         await using var standard = WebFixture.Create(DeploymentMode.Standard);
         await using var webOnly = WebFixture.Create(DeploymentMode.WebOnly);
@@ -331,12 +397,16 @@ public sealed class DeploymentModeCompositionMatrixTests
             ("web-only", webOnly.Descriptors)
         })
         {
-            Assert.IsTrue(
+            Assert.IsFalse(
                 root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(OvertureDivisionCacheService)),
-                root.Name + "-overture-status-delete-facade");
-            Assert.IsTrue(
+                root.Name + "-no-overture-owner");
+            Assert.IsFalse(
                 root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(GadmDivisionCacheService)),
-                root.Name + "-gadm-status-delete-facade");
+                root.Name + "-no-gadm-owner");
+            Assert.IsTrue(root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(ICacheInventory)),
+                root.Name + "-lightweight-inventory");
+            Assert.IsTrue(root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(CacheDeletionCommand)),
+                root.Name + "-lightweight-deletion");
             Assert.IsFalse(
                 root.Descriptors.Any(descriptor => descriptor.ServiceType == typeof(ICacheMutationSourceOperation)),
                 root.Name + "-no-worker-source-operation");
@@ -947,16 +1017,16 @@ public sealed class DeploymentModeCompositionMatrixTests
         {
             typeof(ImmichDbRepository),
             typeof(SkippedAssetsRepository),
-            typeof(OvertureDivisionsService),
-            typeof(OverturePlacesService),
-            typeof(GadmDivisionsService),
+            typeof(ICacheInventory),
+            typeof(CacheDeletionCommand),
+            typeof(CacheMutationPageControllerFactory),
             typeof(ConfigService)
         })
         {
             Assert.AreEqual(
                 1,
                 descriptors.Count(descriptor => descriptor.ServiceType == transitionalWebDependency),
-                transitionalWebDependency.Name + "-transitional-lookup-data-registration");
+                transitionalWebDependency.Name + "-control-plane-registration");
         }
 
         AssertSingletonAliasDescriptors<ProcessAssetsWebStatus, IProcessAssetsWebStatus>(descriptors);
@@ -1573,7 +1643,8 @@ public sealed class DeploymentModeCompositionMatrixTests
             ProcessingScheduleSnapshot? savedSchedule = null,
             bool validRuntimeFiles = false,
             bool sentinelExternal = false,
-            IChildProcessFactory? childProcessBoundary = null)
+            IChildProcessFactory? childProcessBoundary = null,
+            Action<IServiceCollection>? configureServices = null)
         {
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change45-" + Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(root);
@@ -1641,6 +1712,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             }
             services.AddSingleton(_ => disposal);
 
+            configureServices?.Invoke(services);
             application = WebApplicationComposition.Build(builder);
             _ = application.Services.GetRequiredService<DisposalReceipt>();
             return new WebFixture(root, application, descriptors, children, gate, schedule, sentinel, scheduleClock, listener, runtimeSource, disposal);

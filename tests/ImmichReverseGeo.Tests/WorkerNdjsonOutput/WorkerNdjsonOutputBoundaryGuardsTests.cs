@@ -8,7 +8,9 @@ public sealed class WorkerNdjsonOutputBoundaryGuardsTests
     private static readonly string[] StructuralScanRoots =
     [
         "src/ImmichReverseGeo.Core",
-        "src/ImmichReverseGeo.Web/WorkerHost",
+        "src/ImmichReverseGeo.Worker/WorkerHost",
+        "src/ImmichReverseGeo.Worker/Services",
+        "src/ImmichReverseGeo.Worker/Composition",
         "src/ImmichReverseGeo.Web/Services",
         "src/ImmichReverseGeo.Web/Composition",
         "src/ImmichReverseGeo.Overture/Services",
@@ -29,14 +31,14 @@ public sealed class WorkerNdjsonOutputBoundaryGuardsTests
             .OrderBy(path => path, StringComparer.Ordinal)
             .ToArray();
         var source = string.Join("\n", sourceFiles.Select(File.ReadAllText));
-        var emitter = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/WorkerNdjsonOutput/WorkerNdjsonEmitter.cs");
-        var reporter = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/WorkerNdjsonOutput/WorkerNdjsonProcessingEventReporter.cs");
-        var composition = Read(root, "src/ImmichReverseGeo.Web/Composition/InternalWorkerServiceCollectionExtensions.cs");
+        var emitter = Read(root, "src/ImmichReverseGeo.Worker/WorkerHost/WorkerNdjsonOutput/WorkerNdjsonEmitter.cs");
+        var reporter = Read(root, "src/ImmichReverseGeo.Worker/WorkerHost/WorkerNdjsonOutput/WorkerNdjsonProcessingEventReporter.cs");
+        var composition = Read(root, "src/ImmichReverseGeo.Worker/Composition/InternalWorkerServiceCollectionExtensions.cs");
         var stdinExemptBoundarySource = emitter + "\n" + reporter;
         var fullBoundarySource = emitter + "\n" + reporter + "\n" + composition;
-        Assert.AreEqual(6, StructuralScanRoots.Length, "worker-ndjson:source:six-boundary-roots");
-        var host = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/InternalWorkerHost.cs");
-        var lifecycle = Read(root, "src/ImmichReverseGeo.Web/WorkerHost/InternalWorkerLifecycleService.cs");
+        Assert.AreEqual(8, StructuralScanRoots.Length, "worker-ndjson:source:all-relocated-boundary-roots");
+        var host = Read(root, "src/ImmichReverseGeo.Worker/WorkerHost/InternalWorkerHost.cs");
+        var lifecycle = Read(root, "src/ImmichReverseGeo.Worker/WorkerHost/InternalWorkerLifecycleService.cs");
 
         Assert.IsTrue(sourceFiles.Any(path => path.EndsWith("InternalWorkerServiceCollectionExtensions.cs", StringComparison.Ordinal)), "worker-ndjson:source:composition-included");
         var productionQueueCapacity = WorkerNdjsonEmitter.ProductionQueueCapacity;

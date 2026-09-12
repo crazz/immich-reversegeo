@@ -2,7 +2,7 @@
 
 See `proposal.md` for motivation and `specs/web-control-plane-composition/spec.md` for the boundary. The checkout before the numbered migrations has one broad Web graph: global Razor imports expose Overture/GADM namespaces; `Lookup.razor` directly injects five heavy source services; `Data.razor` and `GeoBoundaries.razor` inject both cache services; `AdministrativeAreaResolverService` closes over all source resolvers/caches; and `ProcessingBackgroundService` is both scheduler and in-process executor. `Program.cs` factories capture country mapping delegates and storage roots while registering Overture/GADM services in the Web provider. `OvertureDivisionsService` lazily builds the process-lifetime STRtree/prepared-geometry country index on first lookup.
 
-Blocks 47–53 replace these callers with typed worker sessions, shared admission, a cache-mutation controller, lightweight coordinated deletion, and a lazy storage-only inventory. Block 19 supplies registration slices and blocks 38–45 supply child-only processing and Standard/Web-only mode behavior. Apply must bind to the exact landed symbols rather than create parallel roots. Parallel-owned block 54 is a prerequisite only: verify its reset control-plane surface, but do not edit its artifacts or implementation. Block 56 owns the durable future enforcement expansion.
+Blocks 47–53 replace these callers with typed worker sessions, shared admission, a cache-mutation controller, lightweight coordinated deletion, and a lazy storage-only inventory. Block 19 supplies registration slices and blocks 38–45 supply child-only processing and Standard/Web-only mode behavior. Apply must bind to the exact landed symbols rather than create parallel roots. Block 54 is landed and closed at `6b7bee940d9a4bb08baece1ca64fc76625105688`: verify its finalized reset control-plane surface, but do not edit its artifacts or implementation. Block 56 owns the durable future enforcement expansion.
 
 ## Goals / Non-Goals
 
@@ -16,7 +16,7 @@ Blocks 47–53 replace these callers with typed worker sessions, shared admissio
 **Non-Goals:**
 
 - Change worker protocol, resolver precedence, cache publication/deletion/inventory semantics, arbitration, reset semantics, deployment-mode behavior, or public UI workflows owned by blocks 47–54.
-- Edit parallel-owned block 54 or implement block 56's ongoing architecture policy framework.
+- Edit landed block 54 or implement block 56's ongoing architecture policy framework.
 - Remove heavy dependencies from worker or Run-once composition, combine those roles with Web, or launch a worker to validate Web startup.
 - Use a fragile RSS threshold as proof; the invariant is absence of heavy construction/static edges, with worker termination providing memory reclamation.
 
@@ -58,6 +58,10 @@ If a finalized transport DTO is still housed in a heavy project, move the DTO to
 
 Alternative: defer every reference removal to block 56. Rejected because the known redundant Web packages and Overture/GADM import surface are part of the memory/dependency cutover; block 56 should enforce the clean state, not create it.
 
+The finalized physical boundary uses the existing Web project as the Razor control-plane library (`ImmichReverseGeo.Web.ControlPlane`) with Core, Cronos, Npgsql and Microsoft.Data.Sqlite only. The existing Program and launch profile move to `ImmichReverseGeo.Host`, whose executable name remains `ImmichReverseGeo.Web`; it dispatches to the unchanged logical roots. Existing worker/Run-once composition, handlers and execution services move to `ImmichReverseGeo.Worker`, retaining their namespaces and implementations. Worker consumes shared lightweight Web services; Web has no reverse Worker reference. No additional role, controller, transport DTO, reflection loader or logical composition root is introduced.
+
+Core owns the unchanged bounded country identity records, catalog, GADM country-code mapping and canonical JSON, published at the existing `bundled-data/iso3166.json` path. The executable publishes both role libraries and preserves root static asset paths; `RequiresAspNetWebAssets` is explicit because the executable contains no local Razor components. Application and test publication retain both Host and control-plane static asset endpoint manifests. Docker, development and release commands target Host while retaining the public executable name.
+
 ### 5. Guard factories, startup, and memory boundaries explicitly
 
 No Web factory may capture a heavy implementation type, mapper delegate owned by a heavy assembly, bundled geodata path, DuckDB/geometry option, or callback that can reach a country-index loader. Shared factories may capture only immutable composition context and approved lightweight contracts. Provider validation must not eagerly materialize service graphs with external side effects.
@@ -88,11 +92,11 @@ Alternative: rely only on source-text bans. Rejected because factories/reflectio
 - [Descriptor graph analysis misses factories] → Require registration metadata for application-owned factories and pair static inspection with throwing runtime sentinels.
 - [Provider validation itself causes side effects] → Validate descriptors before materialization and use fake external boundaries for startup tests; preserve lazy inventory, database, and identity behavior.
 - [Standard/Web-only behavior drifts] → Run the same control-plane contract suite over both production roots, varying only schedule policy.
-- [Block 54 changes concurrently] → Treat its landed reset facade as an opaque prerequisite and edit neither its change nor implementation; report an incompatible surface as an apply blocker.
+- [Block 54 ownership regresses during relocation] → Treat its landed reset facade as an opaque prerequisite and edit neither its change nor implementation; report an incompatible surface as an apply blocker.
 
 ## Migration Plan
 
-1. Verify blocks 19, 38–45, and 47–53 are applied; wait for parallel block 54 and record its finalized reset facade without editing it. Generate the post-migration component/service/descriptor/closure/reference ownership matrix.
+1. Verify blocks 19, 38–45, and 47–53 are applied; verify landed block 54 and record its finalized reset facade without editing it. Generate the post-migration component/service/descriptor/closure/reference ownership matrix.
 2. Characterize country identity mappings, then relocate only the bounded identity/catalog contract and any shared worker transport DTOs out of Overture/GADM dependencies.
 3. Migrate every remaining Web component/service to finalized job, inventory, deletion, reset, repository/detector, and status contracts; remove global heavy imports and source-status fallbacks.
 4. Narrow Standard and Web-only registration roots, factories, aliases, and hosted services; keep worker/Run-once heavy roots intact and verify Web startup launches nothing eagerly.

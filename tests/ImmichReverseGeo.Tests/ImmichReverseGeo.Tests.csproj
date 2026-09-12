@@ -13,7 +13,7 @@
     <CrossProcessRunLockTestAppHostAssemblyName>ImmichReverseGeo.CrossProcessRunLockTestAppHost</CrossProcessRunLockTestAppHostAssemblyName>
     <CrossProcessRunLockTestAppHostTargetFramework>net10.0</CrossProcessRunLockTestAppHostTargetFramework>
     <CrossProcessRunLockTestAppHostStageDirectory>cross-process-run-lock-apphost</CrossProcessRunLockTestAppHostStageDirectory>
-    <ProductionWorkerAppHostProject>$(MSBuildThisFileDirectory)..\..\src\ImmichReverseGeo.Web\ImmichReverseGeo.Web.csproj</ProductionWorkerAppHostProject>
+    <ProductionWorkerAppHostProject>$(MSBuildThisFileDirectory)..\..\src\ImmichReverseGeo.Host\ImmichReverseGeo.Host.csproj</ProductionWorkerAppHostProject>
     <ProductionWorkerAppHostAssemblyName>ImmichReverseGeo.Web</ProductionWorkerAppHostAssemblyName>
     <ProductionWorkerAppHostTargetFramework>net10.0</ProductionWorkerAppHostTargetFramework>
     <ProductionWorkerAppHostStageDirectory>production-worker-apphost</ProductionWorkerAppHostStageDirectory>
@@ -35,12 +35,14 @@
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Core\ImmichReverseGeo.Core.csproj" />
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Overture\ImmichReverseGeo.Overture.csproj" />
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Web\ImmichReverseGeo.Web.csproj" />
+    <ProjectReference Include="../../src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/ImmichReverseGeo.Worker/ImmichReverseGeo.Worker.csproj" />
     <ProjectReference Include="$(WorkerProcessFixtureProject)" ReferenceOutputAssembly="false" />
     <ProjectReference Include="$(CrossProcessRunLockTestAppHostProject)" ReferenceOutputAssembly="false" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\iso3166.json" Link="data/iso3166.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\ImmichReverseGeo.Core\Countries\iso3166.json" Link="data/iso3166.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\defaults\city-resolver-profiles.json" Link="data\city-resolver-profiles.json" CopyToOutputDirectory="PreserveNewest" />
     <None Update="change12-verification-evidence.json" CopyToOutputDirectory="PreserveNewest" />
     <Content Include="WorkerProtocol\Compatibility\Fixtures\v1\**\*" CopyToOutputDirectory="PreserveNewest" />
@@ -174,14 +176,17 @@
     <ItemGroup>
       <_ProductionWorkerAppHostPublishRuntimeFile Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)**\*" />
       <_ProductionWorkerStaticAssetsEndpointsManifest Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)$(ProductionWorkerAppHostAssemblyName).staticwebassets.endpoints.json" />
+      <_ProductionWorkerStaticAssetsEndpointsManifest Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)$(ProductionWorkerAppHostAssemblyName).ControlPlane.staticwebassets.endpoints.json" />
     </ItemGroup>
-    <Error Condition="!Exists('@(_ProductionWorkerStaticAssetsEndpointsManifest)')"
-           Text="Production Web static-assets endpoints manifest was not generated: @(_ProductionWorkerStaticAssetsEndpointsManifest)." />
+    <Error Condition="!Exists('%(_ProductionWorkerStaticAssetsEndpointsManifest.Identity)')"
+           Text="Production Web static-assets endpoints manifest was not generated: %(_ProductionWorkerStaticAssetsEndpointsManifest.Identity)." />
     <Copy SourceFiles="@(_ProductionWorkerStaticAssetsEndpointsManifest)"
           DestinationFiles="@(_ProductionWorkerStaticAssetsEndpointsManifest->'$(PublishDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />
     <Error Condition="!Exists('$(PublishDir)$(ProductionWorkerAppHostAssemblyName).staticwebassets.endpoints.json')"
            Text="Production Web static-assets endpoints manifest was not staged to $(PublishDir)." />
+    <Error Condition="!Exists('$(PublishDir)$(ProductionWorkerAppHostAssemblyName).ControlPlane.staticwebassets.endpoints.json')"
+           Text="Web control-plane static-assets endpoints manifest was not staged to $(PublishDir)." />
     <Copy SourceFiles="@(_ProductionWorkerAppHostPublishRuntimeFile)"
           DestinationFiles="@(_ProductionWorkerAppHostPublishRuntimeFile->'$(PublishDir)$(ProductionWorkerAppHostStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
           SkipUnchangedFiles="true" />

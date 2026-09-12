@@ -21,4 +21,4 @@ After blocks 47–53 move Lookup, cache mutation, deletion, and inventory behind
 
 ## Impact
 
-The landed role/mode registration roots and startup dispatcher, Web components and control services, shared transport/identity placement, `ImmichReverseGeo.Web.csproj`, global Razor imports, and Standard/Web-only composition tests are affected. Blocks 47–53 are consumed as finalized prerequisites; parallel-owned block 54 is only verified as landed and is not edited. Block 56 remains the follow-on regression-enforcement owner.
+The landed role/mode registration roots and startup dispatcher, Web components and control services, shared transport/identity placement, `ImmichReverseGeo.Web.csproj`, global Razor imports, and Standard/Web-only composition tests are affected. Blocks 47–53 are consumed as finalized prerequisites; landed block 54 is only consumed through its finalized facade and is not edited. Block 56 remains the follow-on regression-enforcement owner.

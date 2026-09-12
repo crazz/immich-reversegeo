@@ -105,8 +105,11 @@ public sealed class ChildWorkerOnlyCompositionTests
     public void ProductionSource_HasNoTransitionalBackendAndRegistersExecutionOnlyFromWorkerComposition()
     {
         var repositoryRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../.."));
-        var sourceRoot = Path.Combine(repositoryRoot, "src", "ImmichReverseGeo.Web");
+        var sourceRoot = Path.Combine(repositoryRoot, "src");
         var sources = Directory.GetFiles(sourceRoot, "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Split(Path.DirectorySeparatorChar).Any(segment => segment is "obj" or "bin"))
+            .Where(path => Path.GetRelativePath(sourceRoot, path).StartsWith("ImmichReverseGeo.Web" + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+                || Path.GetRelativePath(sourceRoot, path).StartsWith("ImmichReverseGeo.Worker" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
             .ToDictionary(path => Path.GetRelativePath(sourceRoot, path), File.ReadAllText);
 
         var forbiddenPatterns = new[]
@@ -134,21 +137,21 @@ public sealed class ChildWorkerOnlyCompositionTests
         CollectionAssert.AreEqual(
             new[]
             {
-                Path.Combine("Composition", "InternalWorkerServiceCollectionExtensions.cs"),
-                Path.Combine("Composition", "WorkerExecutionServiceCollectionExtensions.cs")
+                Path.Combine("ImmichReverseGeo.Worker", "Composition", "InternalWorkerServiceCollectionExtensions.cs"),
+                Path.Combine("ImmichReverseGeo.Worker", "Composition", "WorkerExecutionServiceCollectionExtensions.cs")
             },
             executionRegistrationCallers,
             "worker-only-execution-registration-callers");
 
         var allowedExecutorSources = new HashSet<string>(StringComparer.Ordinal)
         {
-            Path.Combine("Composition", "InternalWorkerServiceCollectionExtensions.cs"),
-            Path.Combine("Composition", "WorkerExecutionServiceCollectionExtensions.cs"),
-            Path.Combine("RunOnce", "RunOnceApplication.cs"),
-            Path.Combine("Services", "ProcessingRunContracts.cs"),
-            Path.Combine("Services", "ProcessingRunExecutor.cs"),
-            Path.Combine("WorkerHost", "InternalWorkerLifecycleService.cs"),
-            Path.Combine("WorkerHost", "ProcessAssetsWorkerJobHandler.cs")
+            Path.Combine("ImmichReverseGeo.Worker", "Composition", "InternalWorkerServiceCollectionExtensions.cs"),
+            Path.Combine("ImmichReverseGeo.Worker", "Composition", "WorkerExecutionServiceCollectionExtensions.cs"),
+            Path.Combine("ImmichReverseGeo.Worker", "RunOnce", "RunOnceApplication.cs"),
+            Path.Combine("ImmichReverseGeo.Worker", "Services", "ProcessingRunContracts.cs"),
+            Path.Combine("ImmichReverseGeo.Worker", "Services", "ProcessingRunExecutor.cs"),
+            Path.Combine("ImmichReverseGeo.Worker", "WorkerHost", "InternalWorkerLifecycleService.cs"),
+            Path.Combine("ImmichReverseGeo.Worker", "WorkerHost", "ProcessAssetsWorkerJobHandler.cs")
         };
         var unexpectedExecutorSources = sources
             .Where(source => Regex.IsMatch(source.Value, @"\bI?ProcessingRunExecutor\b", RegexOptions.CultureInvariant))

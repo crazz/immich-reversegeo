@@ -1,5 +1,6 @@
-using System.Text.Json;
+using ImmichReverseGeo.Core.Countries;
 using ImmichReverseGeo.Overture.Services;
+using System.Text.Json;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Data.Sqlite;
 
@@ -50,7 +51,7 @@ public class CountryCodeServiceTests
     public void CanonicalCatalog_ExplicitlyNamesEveryMappedIdentity()
     {
         var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
-        var isoPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Web", "bundled-data", "iso3166.json");
+        var isoPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Core", "Countries", "iso3166.json");
         using var document = JsonDocument.Parse(File.ReadAllText(isoPath));
         var root = document.RootElement;
         var mappedAlpha2 = root.GetProperty("iso3ToAlpha2")
@@ -71,7 +72,7 @@ public class CountryCodeServiceTests
     {
         var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
         var dbPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Web", "bundled-data", "defaults", "overture-country-divisions.db");
-        var isoPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Web", "bundled-data", "iso3166.json");
+        var isoPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Core", "Countries", "iso3166.json");
 
         Assert.IsTrue(File.Exists(dbPath), $"Bundled country divisions DB not found at {dbPath}");
         Assert.IsTrue(File.Exists(isoPath), $"ISO identity catalog not found at {isoPath}");

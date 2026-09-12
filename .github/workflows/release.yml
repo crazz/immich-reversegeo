@@ -41,7 +41,7 @@ jobs:
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --filter "TestCategory!=Integration&TestCategory!=Performance"
 
       - name: Publish app
-        run: dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -c Release -o artifacts/web
+        run: dotnet publish src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj -c Release -o artifacts/web
 
       - name: Build docs
         run: zensical build --clean

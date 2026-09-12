@@ -1,5 +1,7 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj" />
+    <Project Path="src/ImmichReverseGeo.Worker/ImmichReverseGeo.Worker.csproj" />
     <Project Path="src/ImmichReverseGeo.Core/ImmichReverseGeo.Core.csproj" />
     <Project Path="src/ImmichReverseGeo.Gadm/ImmichReverseGeo.Gadm.csproj" />
     <Project Path="src/ImmichReverseGeo.Legacy/ImmichReverseGeo.Legacy.csproj" />
