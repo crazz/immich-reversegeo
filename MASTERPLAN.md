@@ -1204,7 +1204,7 @@ Correlate plan evidence with bounded event 5901 fields while distinguishing Post
 
 **Dependencies and sequencing** — Follows 57–60 but does not modify parallel block 60. Keep blocks 62–64 gated and retain 58 until a new evidence review passes; do not add cursor state, triggers, listeners, slots, schema objects, or runtime behavior in this planning change.
 
-**OpenSpec** — [`61-research-immich-watermark-source`](openspec/changes/61-research-immich-watermark-source/)
+**OpenSpec** — [`61-research-immich-watermark-source`](openspec/changes/archive/2026-09-12-61-research-immich-watermark-source/)
 
 ### 62. `feat: add persisted watermarked detector` — **withdrawn / no-go**
 
