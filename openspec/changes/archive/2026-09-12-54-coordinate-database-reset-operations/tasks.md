@@ -32,7 +32,7 @@
 - [x] 5.1 Add barrier-controlled reset-versus-ProcessAssets/CoordinateLookup/CacheMutation/cache-deletion races proving exactly one local owner, no losing write/launch, safe busy category, no queue, and later reuse.
 - [x] 5.2 Add deterministic simultaneous reset/reset, Busy callback, stale/wrong-owner release, duplicate release, repository-throw-before/after-stage, result-finalization/release, circuit-disposal/completion, and page-generation races without sleeps.
 - [x] 5.3 Add shutdown-before-admission, admit-versus-shutdown, shutdown-during-PostgreSQL, shutdown-between-stores, shutdown-during-SQLite, repeated shutdown, and timeout-diagnostic tests proving no early release, fabricated cancel, child kill, or orphan mutation task.
-- [ ] 5.4 Add handle/disposal tests proving all commands/readers/transactions close before release, no global pool clear occurs, an external sharing violation is truthful failure, and post-release page reads use fresh connections.
+- [x] 5.4 Add handle/disposal tests proving all commands/readers/transactions close before release, no global pool clear occurs, an external sharing violation is truthful failure, and post-release page reads use fresh connections.
 - [x] 5.5 Add negative composition tests proving lightweight reads can execute without reservation, Reset operations resolve no worker/geodata services, and multiple-container scope is not represented as distributed exclusion.
 
 ## 6. Operation and integration coverage

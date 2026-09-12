@@ -1086,7 +1086,7 @@ After finalized release, Reset Immich Geo Data reloads location options and Data
 
 **Dependencies and sequencing:** Requires the exact landed block-50 coordinator and block-52 non-worker maintenance-owner/finality/shutdown seam; stop rather than invent a parallel gate if they differ. Block-50 exclusion is local to one Standard/Web-only process and does not cover another Web container, run-once/private worker, direct PostgreSQL client, or direct `skipped.db` writer; strict exclusion therefore requires one interactive Web control plane and no independent conflicting writer. Complete after 50/52 boundaries are available and before 55, without editing 51, 52, 55, worker kinds/protocol, or Immich schema.
 
-**OpenSpec:** [`54-coordinate-database-reset-operations`](openspec/changes/54-coordinate-database-reset-operations/).
+**OpenSpec:** [`54-coordinate-database-reset-operations`](openspec/changes/archive/2026-09-12-54-coordinate-database-reset-operations/).
 
 ### 55. `cleanup: remove heavy geodata registrations from Web host`
 
