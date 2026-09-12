@@ -240,22 +240,37 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         StateSnapshot before = StateSnapshot.Capture(fixture.State);
         Task<ScheduledTriggerResult> scheduled = fixture.Trigger.TriggerScheduledAsync(caller.Token);
         GatedProcessingWorkDetector.Invocation invocation = await detector.NextAsync().WaitAsync(Bound);
-        Assert.AreEqual(ProcessingRunTrigger.Scheduled, invocation.Request.Trigger);
-        Assert.AreSame(ProcessingWorkDetectionSnapshot.Current, invocation.Request.Snapshot);
-        Assert.AreNotEqual(caller.Token, invocation.Token, "The existing linked preflight token is forwarded.");
-        Assert.AreEqual(0, fixture.IdentityCalls);
-        Assert.AreEqual(0, fixture.Observer.AdmissionCalls);
-        Assert.IsNull(fixture.Coordinator.ActiveRequest);
-        Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
-        caller.Cancel();
-        Assert.IsTrue(invocation.Token.IsCancellationRequested, "The captured token is linked to this caller, not a detached fake token.");
-        invocation.Cancel();
-        OperationCanceledException failure = await Assert.ThrowsAsync<OperationCanceledException>(() => scheduled.WaitAsync(Bound));
-        Assert.AreEqual(caller.Token, failure.CancellationToken);
-        Assert.AreEqual(1, detector.Calls.Length);
-        Assert.AreEqual(0, fixture.CancellationFactory.CreateCalls);
-        Assert.AreEqual(0, fixture.Backend.ResolutionCalls);
-        Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
+        try
+        {
+            Assert.AreEqual(ProcessingRunTrigger.Scheduled, invocation.Request.Trigger);
+            Assert.AreSame(ProcessingWorkDetectionSnapshot.Current, invocation.Request.Snapshot);
+            Assert.AreNotEqual(caller.Token, invocation.Token, "The existing linked preflight token is forwarded.");
+            Assert.AreEqual(0, fixture.IdentityCalls);
+            Assert.AreEqual(0, fixture.Observer.AdmissionCalls);
+            Assert.IsNull(fixture.Coordinator.ActiveRequest);
+            Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
+            caller.Cancel();
+            Assert.IsTrue(invocation.Token.IsCancellationRequested, "The captured token is linked to this caller, not a detached fake token.");
+            invocation.Cancel();
+            OperationCanceledException failure = await Assert.ThrowsAsync<OperationCanceledException>(() => scheduled.WaitAsync(Bound));
+            Assert.AreEqual(caller.Token, failure.CancellationToken);
+            Assert.AreEqual(1, detector.Calls.Length);
+            Assert.AreEqual(0, fixture.CancellationFactory.CreateCalls);
+            Assert.AreEqual(0, fixture.Backend.ResolutionCalls);
+            Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
+        }
+        finally
+        {
+            invocation.Completion.TrySetCanceled(invocation.Token);
+            try
+            {
+                await scheduled.WaitAsync(Bound);
+            }
+            catch (OperationCanceledException)
+            {
+                // Cancellation is the expected terminal outcome, including assertion-failure cleanup.
+            }
+        }
     }
 
     [TestMethod]

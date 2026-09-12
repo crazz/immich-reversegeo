@@ -129,12 +129,21 @@ public sealed class ProcessingWorkDetectionTests
         });
         Task<ProcessingWorkDetectionResult> first = adapter.DetectAsync(ProcessingWorkDetectorStub.Request(), firstToken.Token);
         Task<ProcessingWorkDetectionResult> second = adapter.DetectAsync(ProcessingWorkDetectorStub.Request(), secondToken.Token);
-        CollectionAssert.AreEqual(new[] { firstToken.Token, secondToken.Token }, entered.ToArray(), "Both real adapter reads entered before completion.");
-        secondRead.SetResult(0);
-        Assert.IsFalse((await second.WaitAsync(Bound)).HasWork);
-        Assert.IsFalse(first.IsCompleted, "First read is held by its explicit uncompleted source after both reads entered.");
-        firstRead.SetResult(3);
-        Assert.IsTrue((await first.WaitAsync(Bound)).HasWork);
+        try
+        {
+            CollectionAssert.AreEqual(new[] { firstToken.Token, secondToken.Token }, entered.ToArray(), "Both real adapter reads entered before completion.");
+            secondRead.SetResult(0);
+            Assert.IsFalse((await second.WaitAsync(Bound)).HasWork);
+            Assert.IsFalse(first.IsCompleted, "First read is held by its explicit uncompleted source after both reads entered.");
+            firstRead.SetResult(3);
+            Assert.IsTrue((await first.WaitAsync(Bound)).HasWork);
+        }
+        finally
+        {
+            firstRead.TrySetResult(0);
+            secondRead.TrySetResult(0);
+            await Task.WhenAll(first, second).WaitAsync(Bound);
+        }
         FieldInfo[] fields = typeof(CountBackedProcessingWorkDetector).GetFields(BindingFlags.Instance | BindingFlags.NonPublic);
         Assert.AreEqual(1, fields.Length);
         Assert.IsTrue(fields[0].IsInitOnly);
@@ -179,19 +188,37 @@ public sealed class ProcessingWorkDetectionTests
         ProcessingWorkDetectionRequest secondRequest = ProcessingWorkDetectorStub.Request();
         Task<ProcessingWorkDetectionResult> first = gate.DetectAsync(firstRequest, cancellation.Token);
         Task<ProcessingWorkDetectionResult> second = gate.DetectAsync(secondRequest, CancellationToken.None);
-        var firstCall = await gate.NextAsync().WaitAsync(Bound);
-        var secondCall = await gate.NextAsync().WaitAsync(Bound);
-        Assert.AreSame(firstRequest, firstCall.Request);
-        Assert.AreSame(firstRequest.Snapshot, firstCall.Request.Snapshot);
-        Assert.AreEqual(cancellation.Token, firstCall.Token);
-        Assert.AreSame(secondRequest, secondCall.Request);
-        secondCall.Release(ProcessingWorkDetectorStub.Result(true, ProcessingWorkDetectorKind.Existence, true));
-        Assert.IsTrue((await second.WaitAsync(Bound)).HasWork);
-        cancellation.Cancel();
-        firstCall.Cancel();
-        OperationCanceledException cancelled = await Assert.ThrowsAsync<OperationCanceledException>(() => first);
-        Assert.AreEqual(cancellation.Token, cancelled.CancellationToken);
-        Assert.AreEqual(2, gate.Calls.Length);
+        try
+        {
+            var firstCall = await gate.NextAsync().WaitAsync(Bound);
+            var secondCall = await gate.NextAsync().WaitAsync(Bound);
+            Assert.AreSame(firstRequest, firstCall.Request);
+            Assert.AreSame(firstRequest.Snapshot, firstCall.Request.Snapshot);
+            Assert.AreEqual(cancellation.Token, firstCall.Token);
+            Assert.AreSame(secondRequest, secondCall.Request);
+            secondCall.Release(ProcessingWorkDetectorStub.Result(true, ProcessingWorkDetectorKind.Existence, true));
+            Assert.IsTrue((await second.WaitAsync(Bound)).HasWork);
+            cancellation.Cancel();
+            firstCall.Cancel();
+            OperationCanceledException cancelled = await Assert.ThrowsAsync<OperationCanceledException>(() => first);
+            Assert.AreEqual(cancellation.Token, cancelled.CancellationToken);
+            Assert.AreEqual(2, gate.Calls.Length);
+        }
+        finally
+        {
+            foreach (GatedProcessingWorkDetector.Invocation call in gate.Calls)
+            {
+                call.Completion.TrySetResult(ProcessingWorkDetectorStub.Result(false));
+            }
+            try
+            {
+                await Task.WhenAll(first, second).WaitAsync(Bound);
+            }
+            catch (OperationCanceledException)
+            {
+                // The first scripted invocation deliberately completes with cancellation.
+            }
+        }
         var failure = new InvalidOperationException("detector-fault-witness");
         var fault = ProcessingWorkDetectorStub.Throwing(failure);
         Assert.AreSame(failure, await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => fault.DetectAsync(firstRequest, CancellationToken.None)));
