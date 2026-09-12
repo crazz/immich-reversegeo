@@ -1114,7 +1114,7 @@ After finalized release, Reset Immich Geo Data reloads location options and Data
 
 **Dependencies and sequencing:** Requires applied/finalized 55 and extends rather than duplicates 39. Apply must bind to the landed handoff and stop on an unresolved entry-assembly/static edge or missing factory/sentinel seam instead of inventing a parallel composition root or broad exemption. This is the final Phase 7 safeguard and must not inspect or edit parallel block 57.
 
-**OpenSpec:** [`56-enforce-control-plane-dependency-boundary`](openspec/changes/56-enforce-control-plane-dependency-boundary/).
+**OpenSpec:** [`56-enforce-control-plane-dependency-boundary`](openspec/changes/archive/2026-09-12-56-enforce-control-plane-dependency-boundary/).
 
 ### Checkpoint G
 
