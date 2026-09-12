@@ -1232,7 +1232,7 @@ Correlate plan evidence with bounded event 5901 fields while distinguishing Post
 
 **Dependencies and sequencing** — Follows finalized 61's no-watermark decision; block 62 remains no-go and is not a prerequisite to implement. Reconsider reconciliation only through a new or revised proposal after a watermark source passes block 61's zero-false-negative gate. Do not edit blocks 62 or 64 and do not change runtime code.
 
-**OpenSpec** — [`63-add-periodic-eligibility-reconciliation`](openspec/changes/63-add-periodic-eligibility-reconciliation/)
+**OpenSpec** — [`63-add-periodic-eligibility-reconciliation`](openspec/changes/archive/2026-09-12-63-add-periodic-eligibility-reconciliation/)
 
 ### 64. `feat: expose NAS-oriented scheduling controls` — **withdrawn / no-go**
 
