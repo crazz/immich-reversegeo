@@ -41,17 +41,17 @@ public sealed class DeploymentModeCompositionMatrixTests
 {
     [TestMethod]
     [TestCategory("Change55")]
+    [TestCategory("Change56")]
     public async Task WebModes_ActualStartupDoesNotMaterializeDatabaseInventoryOrGeodata()
     {
         foreach (DeploymentMode mode in new[] { DeploymentMode.Standard, DeploymentMode.WebOnly })
         {
-            int forbiddenActivations = 0;
+            var activations = new BoundaryRuntimeSentinel(mode == DeploymentMode.Standard ? BoundaryRole.Standard : BoundaryRole.WebOnly);
             object Forbidden(string category)
             {
-                Interlocked.Increment(ref forbiddenActivations);
-                throw new AssertFailedException("startup -> forbidden " + category);
+                return activations.Forbid<object>("production startup", category);
             }
-            var process = new NoLaunchChildProcessFactory();
+            var process = new NoLaunchChildProcessFactory(mode == DeploymentMode.Standard ? BoundaryRole.Standard : BoundaryRole.WebOnly);
             await using var fixture = WebFixture.Create(mode, validRuntimeFiles: true,
                 sentinelExternal: true, childProcessBoundary: process,
                 configureServices: services =>
@@ -68,7 +68,7 @@ public sealed class DeploymentModeCompositionMatrixTests
                 });
             await fixture.Application.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
             Assert.AreEqual(1, fixture.ListenerStarts, mode + "-actual-host-ready");
-            Assert.AreEqual(0, forbiddenActivations, mode + "-no-eager-activation");
+            Assert.IsEmpty(activations.Events, mode + "-no-eager-activation");
             Assert.AreEqual(0, fixture.ForbiddenResolutions, mode + "-no-executor");
             Assert.AreEqual(0, process.StartCalls, mode + "-no-child");
             await fixture.Application.StopAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -77,11 +77,12 @@ public sealed class DeploymentModeCompositionMatrixTests
 
     [TestMethod]
     [TestCategory("Change55")]
+    [TestCategory("Change56")]
     public async Task WebModes_EveryComponentInjectionGraphResolvesWithoutHeavyOrChildWork()
     {
         foreach (DeploymentMode mode in new[] { DeploymentMode.Standard, DeploymentMode.WebOnly })
         {
-            var process = new NoLaunchChildProcessFactory();
+            var process = new NoLaunchChildProcessFactory(mode == DeploymentMode.Standard ? BoundaryRole.Standard : BoundaryRole.WebOnly);
             await using var fixture = WebFixture.Create(mode, validRuntimeFiles: true,
                 sentinelExternal: true, childProcessBoundary: process);
             await using var scope = fixture.Provider.CreateAsyncScope();
@@ -90,7 +91,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             foreach (Type type in components)
             {
                 object component = ActivatorUtilities.CreateInstance(scope.ServiceProvider, type);
-                foreach (PropertyInfo property in type.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+                foreach (PropertyInfo property in WebBoundaryInspection.Injections(type))
                 {
                     if (property.IsDefined(typeof(Microsoft.AspNetCore.Components.InjectAttribute), inherit: true))
                     {
@@ -106,6 +107,97 @@ public sealed class DeploymentModeCompositionMatrixTests
         }
     }
     private static readonly DateTimeOffset Now = new(2026, 9, 8, 0, 0, 0, TimeSpan.Zero);
+
+    [TestMethod]
+    [TestCategory("Change56")]
+    public async Task WebOnlyRuntimeSentinel_ReportsTheActualProductionRole()
+    {
+        var process = new NoLaunchChildProcessFactory(BoundaryRole.WebOnly);
+        await using var fixture = WebFixture.Create(DeploymentMode.WebOnly, sentinelExternal: true, childProcessBoundary: process);
+        AssertFailedException failure = Assert.ThrowsExactly<AssertFailedException>(() => fixture.Provider.GetRequiredService<IProcessingRunExecutor>());
+        StringAssert.Contains(failure.Message, "[WebOnly]", "The forbidden DI activation must name the actual role.");
+        Assert.AreEqual(1, fixture.ForbiddenResolutions);
+        AssertFailedException launch = Assert.ThrowsExactly<AssertFailedException>(() =>
+        {
+            _ = fixture.Provider.GetRequiredService<IChildProcessFactory>().StartAsync(null!, CancellationToken.None);
+        });
+        StringAssert.Contains(launch.Message, "[WebOnly]");
+        StringAssert.Contains(launch.Message, "worker session");
+        StringAssert.Contains(launch.Message, "order 1 -> count 1");
+        Assert.AreEqual(1, process.StartCalls, "The actual substituted launcher boundary produced the failure before any process work.");
+    }
+
+    [TestMethod]
+    [TestCategory("Change56")]
+    public async Task WebModes_ProductionControllersRejectOrAdmitOnlyFakeSessionsWithoutLocalFallback()
+    {
+        foreach (DeploymentMode mode in new[] { DeploymentMode.Standard, DeploymentMode.WebOnly })
+        {
+            var events = new BoundaryRuntimeSentinel(mode == DeploymentMode.Standard ? BoundaryRole.Standard : BoundaryRole.WebOnly);
+            var sessions = new BoundaryWorkerSessions(events);
+            var process = new NoLaunchChildProcessFactory(mode == DeploymentMode.Standard ? BoundaryRole.Standard : BoundaryRole.WebOnly);
+            await using var fixture = WebFixture.Create(mode, validRuntimeFiles: true, sentinelExternal: true,
+                childProcessBoundary: process, configureServices: services =>
+                {
+                    services.RemoveAll<ICoordinateLookupWorkerClient>();
+                    services.AddSingleton<ICoordinateLookupWorkerClient>(sessions);
+                    services.RemoveAll<ICacheMutationWorkerClient>();
+                    services.AddSingleton<ICacheMutationWorkerClient>(sessions);
+                });
+            await using var lookup = fixture.Provider.GetRequiredService<CoordinateLookupPageControllerFactory>().Create(() => { });
+            await using var cache = fixture.Provider.GetRequiredService<CacheMutationPageControllerFactory>().Create(() => Task.CompletedTask, () => Task.CompletedTask);
+            var request = new CoordinateLookupSubmission(47.4, 8.5, false, false, false);
+            await lookup.SubmitAsync(request with { Latitude = double.NaN });
+            Assert.ThrowsExactly<ArgumentException>(() => { _ = cache.RefreshAsync(CacheMutationSource.Overture, "bad-code"); });
+            Assert.AreEqual(0, sessions.Sessions, mode + " invalid before admission");
+
+            sessions.Unavailable = true;
+            await lookup.SubmitAsync(request);
+            await cache.RefreshAsync(CacheMutationSource.Overture, "CHE");
+            Assert.AreEqual(0, sessions.Sessions, mode + " unavailable creates no session");
+            Assert.IsNull(fixture.Provider.GetRequiredService<IWorkerJobArbitrationDiagnostics>().Snapshot.ActiveOwner, "unavailable releases admission");
+
+            sessions.Unavailable = false;
+            sessions.HoldLookup = true;
+            Task activeLookup = lookup.SubmitAsync(request);
+            try
+            {
+                Assert.IsNotNull(sessions.Lookup, "fake session exists before testing the busy branch");
+                Assert.AreEqual(1, sessions.Sessions);
+                Assert.IsNotNull(fixture.Provider.GetRequiredService<IWorkerJobArbitrationDiagnostics>().Snapshot.ActiveOwner);
+                await cache.RefreshAsync(CacheMutationSource.Gadm, "CHE");
+                Assert.AreEqual(ProcessingRunAdmissionResult.AlreadyRunning, await fixture.Provider.GetRequiredService<IManualProcessingRunCoordinator>().TriggerManualAsync());
+                if (mode == DeploymentMode.Standard)
+                {
+                    await fixture.Provider.GetRequiredService<IScheduledRunTrigger>().TriggerScheduledAsync(CancellationToken.None);
+                }
+                Assert.AreEqual(1, sessions.Sessions, "busy operations add zero sessions");
+                Assert.AreEqual(0, fixture.Children.Count);
+            }
+            finally
+            {
+                sessions.Lookup?.Finish();
+                await activeLookup.WaitAsync(TimeSpan.FromSeconds(5));
+            }
+            await cache.RefreshAsync(CacheMutationSource.Overture, "CHE");
+            Assert.AreEqual(2, sessions.Sessions, "one admitted Lookup and one admitted cache session");
+            Assert.AreEqual(2, sessions.Disposals, "both exact sessions disposed");
+            Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await fixture.Provider.GetRequiredService<IManualProcessingRunCoordinator>().TriggerManualAsync());
+            Assert.AreEqual(1, fixture.Children.Count, "manual delegates exactly once");
+            if (mode == DeploymentMode.Standard)
+            {
+                fixture.Gate!.Result = false;
+                await fixture.Provider.GetRequiredService<IScheduledRunTrigger>().TriggerScheduledAsync(CancellationToken.None);
+                Assert.AreEqual(1, fixture.Children.Count, "empty schedule adds zero sessions");
+                fixture.Gate.Result = true;
+                await fixture.Provider.GetRequiredService<IScheduledRunTrigger>().TriggerScheduledAsync(CancellationToken.None);
+                Assert.AreEqual(2, fixture.Children.Count, "positive schedule delegates exactly once");
+            }
+            Assert.AreEqual(0, fixture.ForbiddenResolutions, "no local execution, geodata, or external database fallback");
+            Assert.AreEqual(0, process.StartCalls, "no real process boundary reached");
+            CollectionAssert.AreEqual(new[] { "Lookup admission", "cache admission" }, events.Events.Select(e => e.Owner).ToArray());
+        }
+    }
 
     [TestMethod]
     public void StartupSelection_MissingAndExactPublicModesUseOneImmutableReadAndExpectedContinuation()
@@ -323,6 +415,7 @@ public sealed class DeploymentModeCompositionMatrixTests
 
     [TestMethod]
     [TestCategory("Change53")]
+    [TestCategory("Change56")]
     public async Task WebModePages_RenderThroughProductionInventoryWithoutHeavyOrWorkerWork()
     {
         await using (var webOnly = WebFixture.Create(
@@ -352,7 +445,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             DeploymentMode.Standard,
             validRuntimeFiles: true,
             sentinelExternal: true,
-            childProcessBoundary: new NoLaunchChildProcessFactory()))
+            childProcessBoundary: new NoLaunchChildProcessFactory(BoundaryRole.Standard)))
         {
             CreateMinimalInventoryDatabase(standard.Root, "CHE", "standard-release");
             var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
@@ -628,7 +721,7 @@ public sealed class DeploymentModeCompositionMatrixTests
                     var server = new RecordingNoBindServer();
                     var children = new ChildBoundary();
                     var readiness = new StartupReadinessProbe();
-                    var sentinel = new ResolutionSentinel();
+                    var sentinel = new ResolutionSentinel(mode == DeploymentMode.Standard ? BoundaryRole.Standard : BoundaryRole.WebOnly);
                     var runtime = new ValidRuntimeSource(root, includeRuntimeFiles);
                     var schedule = new RecordingSchedule(new ProcessingScheduleSnapshot(true, "0 * * * *"));
                     var clock = new ScheduleTimeProvider();
@@ -1184,33 +1277,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             Assert.IsTrue(descriptors.Any(descriptor => descriptor.ServiceType == service), service.Name + "-present");
         }
 
-        foreach (Type forbidden in new[]
-        {
-            typeof(WebApplicationBuilder), typeof(WebApplication), typeof(IServer), typeof(EndpointDataSource),
-            typeof(IDataProtectionProvider), typeof(IAntiforgery), typeof(IPostConfigureOptions<RazorComponentsServiceOptions>),
-            typeof(IConfigureOptions<CircuitOptions>), typeof(ProcessingState), typeof(ProcessingStateEventReporter),
-            typeof(ProcessingBackgroundService), typeof(ProcessingRunCoordinator), typeof(IManualProcessingRunCoordinator),
-            typeof(IChildProcessingRunBackend), typeof(IChildWorkerLauncher), typeof(ChildWorkerStartupValidator),
-            typeof(IProcessingScheduleConfiguration), typeof(IScheduledRunTrigger), typeof(IScheduledRunWorkGate),
-            typeof(IScheduledRunWorkCounter), typeof(WorkerCommandAmbientRuntimeObservationSource),
-            typeof(IWorkerCommandRuntimeObservationSource), typeof(WorkerCommandRuntimeFactsCapture),
-            typeof(IWorkerCommandRuntimeFactsCapture), typeof(WorkerCommandInvocationBuilder),
-            typeof(IWorkerCommandInvocationBuilder), typeof(WorkerJobCoordinator),
-            typeof(IWorkerJobAdmissionGate), typeof(IWorkerJobArbitrationDiagnostics),
-            typeof(ConfigCoordinateLookupSettingsSnapshotProvider),
-            typeof(ICoordinateLookupSettingsSnapshotProvider), typeof(CoordinateLookupWorkerClient),
-            typeof(ICoordinateLookupWorkerClient), typeof(CoordinateLookupPageControllerHostLifetime),
-            typeof(CoordinateLookupPageControllerFactory), typeof(CacheDeletionCommand),
-            typeof(ICacheDeletionFileSystem), typeof(PhysicalCacheDeletionFileSystem),
-            typeof(CacheDeletionPageControllerFactory), typeof(CacheInventoryOptions),
-            typeof(ICacheInventoryFileSystem), typeof(PhysicalCacheInventoryFileSystem),
-            typeof(ICacheInventoryMetadataReader), typeof(CacheInventorySqliteMetadataReader),
-            typeof(ICacheInventoryStorageScanner), typeof(CacheInventoryStorageScanner),
-            typeof(ICacheInventory), typeof(ICacheInventoryInvalidator),
-            typeof(CacheInventoryService), typeof(CacheInventoryDeletionOperations),
-            typeof(CacheInventoryDeletionPageControllerFactory),
-            typeof(CacheInventoryMutationWorkerClient)
-        })
+        foreach (Type forbidden in ControlPlaneDependencyPolicy.WebOnlyTypes)
         {
             Assert.IsFalse(descriptors.Any(descriptor => descriptor.ServiceType == forbidden), forbidden.Name + "-absent");
         }
@@ -1506,28 +1573,27 @@ public sealed class DeploymentModeCompositionMatrixTests
         }
     }
 
-    private sealed class ResolutionSentinel
+    private sealed class ResolutionSentinel(BoundaryRole role)
     {
-        private int _resolutions;
-        internal int Resolutions => Volatile.Read(ref _resolutions);
+        private readonly BoundaryRuntimeSentinel _sentinel = new(role);
+        internal int Resolutions => _sentinel.Events.Count;
         internal T Fail<T>()
         {
-            Interlocked.Increment(ref _resolutions);
-            throw new AssertFailedException("forbidden-external-resolution-" + typeof(T).Name);
+            return _sentinel.Forbid<T>("forbidden-external-resolution-" + typeof(T).Name,
+                ControlPlaneDependencyPolicy.HeavyTypes.GetValueOrDefault(typeof(T)) ?? typeof(T).Name);
         }
     }
 
-    private sealed class NoLaunchChildProcessFactory : IChildProcessFactory
+    private sealed class NoLaunchChildProcessFactory(BoundaryRole role) : IChildProcessFactory
     {
-        private int _startCalls;
-        internal int StartCalls => Volatile.Read(ref _startCalls);
+        private readonly BoundaryRuntimeSentinel _sentinel = new(role);
+        internal int StartCalls => _sentinel.Events.Count;
 
         public ValueTask<IChildProcess?> StartAsync(
             ChildProcessStartDescriptor descriptor,
             CancellationToken cancellationToken)
         {
-            Interlocked.Increment(ref _startCalls);
-            throw new AssertFailedException("production-page-must-not-launch-worker");
+            return _sentinel.Forbid<ValueTask<IChildProcess?>>("production page", "worker session");
         }
     }
 
@@ -1702,7 +1768,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             ResolutionSentinel? sentinel = null;
             if (sentinelExternal)
             {
-                sentinel = new ResolutionSentinel();
+                sentinel = new ResolutionSentinel(mode == DeploymentMode.Standard ? BoundaryRole.Standard : BoundaryRole.WebOnly);
                 ArmWebExternalSentinels(services, sentinel);
             }
             if (childProcessBoundary is not null)
@@ -1929,7 +1995,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             ReplaceSingleton(builder.Services, (IWorkerAcceptedRunFinality)new LedgerAcceptedFinality(ledger));
             ReplaceSingleton(builder.Services, (IProcessingRunExecutor)executor);
             ReplaceSingleton(builder.Services, (IProcessingEventReporter)NoOpProcessingEventReporter.Instance);
-            var sentinel = new ResolutionSentinel();
+            var sentinel = new ResolutionSentinel(BoundaryRole.InternalWorker);
             builder.Services.RemoveAll<CountryCodeService>();
             builder.Services.AddSingleton<CountryCodeService>(_ => sentinel.Fail<CountryCodeService>());
             builder.Services.RemoveAll<IProcessingAssetRepository>();

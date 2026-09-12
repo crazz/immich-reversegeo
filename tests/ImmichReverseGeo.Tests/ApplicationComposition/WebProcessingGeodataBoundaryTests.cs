@@ -42,7 +42,7 @@ public sealed class WebProcessingGeodataBoundaryTests
         Assert.AreEqual(0, guard.OpaqueFactoryCount, guard.OpaqueFactorySummary);
         Assert.IsTrue(
             guard.CapturedFactoryTypes.Contains(typeof(IChildProcessingRunBackend)),
-            "the guard executes the actual WebOnly child-boundary factory");
+            "the guard reads the actual WebOnly child-boundary factory metadata");
         foreach (Type absent in new[]
         {
             typeof(ProcessingBackgroundService),
@@ -80,10 +80,10 @@ public sealed class WebProcessingGeodataBoundaryTests
         Assert.AreEqual(0, guard.OpaqueFactoryCount, guard.OpaqueFactorySummary);
         Assert.IsTrue(
             guard.CapturedFactoryTypes.Contains(typeof(IChildProcessingRunBackend)),
-            "The guard must execute the actual child-boundary factory rather than assume its dependencies.");
+            "The guard must inspect the actual child-boundary factory metadata.");
         Assert.IsTrue(
             guard.CapturedFactoryTypes.Contains(typeof(IScheduledRunWorkGate)),
-            "The guard must execute the actual count-gate factory and its deferred repository callback.");
+            "The guard must inspect the actual count-gate factory and its deferred repository callback metadata.");
         Assert.IsFalse(guard.IsForbidden(typeof(CountryCodeService)), "country identity remains lightweight");
         Assert.IsFalse(guard.IsForbidden(typeof(CityResolverProfileCatalogService)), "resolver profiles remain lightweight");
     }
@@ -443,7 +443,7 @@ public sealed class WebProcessingGeodataBoundaryTests
             var events = new ConcurrentQueue<string>();
             var countRepository = new RecordingCountRepository(count, events);
             var boundary = new RecordingChildBoundary(events);
-            var forbidden = new ForbiddenResolutionSentinels();
+            var forbidden = new ForbiddenResolutionSentinels(webOnly ? BoundaryRole.WebOnly : BoundaryRole.Standard);
             var observer = new SettlementObserver();
             var indexObserver = new CountryIndexObserver();
 
@@ -694,24 +694,25 @@ public sealed class WebProcessingGeodataBoundaryTests
 
     private sealed class CountryIndexObserver
     {
-        internal int Calls { get; private set; }
+        private readonly BoundaryRuntimeSentinel _sentinel = new(BoundaryRole.Standard);
+        internal int Calls => _sentinel.Events.Count;
 
         internal void ThrowBeforeFileAccess()
         {
-            Calls++;
+            _sentinel.Record("country index before SQLite", "country index");
             throw new CountryIndexLoadObservedException();
         }
     }
 
     private sealed class CountryIndexLoadObservedException() : Exception("country-index-load-observed");
 
-    private sealed class ForbiddenResolutionSentinels
+    private sealed class ForbiddenResolutionSentinels(BoundaryRole role)
     {
-        private readonly ConcurrentDictionary<string, int> _counts = [];
+        private readonly BoundaryRuntimeSentinel _sentinel = new(role);
 
-        internal int TotalResolutionCount => _counts.Values.Sum();
+        internal int TotalResolutionCount => _sentinel.Events.Count;
 
-        internal int ResolutionCount(string name) => _counts.GetValueOrDefault(name);
+        internal int ResolutionCount(string name) => _sentinel.Events.Count(e => e.Owner == name);
 
         internal void Add<T>(IServiceCollection services, string name)
             where T : class
@@ -723,8 +724,7 @@ public sealed class WebProcessingGeodataBoundaryTests
         private T Fail<T>(string name)
             where T : class
         {
-            _counts.AddOrUpdate(name, 1, (_, value) => value + 1);
-            throw new AssertFailedException("Web processing must not resolve " + name + ".");
+            return _sentinel.Forbid<T>(name, ControlPlaneDependencyPolicy.HeavyTypes.GetValueOrDefault(typeof(T)) ?? name);
         }
     }
 
@@ -734,21 +734,9 @@ public sealed class WebProcessingGeodataBoundaryTests
 
     internal sealed class ProcessingFactoryGraph
     {
-        private static readonly IReadOnlyDictionary<Type, string> Forbidden = new Dictionary<Type, string>
-        {
-            [typeof(IProcessingRunExecutor)] = "in-process executor",
-            [typeof(ProcessingRunExecutor)] = "in-process executor",
-            [typeof(IProcessingAdministrativeResolver)] = "administrative resolver",
-            [typeof(AdministrativeAreaResolverService)] = "administrative resolver",
-            [typeof(OvertureDivisionsService)] = "country index",
-            [typeof(OvertureDivisionCacheService)] = "Overture division cache",
-            [typeof(OverturePlacesService)] = "airport infrastructure",
-            [typeof(IProcessingInfrastructureLookup)] = "airport infrastructure",
-            [typeof(ProcessingInfrastructureLookup)] = "airport infrastructure",
-            [typeof(GadmDivisionsService)] = "GADM divisions",
-            [typeof(GadmDivisionCacheService)] = "GADM division cache",
-            [typeof(ImmichDbRepository)] = "scheduled repository"
-        };
+        private static readonly IReadOnlyDictionary<Type, string> Forbidden = ControlPlaneDependencyPolicy.HeavyTypes
+            .Append(new KeyValuePair<Type, string>(typeof(ImmichDbRepository), "scheduled repository"))
+            .ToDictionary(pair => pair.Key, pair => pair.Value);
 
         private readonly IReadOnlyDictionary<Type, ServiceDescriptor> _descriptors;
         private readonly Dictionary<Type, IReadOnlyList<Type>> _edges = [];
@@ -845,135 +833,18 @@ public sealed class WebProcessingGeodataBoundaryTests
                 return _edges[serviceType] = [];
             }
 
-            var recorder = new FactoryDependencyRecorder();
-            object? instance = null;
-            try
+            Type[] dependencies = BoundaryIlMetadata.FactoryDependencies(factory).ToArray();
+            if (factory.Method.GetMethodBody() is null)
             {
-                instance = factory(recorder);
-                if (instance is CountBackedScheduledRunWorkGate gate)
-                {
-                    try
-                    {
-                        gate.HasWorkAsync(CancellationToken.None).GetAwaiter().GetResult();
-                    }
-                    catch (NullReferenceException)
-                    {
-                        // The recorder supplied an uninitialized repository only to observe the deferred production callback.
-                    }
-                }
-                else if (instance is RepositoryScheduledRunWorkCounter counter)
-                {
-                    try
-                    {
-                        counter.GetUnprocessedCountAsync(CancellationToken.None).GetAwaiter().GetResult();
-                    }
-                    catch (NullReferenceException)
-                    {
-                        // The recorder supplied an uninitialized repository only to observe the deferred production callback.
-                    }
-                }
+                _opaqueFactories.Add(serviceType.Name + ": UnclassifiedFactory");
             }
-            catch (Exception exception)
+            if (dependencies.Contains(typeof(RepositoryScheduledRunWorkCounter)))
             {
-                _opaqueFactories.Add(serviceType.Name + ": " + exception);
-            }
-
-            Type[] requests = recorder.Requests.ToArray();
-            if (instance is RepositoryScheduledRunWorkCounter)
-            {
-                _edges[typeof(RepositoryScheduledRunWorkCounter)] = requests;
+                _edges[typeof(RepositoryScheduledRunWorkCounter)] = dependencies
+                    .Where(type => type != typeof(RepositoryScheduledRunWorkCounter)).ToArray();
                 return _edges[serviceType] = [typeof(RepositoryScheduledRunWorkCounter)];
             }
-
-            return _edges[serviceType] = requests;
-        }
-
-        private sealed class FactoryDependencyRecorder : IServiceProvider
-        {
-            private readonly Dictionary<Type, object?> _instances = [];
-            private readonly ConcurrentQueue<Type> _requests = [];
-
-            internal IReadOnlyCollection<Type> Requests => _requests.ToArray();
-
-            public object? GetService(Type serviceType)
-            {
-                _requests.Enqueue(serviceType);
-                return _instances.TryGetValue(serviceType, out object? instance)
-                    ? instance
-                    : _instances[serviceType] = CreateStub(serviceType);
-            }
-
-            private static object? CreateStub(Type serviceType)
-            {
-                if (serviceType == typeof(TimeProvider))
-                {
-                    return TimeProvider.System;
-                }
-
-                if (serviceType == typeof(IServiceScopeFactory))
-                {
-                    return new GraphScopeFactory();
-                }
-
-                if (serviceType == typeof(IOptions<HostOptions>))
-                {
-                    return Options.Create(new HostOptions());
-                }
-
-                if (serviceType == typeof(IHostApplicationLifetime)
-                    || serviceType == typeof(IProcessingRunCoordinatorObserver))
-                {
-                    return null;
-                }
-
-                if (serviceType.IsGenericType
-                    && serviceType.GetGenericTypeDefinition() == typeof(ILogger<>))
-                {
-                    Type loggerType = typeof(NullLogger<>).MakeGenericType(serviceType.GenericTypeArguments[0]);
-                    return loggerType.GetField(nameof(NullLogger<object>.Instance), BindingFlags.Public | BindingFlags.Static)!.GetValue(null);
-                }
-
-                if (serviceType.IsValueType)
-                {
-                    return Activator.CreateInstance(serviceType);
-                }
-
-                if (serviceType.IsInterface)
-                {
-                    MethodInfo create = typeof(DispatchProxy).GetMethods(BindingFlags.Public | BindingFlags.Static)
-                        .Single(method => method.Name == nameof(DispatchProxy.Create) && method.IsGenericMethodDefinition);
-                    return create.MakeGenericMethod(serviceType, typeof(GraphDispatchProxy)).Invoke(null, null);
-                }
-
-                return RuntimeHelpers.GetUninitializedObject(serviceType);
-            }
-        }
-
-        private sealed class GraphScopeFactory : IServiceScopeFactory
-        {
-            public IServiceScope CreateScope()
-            {
-                throw new InvalidOperationException("The graph recorder must not create a runtime scope.");
-            }
-        }
-
-        public class GraphDispatchProxy : DispatchProxy
-        {
-            protected override object? Invoke(MethodInfo? targetMethod, object?[]? args)
-            {
-                Type returnType = targetMethod?.ReturnType ?? typeof(void);
-                if (returnType == typeof(void))
-                {
-                    return null;
-                }
-
-                if (returnType == typeof(Task))
-                {
-                    return Task.CompletedTask;
-                }
-
-                return returnType.IsValueType ? Activator.CreateInstance(returnType) : null;
-            }
+            return _edges[serviceType] = dependencies;
         }
     }
 }

@@ -44,7 +44,7 @@ public sealed class WebControlPlaneGuardTests
             Assert.IsGreaterThanOrEqualTo(30, inspection.InspectedFactories, "production factories inspected without invoking them");
             Assert.IsEmpty(inspection.Failures, string.Join(Environment.NewLine, inspection.Failures));
 
-            string output = Path.Combine(FindRoot(), "_out", "execution", "55", "ownership");
+            string output = Path.Combine(FindRoot(), "_out", "execution", "56", "ownership", Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(output);
             File.WriteAllText(Path.Combine(output, webOnly ? "web-only.json" : "standard.json"), JsonSerializer.Serialize(new
             {
@@ -190,9 +190,7 @@ public sealed class WebControlPlaneGuardTests
 
     private static string? ForbiddenSource(string source, string path)
     {
-        // Granting the worker access to lightweight internals adds no reverse assembly reference.
-        source = source.Replace("[assembly: InternalsVisibleTo(\"ImmichReverseGeo.Worker\")]", "", StringComparison.Ordinal);
-        return Regex.IsMatch(source, @"ImmichReverseGeo\.(Overture|Gadm|Worker)\b|\b(DuckDB|NetTopologySuite|GeoJSON\w*)\b|\b(Assembly\.Load|NativeLibrary\.Load|DllImport)\b", RegexOptions.CultureInvariant)
+        return ControlPlaneDependencyPolicy.InspectSource(source, path, BoundaryRole.Standard) is not null
             ? "source " + path + " -> heavy import or activation" : null;
     }
 

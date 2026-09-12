@@ -1,5 +1,4 @@
 using System.Reflection;
-using System.Reflection.Emit;
 using System.Runtime.CompilerServices;
 using ImmichReverseGeo.Web.Composition;
 using Microsoft.AspNetCore.Components;
@@ -7,35 +6,35 @@ using Microsoft.Extensions.DependencyInjection;
 
 namespace ImmichReverseGeo.Tests.ApplicationComposition;
 
-// Change55 proof over the production registrations. Reads metadata; never invokes a DI factory.
-internal sealed class WebBoundaryInspection
+// Canonical metadata walk for all four roles. Factory classification never resolves a provider.
+internal sealed class WebBoundaryInspection(BoundaryRole role = BoundaryRole.Standard)
 {
-    private static readonly Assembly WebAssembly = typeof(StandardWebApplication).Assembly;
-    private static readonly IReadOnlyDictionary<short, OpCode> Opcodes = typeof(OpCodes)
-        .GetFields(BindingFlags.Public | BindingFlags.Static)
-        .Where(field => field.FieldType == typeof(OpCode))
-        .Select(field => (OpCode)field.GetValue(null)!)
-        .ToDictionary(opcode => opcode.Value);
     private readonly HashSet<Type> _types = [];
     private readonly HashSet<MethodBase> _methods = [];
-    private readonly List<string> _failures = [];
+    private readonly List<BoundaryDiagnostic> _diagnostics = [];
+    private IReadOnlyDictionary<Type, ServiceDescriptor[]> _descriptors = new Dictionary<Type, ServiceDescriptor[]>();
+    private string _root = "";
 
     internal int InspectedFactories { get; private set; }
-    internal IReadOnlyList<string> Failures => _failures;
+    internal IReadOnlyList<BoundaryDiagnostic> Diagnostics => ControlPlaneDependencyPolicy.Sort(_diagnostics);
+    internal IReadOnlyList<string> Failures => Diagnostics.Select(d => d.ToString()).ToArray();
 
     internal static bool IsForbiddenAssembly(string? name)
     {
-        return name is "ImmichReverseGeo.Overture" or "ImmichReverseGeo.Gadm" or "ImmichReverseGeo.Worker"
-            || name?.StartsWith("DuckDB", StringComparison.Ordinal) == true
-            || name?.StartsWith("NetTopologySuite", StringComparison.Ordinal) == true
-            || name?.StartsWith("GeoJSON", StringComparison.Ordinal) == true;
+        return ControlPlaneDependencyPolicy.HeavyAssembly(name) is not null;
     }
 
     internal void Inspect(IEnumerable<ServiceDescriptor> descriptors, IEnumerable<Type> componentTypes)
     {
-        foreach (ServiceDescriptor descriptor in descriptors)
+        ServiceDescriptor[] registrations = descriptors.OrderBy(d => d.ServiceType.FullName, StringComparer.Ordinal)
+            .ThenBy(d => (d.IsKeyedService ? d.KeyedImplementationType : d.ImplementationType)?.FullName, StringComparer.Ordinal)
+            .ThenBy(d => (d.IsKeyedService ? (Delegate?)d.KeyedImplementationFactory : d.ImplementationFactory)?.Method.Name, StringComparer.Ordinal)
+            .ThenBy(d => d.ServiceKey as string, StringComparer.Ordinal).ToArray();
+        _descriptors = registrations.GroupBy(d => d.ServiceType).ToDictionary(g => g.Key, g => g.ToArray());
+        foreach (ServiceDescriptor descriptor in registrations.OrderBy(d => d.ServiceType.FullName, StringComparer.Ordinal))
         {
             string path = "descriptor " + descriptor.ServiceType;
+            BeginRoot(path);
             InspectType(descriptor.ServiceType, path);
             Type? implementation = descriptor.IsKeyedService
                 ? descriptor.KeyedImplementationType : descriptor.ImplementationType;
@@ -57,14 +56,35 @@ internal sealed class WebBoundaryInspection
                 InspectFactory(factory, path + " -> factory");
             }
         }
-        foreach (Type component in componentTypes)
+        foreach (Type component in componentTypes.OrderBy(t => t.FullName, StringComparer.Ordinal))
         {
+            BeginRoot("component " + component.FullName);
             InspectType(component, "component " + component.FullName);
-            foreach (PropertyInfo property in component.GetProperties(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+        }
+    }
+
+    private void BeginRoot(string root)
+    {
+        _root = root;
+        _types.Clear();
+        _methods.Clear();
+    }
+
+    private void Fail(string rule, string category, string offender, string path)
+    {
+        _diagnostics.Add(ControlPlaneDependencyPolicy.Diagnostic(rule, role, _root, category, offender, path));
+    }
+
+    internal static IEnumerable<PropertyInfo> Injections(Type type)
+    {
+        for (Type? current = type; current is not null; current = current.BaseType)
+        {
+            foreach (PropertyInfo property in current.GetProperties(BindingFlags.DeclaredOnly | BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic)
+                .OrderBy(p => p.Name, StringComparer.Ordinal))
             {
                 if (property.IsDefined(typeof(InjectAttribute), inherit: true))
                 {
-                    InspectType(property.PropertyType, "component " + component.FullName + " -> inject " + property.Name);
+                    yield return property;
                 }
             }
         }
@@ -72,9 +92,9 @@ internal sealed class WebBoundaryInspection
 
     private void InspectType(Type type, string path)
     {
-        if (IsForbiddenAssembly(type.Assembly.GetName().Name))
+        if (ControlPlaneDependencyPolicy.ForbiddenType(type, role) is string category)
         {
-            _failures.Add(path + " -> forbidden assembly/type " + type);
+            Fail("ForbiddenDependency", category, type.ToString(), path + " -> forbidden assembly/type");
             return;
         }
         if (!_types.Add(type))
@@ -89,9 +109,38 @@ internal sealed class WebBoundaryInspection
         {
             InspectType(type.GetElementType()!, path + " -> element");
         }
-        if (type.Assembly != WebAssembly && type.Assembly != typeof(WebBoundaryInspection).Assembly)
+        if (_descriptors.TryGetValue(type, out ServiceDescriptor[]? registrations))
+        {
+            foreach (ServiceDescriptor descriptor in registrations)
+            {
+                Type? implementation = descriptor.IsKeyedService ? descriptor.KeyedImplementationType : descriptor.ImplementationType;
+                object? instance = descriptor.IsKeyedService ? descriptor.KeyedImplementationInstance : descriptor.ImplementationInstance;
+                Delegate? factory = descriptor.IsKeyedService ? descriptor.KeyedImplementationFactory : descriptor.ImplementationFactory;
+                if (implementation is not null)
+                {
+                    InspectType(implementation, path + " -> alias/implementation " + type.Name);
+                }
+                if (instance is not null)
+                {
+                    InspectType(instance.GetType(), path + " -> instance " + type.Name);
+                }
+                if (factory is not null)
+                {
+                    InspectFactory(factory, path + " -> factory " + type.Name);
+                }
+            }
+        }
+        if (!ControlPlaneDependencyPolicy.IsApplication(type))
         {
             return;
+        }
+        foreach (PropertyInfo property in Injections(type))
+        {
+            InspectType(property.PropertyType, path + " -> inject " + property.DeclaringType!.Name + "." + property.Name);
+        }
+        if (type.BaseType is Type parent && parent != typeof(object))
+        {
+            InspectType(parent, path + " -> base " + type.Name);
         }
         foreach (ConstructorInfo constructor in type.GetConstructors(BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
         {
@@ -104,6 +153,11 @@ internal sealed class WebBoundaryInspection
 
     private void InspectFactory(Delegate factory, string path)
     {
+        if (factory.Method.DeclaringType is null)
+        {
+            Fail("UnclassifiedFactory", "factory metadata", factory.Method.Name, path + " -> missing declaring owner");
+            return;
+        }
         InspectMethod(factory.Method, path);
         if (factory.Target is not null && factory.Target.GetType().IsDefined(typeof(CompilerGeneratedAttribute)))
         {
@@ -119,6 +173,10 @@ internal sealed class WebBoundaryInspection
                 else if (value is Type capturedType)
                 {
                     InspectType(capturedType, path + " -> captured type " + field.Name);
+                }
+                else if (value is not null)
+                {
+                    InspectType(value.GetType(), path + " -> captured instance " + field.Name);
                 }
             }
         }
@@ -142,8 +200,7 @@ internal sealed class WebBoundaryInspection
                 InspectType(argument, path + " -> " + method.Name);
             }
         }
-        if (method.DeclaringType?.Assembly != WebAssembly
-            && method.DeclaringType?.Assembly != typeof(WebBoundaryInspection).Assembly)
+        if (!ControlPlaneDependencyPolicy.IsApplication(method.DeclaringType))
         {
             return; // Framework factory metadata is bounded by the separate package/reference guard.
         }
@@ -154,51 +211,35 @@ internal sealed class WebBoundaryInspection
         byte[]? body = method.GetMethodBody()?.GetILAsByteArray();
         if (body is null)
         {
-            _failures.Add(path + " -> opaque factory method " + method);
+            Fail("UnclassifiedFactory", "factory metadata", method.ToString()!, path + " -> opaque factory method");
             return;
         }
-        int offset = 0;
-        while (offset < body.Length)
+        foreach (object member in BoundaryIlMetadata.Read(method))
         {
-            short value = body[offset++];
-            if (value == 0xfe)
+            string next = path + " -> " + method.Name;
+            switch (member)
             {
-                value = (short)(0xfe00 | body[offset++]);
+                case Type type:
+                    InspectType(type, next);
+                    break;
+                case FieldInfo field:
+                    InspectType(field.FieldType, next + " -> field " + field.Name);
+                    break;
+                case MethodBase called:
+                    if (ControlPlaneDependencyPolicy.IsWeb(role)
+                        && called.DeclaringType?.Assembly.GetName().Name == "Npgsql"
+                        && (called.Name.StartsWith("OpenConnection", StringComparison.Ordinal) || called.Name is "Open" or "OpenAsync"))
+                    {
+                        Fail("ProviderScope", "eager PostgreSQL", called.ToString()!, next + " -> factory connection");
+                    }
+                    if (called.DeclaringType == typeof(Activator) || called.DeclaringType == typeof(System.Runtime.InteropServices.NativeLibrary)
+                        || (called.DeclaringType == typeof(Assembly) && called.Name.StartsWith("Load", StringComparison.Ordinal)))
+                    {
+                        Fail("UnclassifiedFactory", "opaque activation", called.ToString()!, next + " -> opaque activation " + called.Name);
+                    }
+                    InspectMethod(called, next);
+                    break;
             }
-            OpCode opcode = Opcodes[value];
-            int size = opcode.OperandType switch
-            {
-                OperandType.InlineNone => 0,
-                OperandType.ShortInlineBrTarget or OperandType.ShortInlineI or OperandType.ShortInlineVar => 1,
-                OperandType.InlineVar => 2,
-                OperandType.InlineI8 or OperandType.InlineR => 8,
-                OperandType.InlineSwitch => 4 + 4 * BitConverter.ToInt32(body, offset),
-                _ => 4
-            };
-            if (opcode.OperandType is OperandType.InlineMethod or OperandType.InlineField or OperandType.InlineType or OperandType.InlineTok)
-            {
-                MemberInfo? member = method.Module.ResolveMember(BitConverter.ToInt32(body, offset),
-                    method.DeclaringType?.GetGenericArguments(), method.IsGenericMethod ? method.GetGenericArguments() : null);
-                string next = path + " -> " + method.Name;
-                switch (member)
-                {
-                    case Type type:
-                        InspectType(type, next);
-                        break;
-                    case FieldInfo field:
-                        InspectType(field.FieldType, next + " -> field " + field.Name);
-                        break;
-                    case MethodBase called:
-                        if (called.DeclaringType == typeof(Activator)
-                            || (called.DeclaringType == typeof(Assembly) && called.Name.StartsWith("Load", StringComparison.Ordinal)))
-                        {
-                            _failures.Add(next + " -> opaque activation " + called.Name);
-                        }
-                        InspectMethod(called, next);
-                        break;
-                }
-            }
-            offset += size;
         }
     }
 }
