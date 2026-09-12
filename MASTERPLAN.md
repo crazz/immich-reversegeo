@@ -1100,7 +1100,7 @@ After finalized release, Reset Immich Geo Data reloads location options and Data
 
 **Dependencies and sequencing:** Requires applied role/execution/mode composition from 19 and 38–45, finalized/applied 47–53, and landed block 54. At apply start bind to exact landed contracts and stop rather than invent parallel DTOs/roots. Do not edit block 54; only consume its finalized facade. Must precede 56.
 
-**OpenSpec:** [`55-remove-heavy-geodata-web-registrations`](openspec/changes/55-remove-heavy-geodata-web-registrations/).
+**OpenSpec:** [`55-remove-heavy-geodata-web-registrations`](openspec/changes/archive/2026-09-12-55-remove-heavy-geodata-web-registrations/).
 
 ### 56. `test: enforce control-plane dependency boundary`
 
