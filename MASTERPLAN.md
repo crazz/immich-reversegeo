@@ -1156,7 +1156,7 @@ The observation is advisory and non-atomic. Positive-Web/worker-zero remains one
 
 **Dependencies and sequencing** — Requires applied 57 and must bind to its landed detector/repository names rather than create a second seam. Stop on predicate, timeout-policy, or schema divergence instead of guessing. Index selection remains deferred pending supported-version evidence and later research; block 58 must not inspect or edit parallel block 59.
 
-**OpenSpec** — [`58-scheduled-existence-work-gate`](openspec/changes/58-scheduled-existence-work-gate/)
+**OpenSpec** — [`58-scheduled-existence-work-gate`](openspec/changes/archive/2026-09-12-58-scheduled-existence-work-gate/)
 
 ### 59. `obs: log work detector cost`
 
