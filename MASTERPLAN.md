@@ -1246,7 +1246,7 @@ Correlate plan evidence with bounded event 5901 fields while distinguishing Post
 
 **Dependencies and sequencing** — Closed by finalized block 61's no-watermark decision and blocks 62–63's no-go outcomes. Reconsider additional scheduling controls only after a new or revised watermark proposal passes every block 61 gate and block 64 is explicitly revised for the resulting architecture. Until then retain `ScheduleEditorState` as the existing cron parsing/building location and do not duplicate deployment-mode ownership.
 
-**OpenSpec** — [`64-add-nas-scheduling-controls`](openspec/changes/64-add-nas-scheduling-controls/)
+**OpenSpec** — [`64-add-nas-scheduling-controls`](openspec/changes/archive/2026-09-12-64-add-nas-scheduling-controls/)
 
 ### Checkpoint H
 
