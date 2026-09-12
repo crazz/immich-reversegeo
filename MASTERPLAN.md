@@ -1142,7 +1142,7 @@ The observation is advisory and non-atomic. Positive-Web/worker-zero remains one
 
 **Dependencies and sequencing** — Binds to applied50/54/55/56; preserve archived56 artifacts and current worker authority. Block58 replaces only the count-backed full-eligibility adapter with the exact existence query;59 observes cost;60 documents that query. Reconcile those future plans only when reached. Finalized61 selects no watermark and62–64 are no-go metadata closure, with no incremental coverage, persistence, reconciliation cadence, or NAS schedule snapshot.
 
-**OpenSpec** — [`57-introduce-processing-work-detector`](openspec/changes/57-introduce-processing-work-detector/)
+**OpenSpec** — [`57-introduce-processing-work-detector`](openspec/changes/archive/2026-09-12-57-introduce-processing-work-detector/)
 
 ### 58. `perf: use existence probe for scheduled gating`
 
