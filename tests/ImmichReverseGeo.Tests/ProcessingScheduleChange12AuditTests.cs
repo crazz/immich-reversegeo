@@ -905,7 +905,7 @@ public sealed class ProcessingScheduleChange12AuditTests
         services.AddSingleton((ImmichDbRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichDbRepository)));
         services.AddSingleton((ImmichReverseGeo.Overture.Services.OverturePlacesService)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(ImmichReverseGeo.Overture.Services.OverturePlacesService)));
         services.AddSingleton((SkippedAssetsRepository)System.Runtime.CompilerServices.RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
-        services.AddSingleton<IScheduledRunWorkGate>(AlwaysHasWorkScheduledRunGate.Instance);
+        services.AddSingleton<IProcessingWorkDetector>(AlwaysHasWorkScheduledRunGate.Instance);
         services.AddProcessingServicesForTests();
         return services.BuildServiceProvider();
     }

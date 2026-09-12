@@ -9,7 +9,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_21",
+    "Key": "ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_22",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher",
     "Lifetime": "Singleton",
@@ -19,7 +19,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_20",
+    "Key": "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_21",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory",
     "Lifetime": "Singleton",
@@ -28,7 +28,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_22",
+    "Key": "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_23",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildWorkerLauncher",
     "Lifetime": "Singleton",
@@ -37,7 +37,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.CacheInventoryMutationWorkerClient|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_32",
+    "Key": "ImmichReverseGeo.Web.Services.CacheInventoryMutationWorkerClient|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_33",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.CacheInventoryMutationWorkerClient",
     "Lifetime": "Singleton",
@@ -48,7 +48,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.ChildWorkerStartupValidator|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_35",
+    "Key": "ImmichReverseGeo.Web.Services.ChildWorkerStartupValidator|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_36",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.ChildWorkerStartupValidator",
     "Lifetime": "Singleton",
@@ -64,6 +64,17 @@
     "Dependencies": [
       "ImmichReverseGeo.Web.Services.ConfigService",
       "Microsoft.Extensions.Logging.ILogger\u00601[ImmichReverseGeo.Web.Services.ConfigService]"
+    ]
+  },
+  {
+    "Key": "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_19",
+    "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
+    "Service": "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector",
+    "Lifetime": "Singleton",
+    "Dependencies": [
+      "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector",
+      "ImmichReverseGeo.Web.Services.IScheduledRunWorkCounter",
+      "System.Func\u00602[System.Threading.CancellationToken,System.Threading.Tasks.Task\u00601[System.Int64]]"
     ]
   },
   {
@@ -121,7 +132,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.ICacheMutationWorkerClient|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_33",
+    "Key": "ImmichReverseGeo.Web.Services.ICacheMutationWorkerClient|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_34",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.ICacheMutationWorkerClient",
     "Lifetime": "Singleton",
@@ -141,7 +152,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.ICoordinateLookupSettingsSnapshotProvider|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_28",
+    "Key": "ImmichReverseGeo.Web.Services.ICoordinateLookupSettingsSnapshotProvider|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_29",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.ICoordinateLookupSettingsSnapshotProvider",
     "Lifetime": "Singleton",
@@ -150,7 +161,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.ICoordinateLookupWorkerClient|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_29",
+    "Key": "ImmichReverseGeo.Web.Services.ICoordinateLookupWorkerClient|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_30",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.ICoordinateLookupWorkerClient",
     "Lifetime": "Singleton",
@@ -222,6 +233,15 @@
     ]
   },
   {
+    "Key": "ImmichReverseGeo.Web.Services.IProcessingWorkDetector|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_20",
+    "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
+    "Service": "ImmichReverseGeo.Web.Services.IProcessingWorkDetector",
+    "Lifetime": "Singleton",
+    "Dependencies": [
+      "ImmichReverseGeo.Web.Services.CountBackedProcessingWorkDetector"
+    ]
+  },
+  {
     "Key": "ImmichReverseGeo.Web.Services.IScheduledRunTrigger|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingControlPlaneServices\u003Eb__0_1",
     "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.IScheduledRunTrigger",
@@ -240,17 +260,6 @@
       "ImmichReverseGeo.Web.Services.ImmichDbRepository",
       "ImmichReverseGeo.Web.Services.RepositoryScheduledRunWorkCounter",
       "System.Func\u00601[ImmichReverseGeo.Web.Services.ImmichDbRepository]"
-    ]
-  },
-  {
-    "Key": "ImmichReverseGeo.Web.Services.IScheduledRunWorkGate|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_19",
-    "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
-    "Service": "ImmichReverseGeo.Web.Services.IScheduledRunWorkGate",
-    "Lifetime": "Singleton",
-    "Dependencies": [
-      "ImmichReverseGeo.Web.Services.CountBackedScheduledRunWorkGate",
-      "ImmichReverseGeo.Web.Services.IScheduledRunWorkCounter",
-      "System.Func\u00602[System.Threading.CancellationToken,System.Threading.Tasks.Task\u00601[System.Int64]]"
     ]
   },
   {
@@ -320,7 +329,7 @@
     "Lifetime": "Singleton",
     "Dependencies": [
       "ImmichReverseGeo.Web.Services.IProcessingRunCoordinatorObserver",
-      "ImmichReverseGeo.Web.Services.IScheduledRunWorkGate",
+      "ImmichReverseGeo.Web.Services.IProcessingWorkDetector",
       "ImmichReverseGeo.Web.Services.ProcessingRunCoordinator",
       "ImmichReverseGeo.Web.Services.ProcessingRunCoordinator\u002BProcessingRunCancellationFactory",
       "ImmichReverseGeo.Web.Services.ProcessingState",
@@ -346,7 +355,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandInvocationBuilder|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_27",
+    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandInvocationBuilder|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_28",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandInvocationBuilder",
     "Lifetime": "Singleton",
@@ -355,7 +364,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandRuntimeFactsCapture|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_25",
+    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandRuntimeFactsCapture|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_26",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandRuntimeFactsCapture",
     "Lifetime": "Singleton",
@@ -364,7 +373,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandRuntimeObservationSource|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_23",
+    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandRuntimeObservationSource|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_24",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.WorkerCommandInvocation.IWorkerCommandRuntimeObservationSource",
     "Lifetime": "Singleton",
@@ -373,7 +382,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocationBuilder|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_26",
+    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocationBuilder|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_27",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocationBuilder",
     "Lifetime": "Singleton",
@@ -383,7 +392,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandRuntimeFactsCapture|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_24",
+    "Key": "ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandRuntimeFactsCapture|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_25",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandRuntimeFactsCapture",
     "Lifetime": "Singleton",
@@ -403,7 +412,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.WorkerFailureRecovery.WorkerRunControlPlane|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_34",
+    "Key": "ImmichReverseGeo.Web.WorkerFailureRecovery.WorkerRunControlPlane|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_35",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.WorkerFailureRecovery.WorkerRunControlPlane",
     "Lifetime": "Singleton",
@@ -417,7 +426,7 @@
     ]
   },
   {
-    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_30",
+    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_31",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "Microsoft.Extensions.Hosting.IHostedService",
     "Lifetime": "Singleton",
@@ -426,7 +435,7 @@
     ]
   },
   {
-    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_31",
+    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_32",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "Microsoft.Extensions.Hosting.IHostedService",
     "Lifetime": "Singleton",
@@ -435,7 +444,7 @@
     ]
   },
   {
-    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_36",
+    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec.\u003CAddWebCompositionCore\u003Eb__3_37",
     "Owner": "ImmichReverseGeo.Web.Composition.WebServiceCollectionExtensions\u002B\u003C\u003Ec",
     "Service": "Microsoft.Extensions.Hosting.IHostedService",
     "Lifetime": "Singleton",

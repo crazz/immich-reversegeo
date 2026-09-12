@@ -390,15 +390,15 @@ public sealed class WorkerJobProducerContentionTests
         }
     }
 
-    private sealed class ImmediateDetector : IScheduledRunWorkGate
+    private sealed class ImmediateDetector : IProcessingWorkDetector
     {
         internal int CallCount { get; private set; }
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CallCount++;
-            return Task.FromResult(true);
+            return Task.FromResult(ProcessingWorkDetectorStub.Result(true));
         }
     }
 

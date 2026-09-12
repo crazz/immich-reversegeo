@@ -1,8 +1,8 @@
 ## Context
 
-See [proposal.md](proposal.md) and [specs/processing-work-detection/spec.md](specs/processing-work-detection/spec.md). Block 35 deliberately introduces a temporary `IScheduledRunWorkGate.HasWorkAsync(CancellationToken)` after coordinator admission, pending publication, and exact-request state arming but before backend resolution. Its count-backed adapter closes no heavy graph; its local no-work/cancel/failure and positive-child outcomes are already owned by the coordinator. Blocks 41–43 then make the split explicit: Standard schedules through that gate, manual processing bypasses it, Web-only has no scheduler activity, and public Run-once executes directly under the worker-side advisory lock and authoritative count.
+See [proposal.md](proposal.md) and [specs/processing-work-detection/spec.md](specs/processing-work-detection/spec.md). The landed `IScheduledRunWorkGate.HasWorkAsync(CancellationToken)` is count-backed and closes no heavy graph. Block 50 superseded block 35's admission-first ordering: detection occurs before identity, shared admission, pending publication, and adapter arming. No-work, cancellation, and failure close at the scheduled preflight boundary without a processing lifecycle. A positive result proceeds to the existing shared admission and child route. Standard schedules through that gate, manual processing bypasses it, Web-only has no scheduler activity, and public Run-once executes directly under the worker-side advisory lock and authoritative count.
 
-The inspected source is still pre-migration: `ProcessingBackgroundService` combines schedule, admission, exact count, and in-process execution, and none of blocks 11–55 or the block-35 temporary gate exists in active source. This is a planning dependency discrepancy, not permission for block 57 to retrofit the old monolith. Apply must first verify that blocks 35–55 are landed and bind to their exact contract names, composition slices, and tests. Block 56 is parallel-owned and must not be edited.
+Applied blocks 50, 54, 55, and 56 were verified at archive commit `5b3535e39cba452d37206bfe872862a3bc3e2307`. Bind to `ProcessingRunCoordinator`, its existing preflight cancellation/drain path, `RepositoryScheduledRunWorkCounter`, and finalized role composition. Maintain only exact dependency-policy entries/references required by the replacement contract; preserve all block-56 enforcement and archived artifacts.
 
 The current PostgreSQL eligibility operation is `ImmichDbRepository.GetUnprocessedCountAsync(CancellationToken)`: `asset` joins `asset_exif` on quoted `assetId`, with null city/country, present latitude/longitude, and null `deletedAt`. The same exact count currently serves Dashboard and processing. After the worker migration, the child executor's count remains authoritative; the Web detector is only a pre-launch observation.
 
@@ -11,7 +11,7 @@ The current PostgreSQL eligibility operation is `ImmichDbRepository.GetUnprocess
 **Goals:**
 
 - Replace/alias block 35's temporary bare boolean gate with one dependency-light control-plane interface, immutable request/snapshot, and immutable result.
-- Preserve block 35's call order, local outcomes, cancellation/failure behavior, and count-backed production behavior while keeping the worker count authoritative.
+- Preserve block 50's pre-admission call order, scheduler-local outcomes, cancellation/failure behavior, and count-backed production behavior while keeping the worker count authoritative.
 - Make successful diagnostics safe and bounded without turning the result into a count, work set, query-plan, or cursor transport.
 - Keep the current implementation stateless and singleton-safe and make deterministic fakes easy to inject.
 - Leave a deliberate source-compatible path for change 58 to replace the count-backed adapter with the finalized full-eligibility existence implementation without SQL details crossing into scheduling; do not reserve speculative incremental or reconciliation behavior.
@@ -21,7 +21,7 @@ The current PostgreSQL eligibility operation is `ImmichDbRepository.GetUnprocess
 - No eligibility predicate, Dashboard statistics, worker executor/count, worker protocol/request, advisory lock, processing state, scheduling cadence, cron/configuration, deployment mode, or public UI change.
 - No existence query, index recommendation, detector telemetry, query-plan documentation, watermark source, cursor persistence, reconciliation cadence, or NAS mode implementation. Blocks 58–60 own the existence/observation/documentation follow-ups; finalized blocks 61–64 reject the latter three feature paths.
 - No Immich/schema mutation, skipped-store read or write, batch/resolver/geodata/cache work, stable work-set transaction, reservation, fallback, retry, replay, replacement worker, or catch-up.
-- No edit to block 56 or expansion of its architecture-test ownership.
+- No edit to archived block-56 artifacts or weakening/duplication of its policy; only required exact contract and factory-manifest maintenance.
 
 ## Decisions
 
@@ -31,10 +31,10 @@ Introduce the final seam as `IProcessingWorkDetector.DetectAsync(ProcessingWorkD
 
 The request contains:
 
-- the existing immutable processing request identity/trigger needed to prove exact admitted-request forwarding; and
+- the existing scheduled trigger value, with no RunId or JobId because no processing request has been admitted; and
 - an immutable `ProcessingWorkDetectionSnapshot` containing only bounded logical values for `Purpose` and `Coverage`.
 
-Block 57 supports only scheduled-launch purpose with current full-eligibility coverage and rejects unsupported enum values exhaustively. It carries no AppConfig object, cron text, SQL, table/column names, connection data, count, asset ID, work set, processing settings, or cursor. The separate snapshot makes the later scheduler policy choice explicit without making the detector read mutable settings or teaching scheduling how a strategy queries storage.
+Block 57 supports only the scheduled trigger, scheduled-launch purpose, and current full-eligibility coverage and rejects unsupported enum values exhaustively. It carries no run/job identity, AppConfig object, cron text, SQL, table/column names, connection data, count, asset ID, work set, processing settings, or cursor. The separate snapshot makes the later scheduler policy choice explicit without making the detector read mutable settings or teaching scheduling how a strategy queries storage.
 
 The result contains:
 
@@ -45,7 +45,7 @@ For block 57 the diagnostic kind is count-backed/full-eligibility and `UsedFallb
 
 ### 2. Keep cancellation and failures on the exceptional path
 
-The method receives the coordinator-owned token for the exact admitted request. A matching `OperationCanceledException` propagates as cancellation. Any repository/adapter fault propagates as failure. Neither produces a successful result with `HasWork = false`, and the result has no `Error` union that could be accidentally treated as no work. The existing identity-checked block-35 local finalizer remains responsible for cancellation/failure presentation, safe bounded detail, abandonment cleanup, and matching-handle release.
+The method receives the exact existing preflight token linked to scheduler/host cancellation. A matching `OperationCanceledException` propagates as cancellation. Any repository/adapter fault propagates as failure. Neither produces a successful result with `HasWork = false`, and the result has no `Error` union that could be accidentally treated as no work. The existing block-50 preflight path retains cancellation/drain cleanup and bounded logger-only failure/no-work presentation without identity, admission, pending, adapter, or worker artifacts. Once positive work wins admission, existing identity-checked cleanup and child finality remain authoritative.
 
 The adapter does not create a timeout in block 57. If block 59 or later composition adds a bounded timeout, the owning layer must distinguish its own timeout token from host/user cancellation without changing no-work semantics. Raw exceptions may reach controlled structured application logging according to existing policy, but result metadata and user-facing state remain secret-free. Alternative: catch every exception and return false, rejected because database outages would silently suppress scheduled work.
 
@@ -57,9 +57,9 @@ The interface makes no exact-count performance promise: count-backed is a migrat
 
 ### 4. Replace the temporary gate at its existing coordinator call site
 
-Migrate block 35's admitted scheduled call site in place: active handle/CTS publication → immutable backend/plan snapshot as already landed → immediate `MarkPending()` → exact-request state adapter arm → one detector call with the admitted request/snapshot/token → existing local finalization or lazy backend dispatch. Do not move detection into cron calculation, before admission, into the child backend, or into processing execution.
+Migrate the landed scheduled preflight call site in place: begin tracked preflight → one detector call with the immutable scheduled request/snapshot and exact preflight token → finish preflight → unchanged logger-only closure for no-work/failure, or positive work → existing shared admission attempt → active handle/CTS publication and frozen plan → immediate `MarkPending()` → matching adapter arm → lazy backend dispatch. A positive result may lose admission to processing, cache maintenance, or database maintenance; it must then create no pending state or child. Preserve preflight shutdown fencing/draining and all admitted cleanup. Do not move detection after admission, into cron calculation, into the child backend, or into processing execution.
 
-Prefer replacing the temporary interface and registration outright once every call site/test fake is migrated. If the landed prerequisite requires a short compatibility alias during the same change, the old and new service types must resolve the same singleton instance and the alias must delegate exactly once; remove the old call path before completing block 57. Never stack a new detector around the old gate in a way that can issue two queries or create two state owners. The existing local no-work/cancel/failure finalizer and positive-child route remain unchanged except for consuming `result.HasWork`.
+Replace the temporary interface and registration outright once every call site/test fake is migrated. If a short compatibility alias is needed during implementation, remove it before completing block 57. Never stack a new detector around the old gate in a way that can issue two queries or create two state owners. Existing preflight no-work/cancel/failure handling and the positive-child route remain unchanged except for consuming `result.HasWork`.
 
 ### 5. Preserve advisory race semantics and worker authority
 
@@ -87,7 +87,7 @@ Test helpers should provide thread-safe fakes/spies for:
 
 - constant work and no-work results with explicit safe metadata;
 - a FIFO scripted sequence for repeated scheduled occurrences;
-- a `TaskCompletionSource`-gated invocation that captures exact request/snapshot/token and proves call ordering without sleeps;
+- a `TaskCompletionSource`-gated invocation that captures the exact pre-admission request/snapshot/token and proves call ordering without sleeps;
 - matching-token cancellation;
 - a configured non-cancellation exception; and
 - call/constructor counters plus fail-on-use sentinels for bypass and no-heavy-resolution assertions.
@@ -96,8 +96,8 @@ Fakes must not implement SQL parsing, return numeric counts, mutate `ProcessingS
 
 ## Risks / Trade-offs
 
-- [Prerequisite blocks are absent from active source] → Treat applied blocks 35–55 as a hard apply prerequisite; reconcile exact landed symbols and stop rather than modifying the pre-migration monolith or duplicating coordinator/mode contracts.
-- [Request/snapshot types become a dumping ground] → Keep closed bounded enums and immutable identity only; reject AppConfig, SQL, cursor, work-set, and arbitrary metadata fields in review/tests.
+- [Historical admission-first planning conflicts with applied block 50] → Preserve the verified pre-admission contract and its zero-identity/state tests; use the existing coordinator/preflight and mode roots rather than creating parallel paths.
+- [Request/snapshot types become a dumping ground] → Keep only the scheduled trigger and closed bounded snapshot enums; reject run/job identity, AppConfig, SQL, cursor, work-set, and arbitrary metadata fields in review/tests.
 - [Safe diagnostics become behavior inputs] → Expose `HasWork` as the sole launch decision and test that metadata variation cannot change dispatch/finalization.
 - [Temporary alias causes duplicate queries] → Resolve aliases to one singleton, instrument invocation count, migrate the one call site, and remove the old route within block 57.
 - [Count and existence implementations drift semantically] → Verify both against the same explicit predicate cases; retain the worker's exact count as authority.
@@ -107,10 +107,10 @@ Fakes must not implement SQL parsing, return numeric counts, mutate `ProcessingS
 
 ## Migration Plan
 
-1. Verify blocks 35–55 are actually applied; record the landed temporary gate, coordinator order, Standard/Web-only/Run-once composition, repository boundary, and tests. Do not edit block 56.
+1. Bind to applied blocks 50/54/55/56; record the landed temporary gate, pre-admission coordinator order, role composition, repository boundary, and tests. Preserve archived block 56 and maintain only exact policy entries/references required by this replacement.
 2. Add the dependency-light immutable request/snapshot/result/diagnostic types and final detector interface, with exhaustive current purpose/coverage validation.
 3. Add the stateless count-backed singleton adapter over the landed exact-count repository operation and safe constant metadata.
-4. Replace/alias the temporary gate at the existing scheduled predispatch call site without changing admission, `MarkPending`, state arming, local finalizers, backend laziness, child dispatch, or cleanup.
+4. Replace the temporary gate at the existing scheduled pre-admission call site without changing preflight cancellation/drain, no-work/fault closure, positive admission, `MarkPending`, state arming, backend laziness, child dispatch, or cleanup.
 5. Register one detector identity only in the appropriate Standard scheduling composition; preserve Web-only, manual, Run-once, private-worker, and startup bypass boundaries.
 6. Add contract fakes and focused parity, cancellation/failure, race, DI/lifetime, no-side-effect, and mode/trigger tests. Run focused tests and the normal default-exclusion suite.
 7. Run strict OpenSpec validation/status and review a block-57-only diff. Rollback restores the temporary gate registration/call site; there is no schema, settings, protocol, or persisted-state migration.

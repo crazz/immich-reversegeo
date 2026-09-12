@@ -80,7 +80,7 @@ public sealed class StandardDeploymentModeTests
         AssertStandardDescriptor(services, typeof(IManualProcessingRunCoordinator), ServiceLifetime.Singleton);
         AssertStandardDescriptor(services, typeof(IScheduledRunTrigger), ServiceLifetime.Singleton);
         AssertStandardDescriptor(services, typeof(ProcessingBackgroundService), ServiceLifetime.Singleton);
-        AssertStandardDescriptor(services, typeof(IScheduledRunWorkGate), ServiceLifetime.Singleton);
+        AssertStandardDescriptor(services, typeof(IProcessingWorkDetector), ServiceLifetime.Singleton);
         AssertStandardDescriptor(services, typeof(IChildProcessingRunBackend), ServiceLifetime.Scoped);
         AssertStandardDescriptor(services, typeof(IChildWorkerLauncher), ServiceLifetime.Singleton);
         AssertStandardDescriptor(services, typeof(ChildWorkerStartupValidator), ServiceLifetime.Singleton);
@@ -504,8 +504,8 @@ public sealed class StandardDeploymentModeTests
                 var runtimeCapture = new GatedRuntimeFactsCapture(
                     new WorkerCommandRuntimeFactsCapture(runtimeSource));
                 builder.Services.AddSingleton<IWorkerCommandRuntimeFactsCapture>(runtimeCapture);
-                builder.Services.RemoveAll<IScheduledRunWorkGate>();
-                builder.Services.AddSingleton<IScheduledRunWorkGate>(detector);
+                builder.Services.RemoveAll<IProcessingWorkDetector>();
+                builder.Services.AddSingleton<IProcessingWorkDetector>(detector);
                 builder.Services.RemoveAll<IChildProcessFactory>();
                 builder.Services.AddSingleton<IChildProcessFactory>(processFactory);
                 ServiceDescriptor backend = builder.Services.Single(
@@ -628,7 +628,7 @@ public sealed class StandardDeploymentModeTests
         }
     }
 
-    private sealed class QueueScheduledDetector : IScheduledRunWorkGate
+    private sealed class QueueScheduledDetector : IProcessingWorkDetector
     {
         private readonly Queue<bool> _outcomes = new();
         private int _callCount;
@@ -642,13 +642,13 @@ public sealed class StandardDeploymentModeTests
             }
         }
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _callCount);
             lock (_outcomes)
             {
-                return Task.FromResult(_outcomes.Count > 0 && _outcomes.Dequeue());
+                return Task.FromResult(ProcessingWorkDetectorStub.Result(_outcomes.Count > 0 && _outcomes.Dequeue()));
             }
         }
     }

@@ -47,7 +47,7 @@ public sealed class WebProcessingGeodataBoundaryTests
         {
             typeof(ProcessingBackgroundService),
             typeof(IScheduledRunTrigger),
-            typeof(IScheduledRunWorkGate),
+            typeof(IProcessingWorkDetector),
             typeof(IScheduledRunWorkCounter)
         })
         {
@@ -72,7 +72,7 @@ public sealed class WebProcessingGeodataBoundaryTests
         string? failure = guard.FindForbiddenPath(
             typeof(IManualProcessingRunCoordinator),
             typeof(IScheduledRunTrigger),
-            typeof(IScheduledRunWorkGate),
+            typeof(IProcessingWorkDetector),
             typeof(ProcessingBackgroundService),
             typeof(IChildProcessingRunBackend));
 
@@ -82,7 +82,7 @@ public sealed class WebProcessingGeodataBoundaryTests
             guard.CapturedFactoryTypes.Contains(typeof(IChildProcessingRunBackend)),
             "The guard must inspect the actual child-boundary factory metadata.");
         Assert.IsTrue(
-            guard.CapturedFactoryTypes.Contains(typeof(IScheduledRunWorkGate)),
+            guard.CapturedFactoryTypes.Contains(typeof(IProcessingWorkDetector)),
             "The guard must inspect the actual count-gate factory and its deferred repository callback metadata.");
         Assert.IsFalse(guard.IsForbidden(typeof(CountryCodeService)), "country identity remains lightweight");
         Assert.IsFalse(guard.IsForbidden(typeof(CityResolverProfileCatalogService)), "resolver profiles remain lightweight");
@@ -202,7 +202,7 @@ public sealed class WebProcessingGeodataBoundaryTests
 
         var detectorGuard = new ProcessingFactoryGraph(fixture.ProductionDescriptors);
         Assert.IsNull(
-            detectorGuard.FindForbiddenPath(typeof(IScheduledRunWorkGate)),
+            detectorGuard.FindForbiddenPath(typeof(IProcessingWorkDetector)),
             "the exact delayed scheduled detector repository chain remains legal");
     }
 
@@ -433,7 +433,7 @@ public sealed class WebProcessingGeodataBoundaryTests
             if (!webOnly)
             {
                 Assert.IsNotNull(
-                    services.Single(descriptor => descriptor.ServiceType == typeof(IScheduledRunWorkGate)).ImplementationFactory,
+                    services.Single(descriptor => descriptor.ServiceType == typeof(IProcessingWorkDetector)).ImplementationFactory,
                     "the production count-gate factory must remain inspectable before the test override");
             }
             Assert.IsNotNull(
@@ -801,8 +801,9 @@ public sealed class WebProcessingGeodataBoundaryTests
 
         private static bool IsAllowedScheduledRepositoryPath(IReadOnlyList<Type> path)
         {
-            return path.Count >= 4
-                && path[^4] == typeof(IScheduledRunWorkGate)
+            return path.Count >= 5
+                && path[^5] == typeof(IProcessingWorkDetector)
+                && path[^4] == typeof(CountBackedProcessingWorkDetector)
                 && path[^3] == typeof(IScheduledRunWorkCounter)
                 && path[^2] == typeof(RepositoryScheduledRunWorkCounter)
                 && path[^1] == typeof(ImmichDbRepository);

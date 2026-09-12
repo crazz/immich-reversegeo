@@ -332,8 +332,8 @@ public sealed class ScheduledBackendCancellationTests
                         root,
                         Path.Combine(root, "data"),
                         Path.Combine(root, "config")));
-                services.RemoveAll<IScheduledRunWorkGate>();
-                services.AddSingleton<IScheduledRunWorkGate>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
+                services.RemoveAll<IProcessingWorkDetector>();
+                services.AddSingleton<IProcessingWorkDetector>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
                 services.RemoveAll<TimeProvider>();
                 services.AddSingleton(clock);
                 services.RemoveAll<IWorkerCommandInvocationBuilder>();

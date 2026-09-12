@@ -72,7 +72,7 @@ public class HostShutdownBudgetTests
         services.AddLogging();
         services.AddSingleton(TimeProvider.System);
         services.AddSingleton<IProcessingRunExecutor>(_ => executorFactory());
-        services.AddSingleton<IScheduledRunWorkGate>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
+        services.AddSingleton<IProcessingWorkDetector>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
         services.AddExecutorBackedChildControlPlaneServices();
         return services;
     }

@@ -863,7 +863,7 @@ public sealed class ChildBackendLifecycleTests
             bool exitOnKill = true,
             SessionInputStream? firstInput = null,
             Dictionary<string, string?>? firstEnvironment = null,
-            IScheduledRunWorkGate? scheduledGate = null,
+            IProcessingWorkDetector? scheduledGate = null,
             bool gateAcceptedStatus = false)
         {
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change33", Guid.NewGuid().ToString("N"));
@@ -890,7 +890,7 @@ public sealed class ChildBackendLifecycleTests
                     sp.GetRequiredService<RecordingStatusSink>());
                 if (scheduledGate is not null)
                 {
-                    services.RemoveAll<IScheduledRunWorkGate>();
+                    services.RemoveAll<IProcessingWorkDetector>();
                     services.AddSingleton(scheduledGate);
                 }
                 if (timeProvider is not null)
@@ -1138,15 +1138,15 @@ public sealed class ChildBackendLifecycleTests
         }
     }
 
-    private sealed class NoWorkScheduledRunGate : IScheduledRunWorkGate
+    private sealed class NoWorkScheduledRunGate : IProcessingWorkDetector
     {
         internal int CallCount { get; private set; }
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             CallCount++;
-            return Task.FromResult(false);
+            return Task.FromResult(ProcessingWorkDetectorStub.Result(false));
         }
     }
 

@@ -79,8 +79,8 @@ public sealed class ChildOnlyProcessingBackendTests
         services.AddScoped<IChildProcessingRunBackend>(sp => new RecordingChildBackend(
             sp.GetRequiredService<ChildDispatchRecorder>(),
             sp.GetRequiredService<PositiveScheduledWorkGate>()));
-        services.RemoveAll<IScheduledRunWorkGate>();
-        services.AddSingleton<IScheduledRunWorkGate>(scheduledGate);
+        services.RemoveAll<IProcessingWorkDetector>();
+        services.AddSingleton<IProcessingWorkDetector>(scheduledGate);
         services.AddSingleton(scheduledGate);
         services.AddSingleton(sp => new ChildDispatchRecorder(
             sp.GetRequiredService<ProcessingState>(),
@@ -184,7 +184,7 @@ public sealed class ChildOnlyProcessingBackendTests
         services.AddLogging();
         services.AddSingleton((ConfigService)RuntimeHelpers.GetUninitializedObject(typeof(ConfigService)));
         services.AddSingleton((SkippedAssetsRepository)RuntimeHelpers.GetUninitializedObject(typeof(SkippedAssetsRepository)));
-        services.AddSingleton<IScheduledRunWorkGate>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
+        services.AddSingleton<IProcessingWorkDetector>(global::ImmichReverseGeo.Tests.AlwaysHasWorkScheduledRunGate.Instance);
         return services;
     }
 
@@ -284,16 +284,16 @@ public sealed class ChildOnlyProcessingBackendTests
         public void Dispose() => source.Dispose();
     }
 
-    private sealed class PositiveScheduledWorkGate : IScheduledRunWorkGate
+    private sealed class PositiveScheduledWorkGate : IProcessingWorkDetector
     {
         public int Calls { get; private set; }
         public List<int> CallsWhenChildBackendConstructed { get; } = [];
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Calls++;
-            return Task.FromResult(true);
+            return Task.FromResult(ProcessingWorkDetectorStub.Result(true));
         }
 
         public void RecordChildBackendConstruction()

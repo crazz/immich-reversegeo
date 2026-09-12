@@ -236,7 +236,7 @@ public sealed class CoordinatorScheduledGateTests
         Assert.AreEqual(0, fixture.ChildScopeDisposeAttempts, scenario + "-no-child-scope-disposal");
     }
 
-    private static ProcessingStateSnapshot Snapshot(ProcessingState state) => new(
+    internal static ProcessingStateSnapshot Snapshot(ProcessingState state) => new(
         state.IsRunning,
         state.TotalUnprocessed,
         state.ProcessedThisRun,
@@ -248,7 +248,7 @@ public sealed class CoordinatorScheduledGateTests
         state.LastRunCompleted,
         string.Join("\n", state.GetRecentLog()));
 
-    private sealed record ProcessingStateSnapshot(
+    internal sealed record ProcessingStateSnapshot(
         bool IsRunning,
         long TotalUnprocessed,
         long Processed,
@@ -303,13 +303,13 @@ public sealed class CoordinatorScheduledGateTests
         internal ProcessingState State { get; }
         internal IScheduledRunTrigger Trigger { get; }
 
-        internal static ScheduledCoordinatorFixture Create(SignalGate gate, params ProcessFixturePlan[] plans)
+        internal static ScheduledCoordinatorFixture Create(IProcessingWorkDetector gate, params ProcessFixturePlan[] plans)
         {
             return CreateCore(gate, observer: null, plans);
         }
 
         internal static ScheduledCoordinatorFixture CreateWithObserver(
-            SignalGate gate,
+            IProcessingWorkDetector gate,
             IProcessingRunCoordinatorObserver observer,
             params ProcessFixturePlan[] plans)
         {
@@ -317,7 +317,7 @@ public sealed class CoordinatorScheduledGateTests
         }
 
         private static ScheduledCoordinatorFixture CreateCore(
-            SignalGate gate,
+            IProcessingWorkDetector gate,
             IProcessingRunCoordinatorObserver? observer,
             ProcessFixturePlan[] plans)
         {
@@ -333,8 +333,8 @@ public sealed class CoordinatorScheduledGateTests
                     root,
                     Path.Combine(root, "data"),
                     Path.Combine(root, "config")));
-                services.RemoveAll<IScheduledRunWorkGate>();
-                services.AddSingleton<IScheduledRunWorkGate>(gate);
+                services.RemoveAll<IProcessingWorkDetector>();
+                services.AddSingleton<IProcessingWorkDetector>(gate);
                 services.RemoveAll<IWorkerCommandInvocationBuilder>();
                 services.AddSingleton<IWorkerCommandInvocationBuilder, FixtureInvocationBuilder>();
                 services.RemoveAll<IChildWorkerLauncher>();
@@ -355,7 +355,7 @@ public sealed class CoordinatorScheduledGateTests
                     return new ProcessingRunCoordinator(
                         sp.GetRequiredService<ProcessingState>(),
                         sp.GetRequiredService<ProcessingStateEventReporter>(),
-                        sp.GetRequiredService<IScheduledRunWorkGate>(),
+                        sp.GetRequiredService<IProcessingWorkDetector>(),
                         childBoundary,
                         Microsoft.Extensions.Logging.Abstractions.NullLogger<ProcessingRunCoordinator>.Instance,
                         Guid.NewGuid,
@@ -493,9 +493,9 @@ public sealed class CoordinatorScheduledGateTests
         }
     }
 
-    internal sealed class SignalGate : IScheduledRunWorkGate
+    internal sealed class SignalGate : IProcessingWorkDetector
     {
-        private readonly TaskCompletionSource<bool> _decision = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource<ProcessingWorkDetectionResult> _decision = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal TaskCompletionSource Entered { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal int CallCount { get; private set; }
@@ -515,7 +515,7 @@ public sealed class CoordinatorScheduledGateTests
             return gate;
         }
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             CallCount++;
             Token = cancellationToken;
@@ -525,7 +525,7 @@ public sealed class CoordinatorScheduledGateTests
 
         internal void Decide(bool hasWork)
         {
-            _decision.TrySetResult(hasWork);
+            _decision.TrySetResult(ProcessingWorkDetectorStub.Result(hasWork));
         }
 
         internal void Fail(Exception failure)

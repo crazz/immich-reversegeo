@@ -746,8 +746,8 @@ public sealed class DeploymentModeCompositionMatrixTests
                     builder.Services.AddSingleton(observedState);
                     if (ReferenceEquals(mode, DeploymentMode.Standard))
                     {
-                        builder.Services.RemoveAll<IScheduledRunWorkGate>();
-                        builder.Services.AddSingleton<IScheduledRunWorkGate>(gate);
+                        builder.Services.RemoveAll<IProcessingWorkDetector>();
+                        builder.Services.AddSingleton<IProcessingWorkDetector>(gate);
                     }
                     if (invalidShutdownBudget)
                     {
@@ -793,7 +793,7 @@ public sealed class DeploymentModeCompositionMatrixTests
                    else
                    {
                         Assert.IsFalse(
-                            builder.Services.Any(descriptor => descriptor.ServiceType == typeof(IScheduledRunWorkGate)),
+                            builder.Services.Any(descriptor => descriptor.ServiceType == typeof(IProcessingWorkDetector)),
                             name + "-no-scheduled-work-gate-descriptor");
                    }
                     Assert.AreEqual(0, Volatile.Read(ref observedTransitions), name + "-before-processing-state-transition");
@@ -828,7 +828,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             await using var fixture = WebFixture.Create(mode);
             var guard = new WebProcessingGeodataBoundaryTests.ProcessingFactoryGraph(fixture.Descriptors);
             Type[] roots = ReferenceEquals(mode, DeploymentMode.Standard)
-                ? [typeof(IManualProcessingRunCoordinator), typeof(IScheduledRunTrigger), typeof(IScheduledRunWorkGate), typeof(ProcessingBackgroundService), typeof(IChildProcessingRunBackend)]
+                ? [typeof(IManualProcessingRunCoordinator), typeof(IScheduledRunTrigger), typeof(IProcessingWorkDetector), typeof(ProcessingBackgroundService), typeof(IChildProcessingRunBackend)]
                 : [typeof(IManualProcessingRunCoordinator), typeof(IChildProcessingRunBackend)];
 
             string? failure = guard.FindForbiddenPath(roots);
@@ -956,7 +956,7 @@ public sealed class DeploymentModeCompositionMatrixTests
                         Assert.AreEqual(0, scheduledRegistrations, item.Item1 + "-scheduler-gate-and-trigger-descriptors-absent");
                         Assert.IsNull(fixture.Provider.GetService<ProcessingBackgroundService>(), item.Item1 + "-scheduler-provider-absent");
                         Assert.IsNull(fixture.Provider.GetService<IScheduledRunTrigger>(), item.Item1 + "-scheduled-trigger-provider-absent");
-                        Assert.IsNull(fixture.Provider.GetService<IScheduledRunWorkGate>(), item.Item1 + "-scheduled-gate-provider-absent");
+                        Assert.IsNull(fixture.Provider.GetService<IProcessingWorkDetector>(), item.Item1 + "-scheduled-gate-provider-absent");
                         Assert.AreEqual(0, fixture.Children.Count, item.Item1 + "-pre-manual-child-count");
                         Assert.AreEqual(0, fixture.Schedule!.Reads, item.Item1 + "-pre-manual-schedule-reads");
                         Assert.AreEqual(0, fixture.ScheduleTimerCreations, item.Item1 + "-pre-manual-schedule-waits");
@@ -1171,7 +1171,7 @@ public sealed class DeploymentModeCompositionMatrixTests
             {
                 typeof(ProcessingBackgroundService),
                 typeof(IScheduledRunTrigger),
-                typeof(IScheduledRunWorkGate),
+                typeof(IProcessingWorkDetector),
                 typeof(IScheduledRunWorkCounter),
                 typeof(IProcessingScheduleConfiguration)
             })
@@ -1251,7 +1251,7 @@ public sealed class DeploymentModeCompositionMatrixTests
         [
             typeof(ProcessingBackgroundService),
             typeof(IScheduledRunTrigger),
-            typeof(IScheduledRunWorkGate),
+            typeof(IProcessingWorkDetector),
             typeof(IScheduledRunWorkCounter),
             typeof(IProcessingScheduleConfiguration)
         ];
@@ -1406,16 +1406,16 @@ public sealed class DeploymentModeCompositionMatrixTests
         }
     }
 
-    private sealed class WorkGate(bool result) : IScheduledRunWorkGate
+    private sealed class WorkGate(bool result) : IProcessingWorkDetector
     {
         private int _calls;
         internal int Calls => Volatile.Read(ref _calls);
         internal bool Result { get; set; } = result;
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
             Interlocked.Increment(ref _calls);
-            return Task.FromResult(Result);
+            return Task.FromResult(ProcessingWorkDetectorStub.Result(Result));
         }
     }
 
@@ -1750,8 +1750,8 @@ public sealed class DeploymentModeCompositionMatrixTests
             if (ReferenceEquals(mode, DeploymentMode.Standard))
             {
                 gate = new WorkGate(scheduledWork);
-                services.RemoveAll<IScheduledRunWorkGate>();
-                services.AddSingleton<IScheduledRunWorkGate>(gate);
+                services.RemoveAll<IProcessingWorkDetector>();
+                services.AddSingleton<IProcessingWorkDetector>(gate);
             }
             RecordingSchedule? schedule = null;
             ScheduleTimeProvider? scheduleClock = null;

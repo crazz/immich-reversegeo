@@ -127,8 +127,9 @@ internal static class WebServiceCollectionExtensions
         {
             services.AddSingleton<IScheduledRunWorkCounter>(sp => new RepositoryScheduledRunWorkCounter(
                 () => sp.GetRequiredService<ImmichDbRepository>()));
-            services.AddSingleton<IScheduledRunWorkGate>(sp => new CountBackedScheduledRunWorkGate(
+            services.AddSingleton(sp => new CountBackedProcessingWorkDetector(
                 sp.GetRequiredService<IScheduledRunWorkCounter>().GetUnprocessedCountAsync));
+            services.AddSingleton<IProcessingWorkDetector>(sp => sp.GetRequiredService<CountBackedProcessingWorkDetector>());
             services.AddProcessingControlPlaneServices();
         }
         else

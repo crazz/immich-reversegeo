@@ -230,6 +230,74 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         }
     }
 
+    [TestMethod]
+    [TestCategory("Change57")]
+    public async Task DetectionRequestPrecedesIdentityAndCapturesTheLinkedTokenWithoutRunMetadata()
+    {
+        var detector = new GatedProcessingWorkDetector();
+        await using var fixture = Fixture.Create(detector);
+        using var caller = new CancellationTokenSource();
+        StateSnapshot before = StateSnapshot.Capture(fixture.State);
+        Task<ScheduledTriggerResult> scheduled = fixture.Trigger.TriggerScheduledAsync(caller.Token);
+        GatedProcessingWorkDetector.Invocation invocation = await detector.NextAsync().WaitAsync(Bound);
+        Assert.AreEqual(ProcessingRunTrigger.Scheduled, invocation.Request.Trigger);
+        Assert.AreSame(ProcessingWorkDetectionSnapshot.Current, invocation.Request.Snapshot);
+        Assert.AreNotEqual(caller.Token, invocation.Token, "The existing linked preflight token is forwarded.");
+        Assert.AreEqual(0, fixture.IdentityCalls);
+        Assert.AreEqual(0, fixture.Observer.AdmissionCalls);
+        Assert.IsNull(fixture.Coordinator.ActiveRequest);
+        Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
+        caller.Cancel();
+        Assert.IsTrue(invocation.Token.IsCancellationRequested, "The captured token is linked to this caller, not a detached fake token.");
+        invocation.Cancel();
+        OperationCanceledException failure = await Assert.ThrowsAsync<OperationCanceledException>(() => scheduled.WaitAsync(Bound));
+        Assert.AreEqual(caller.Token, failure.CancellationToken);
+        Assert.AreEqual(1, detector.Calls.Length);
+        Assert.AreEqual(0, fixture.CancellationFactory.CreateCalls);
+        Assert.AreEqual(0, fixture.Backend.ResolutionCalls);
+        Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
+    }
+
+    [TestMethod]
+    [TestCategory("Change57")]
+    [DataRow(false, 0, false)]
+    [DataRow(false, 1, false)]
+    [DataRow(false, 1, true)]
+    [DataRow(true, 0, false)]
+    [DataRow(true, 1, false)]
+    [DataRow(true, 1, true)]
+    public async Task OnlyHasWorkSelectsNoWorkOrAdmissionContention(bool hasWork, int implementationKind, bool fallback)
+    {
+        var kind = (ProcessingWorkDetectorKind)implementationKind;
+        var detector = ProcessingWorkDetectorStub.Scripted(ProcessingWorkDetectorStub.Result(hasWork, kind, fallback));
+        await using var fixture = Fixture.Create(detector, allowAdmissionAttempt: hasWork);
+        await using var owner = Assert.IsInstanceOfType<WorkerJobAdmissionResult.Admitted>(
+            fixture.WorkerCoordinator.TryAdmit(LookupDispatch())).Lease;
+        var activeOwner = fixture.WorkerCoordinator.Snapshot.ActiveOwner;
+        StateSnapshot before = StateSnapshot.Capture(fixture.State);
+
+        ScheduledTriggerResult result = await fixture.Trigger.TriggerScheduledAsync(CancellationToken.None).WaitAsync(Bound);
+
+        Assert.AreEqual(hasWork ? ScheduledTriggerResult.RejectedAlreadyRunning : ScheduledTriggerResult.AcceptedAfterTerminal, result);
+        Assert.AreEqual(1, detector.Calls.Length);
+        Assert.AreEqual(hasWork ? 1 : 0, fixture.Observer.AdmissionCalls);
+        Assert.AreEqual(activeOwner, fixture.WorkerCoordinator.Snapshot.ActiveOwner, "Detection/admission loss cannot replace the existing owner.");
+        Assert.AreEqual(0, fixture.CancellationFactory.CreateCalls);
+        Assert.AreEqual(0, fixture.Backend.ResolutionCalls);
+        Assert.IsNull(fixture.Coordinator.ActiveRequest);
+        if (!hasWork)
+        {
+            Assert.AreEqual(0, fixture.IdentityCalls);
+            Assert.AreEqual(before, StateSnapshot.Capture(fixture.State));
+            Assert.AreEqual(1, fixture.Logger.InformationCount);
+        }
+        else
+        {
+            Assert.IsFalse(fixture.State.IsRunning);
+            Assert.AreEqual(before.Started, StateSnapshot.Capture(fixture.State).Started);
+        }
+    }
+
     private static CoordinateLookupWorkerJobDispatch LookupDispatch() => new(
         Guid.NewGuid(),
         new CoordinateLookupRequest(
@@ -288,7 +356,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         internal BackendBoundary Backend { get; }
         internal int IdentityCalls => Volatile.Read(ref _identityCalls);
 
-        internal static Fixture Create(IScheduledRunWorkGate detector)
+        internal static Fixture Create(IProcessingWorkDetector detector, bool allowAdmissionAttempt = false)
         {
             var services = new ServiceCollection();
             var backend = new BackendBoundary();
@@ -301,7 +369,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             var workerCoordinator = new WorkerJobCoordinator(
                 [WorkerJobDescriptors.ProcessAssets, WorkerJobDescriptors.CoordinateLookup]);
             var cancellationFactory = new TrackingCancellationFactory();
-            var observer = new AdmissionObserver();
+            var observer = new AdmissionObserver { AllowAdmissionAttempt = allowAdmissionAttempt };
             var logger = new RecordingLogger();
             Fixture? fixture = null;
             var coordinator = new ProcessingRunCoordinator(
@@ -337,9 +405,9 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         }
     }
 
-    private sealed class SignalDetector : IScheduledRunWorkGate
+    private sealed class SignalDetector : IProcessingWorkDetector
     {
-        private readonly TaskCompletionSource<bool> _decision =
+        private readonly TaskCompletionSource<ProcessingWorkDetectionResult> _decision =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal TaskCompletionSource Entered { get; } =
@@ -347,7 +415,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
         internal int CallCount { get; private set; }
         internal CancellationToken Token { get; private set; }
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             CallCount++;
             Token = cancellationToken;
@@ -356,23 +424,23 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             return _decision.Task;
         }
 
-        internal void Decide(bool hasWork) => _decision.TrySetResult(hasWork);
+        internal void Decide(bool hasWork) => _decision.TrySetResult(ProcessingWorkDetectorStub.Result(hasWork));
         internal void Fail(Exception failure) => _decision.TrySetException(failure);
     }
 
-    private sealed class ImmediateDetector(bool hasWork) : IScheduledRunWorkGate
+    private sealed class ImmediateDetector(bool hasWork) : IProcessingWorkDetector
     {
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(hasWork);
+            return Task.FromResult(ProcessingWorkDetectorStub.Result(hasWork));
         }
     }
 
     private sealed class ReentrantCancellationDetector(
-        WorkerJobCoordinator workerCoordinator) : IScheduledRunWorkGate
+        WorkerJobCoordinator workerCoordinator) : IProcessingWorkDetector
     {
-        private readonly TaskCompletionSource<bool> _decision =
+        private readonly TaskCompletionSource<ProcessingWorkDetectionResult> _decision =
             new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         internal TaskCompletionSource Entered { get; } =
@@ -381,7 +449,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             new(TaskCreationOptions.RunContinuationsAsynchronously);
         internal WorkerJobAdmissionResult? LookupAdmission { get; private set; }
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.Register(() =>
             {
@@ -452,6 +520,7 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
 
     private sealed class AdmissionObserver : IProcessingRunCoordinatorObserver
     {
+        internal bool AllowAdmissionAttempt { get; init; }
         internal int AdmissionCalls { get; private set; }
 
         public ValueTask BeforeAdmissionGateAsync(ProcessingRunAdmissionAttempt attempt)
@@ -462,6 +531,10 @@ public sealed class AcceptedEmptyScheduledWorkerGatingTests
             }
 
             AdmissionCalls++;
+            if (AllowAdmissionAttempt)
+            {
+                return ValueTask.CompletedTask;
+            }
             throw new AssertFailedException("detector-only outcomes must not reach admission");
         }
     }

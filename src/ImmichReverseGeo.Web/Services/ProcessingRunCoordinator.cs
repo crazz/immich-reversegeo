@@ -66,7 +66,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private readonly object _admissionGate = new();
     private readonly ProcessingState _state;
     private readonly ProcessingStateEventReporter _reporter;
-    private readonly IScheduledRunWorkGate? _scheduledRunWorkGate;
+    private readonly IProcessingWorkDetector? _scheduledRunWorkGate;
     private readonly IServiceScopeFactory _childBackendScopeFactory;
     private readonly ILogger<ProcessingRunCoordinator> _logger;
     private readonly Func<Guid> _createRunId;
@@ -87,7 +87,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IScheduledRunWorkGate scheduledRunWorkGate,
+        IProcessingWorkDetector scheduledRunWorkGate,
         IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         WorkerJobCoordinator workerCoordinator,
@@ -111,7 +111,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IScheduledRunWorkGate scheduledRunWorkGate,
+        IProcessingWorkDetector scheduledRunWorkGate,
         IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
@@ -136,7 +136,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IScheduledRunWorkGate scheduledRunWorkGate,
+        IProcessingWorkDetector scheduledRunWorkGate,
         IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
@@ -162,7 +162,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     internal ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IScheduledRunWorkGate scheduledRunWorkGate,
+        IProcessingWorkDetector scheduledRunWorkGate,
         IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
@@ -190,7 +190,7 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
     private ProcessingRunCoordinator(
         ProcessingState state,
         ProcessingStateEventReporter reporter,
-        IScheduledRunWorkGate? scheduledRunWorkGate,
+        IProcessingWorkDetector? scheduledRunWorkGate,
         IServiceScopeFactory childBackendScopeFactory,
         ILogger<ProcessingRunCoordinator> logger,
         Func<Guid> createRunId,
@@ -297,7 +297,12 @@ public sealed class ProcessingRunCoordinator : IManualProcessingRunCoordinator, 
         bool hasWork;
         try
         {
-            hasWork = await _scheduledRunWorkGate.HasWorkAsync(preflight.Token).ConfigureAwait(false);
+            var detectionRequest = new ProcessingWorkDetectionRequest(
+                ProcessingRunTrigger.Scheduled,
+                ProcessingWorkDetectionSnapshot.Current);
+            ProcessingWorkDetectionResult detection = await _scheduledRunWorkGate
+                .DetectAsync(detectionRequest, preflight.Token).ConfigureAwait(false);
+            hasWork = detection.HasWork;
             preflight.Token.ThrowIfCancellationRequested();
         }
         catch (OperationCanceledException cancellation)

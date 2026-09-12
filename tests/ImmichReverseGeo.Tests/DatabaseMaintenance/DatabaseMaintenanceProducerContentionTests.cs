@@ -196,14 +196,14 @@ public sealed class DatabaseMaintenanceProducerContentionTests
             NullLogger<CacheDeletionCommand>.Instance);
     }
 
-    private sealed class MutableWorkGate(bool hasWork) : IScheduledRunWorkGate
+    private sealed class MutableWorkGate(bool hasWork) : IProcessingWorkDetector
     {
         internal bool HasWork { get; set; } = hasWork;
 
-        public Task<bool> HasWorkAsync(CancellationToken cancellationToken)
+        public Task<ProcessingWorkDetectionResult> DetectAsync(ProcessingWorkDetectionRequest request, CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            return Task.FromResult(HasWork);
+            return Task.FromResult(ProcessingWorkDetectorStub.Result(HasWork));
         }
     }
 

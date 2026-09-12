@@ -61,7 +61,7 @@ public sealed class RunOnceCompositionTests
                 typeof(IDataProtectionProvider),
                 typeof(ProcessingBackgroundService),
                 typeof(IProcessingScheduleConfiguration),
-                typeof(IScheduledRunWorkGate),
+                typeof(IProcessingWorkDetector),
                 typeof(ProcessingRunCoordinator),
                 typeof(ProcessingState),
                 typeof(IChildProcessingRunBackend),

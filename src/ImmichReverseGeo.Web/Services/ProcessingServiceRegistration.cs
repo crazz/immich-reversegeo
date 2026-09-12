@@ -64,7 +64,7 @@ internal static class ProcessingServiceRegistration
                 ? new ProcessingRunCoordinator(
                     state,
                     reporter,
-                    sp.GetRequiredService<IScheduledRunWorkGate>(),
+                    sp.GetRequiredService<IProcessingWorkDetector>(),
                     scopeFactory,
                     logger,
                     Guid.NewGuid,

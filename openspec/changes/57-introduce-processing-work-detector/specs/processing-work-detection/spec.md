@@ -5,10 +5,10 @@ Processing work detection gives the lightweight Web control plane a stable advis
 ## ADDED Requirements
 
 ### Requirement: Immutable advisory request and result
-The system SHALL evaluate scheduled work through an immutable request containing only the admitted processing identity and an immutable logical detection snapshot. The snapshot SHALL identify the control-plane purpose and eligibility coverage/strategy, and SHALL NOT contain SQL, schema names, connection data, row identities, exact counts, cursor values, work sets, or processing settings. A successful evaluation SHALL return one immutable result with `HasWork` as the sole launch-gating value and bounded low-cardinality diagnostic metadata limited to detector strategy, logical coverage, and fallback use. Callers SHALL NOT branch processing behavior on diagnostic metadata.
+The system SHALL evaluate scheduled work before admission through an immutable request containing only the scheduled trigger and an immutable logical detection snapshot. No processing identity exists at this point, so the request SHALL contain no RunId or JobId. The snapshot SHALL identify the control-plane purpose and eligibility coverage/strategy, and SHALL NOT contain SQL, schema names, connection data, row identities, exact counts, cursor values, work sets, or processing settings. A successful evaluation SHALL return one immutable result with `HasWork` as the sole launch-gating value and bounded low-cardinality diagnostic metadata limited to detector strategy, logical coverage, and fallback use. Callers SHALL NOT branch processing behavior on diagnostic metadata.
 
 #### Scenario: Scheduled caller evaluates current full eligibility
-- **WHEN** an admitted scheduled occurrence requests the current full-eligibility strategy
+- **WHEN** a due scheduled occurrence requests the current full-eligibility strategy before identity creation or admission
 - **THEN** the detector receives that immutable request and returns one `HasWork` decision with safe bounded metadata
 
 #### Scenario: Result is inspected for diagnostics
@@ -31,33 +31,37 @@ The initial detector SHALL report work exactly when the current eligibility quer
 - **THEN** the exact repository count remains available and the request does not use the scheduled detector as a substitute
 
 ### Requirement: Detection is lightweight and side-effect free
-A detector evaluation in this change SHALL perform only the database read needed for eligibility. It SHALL NOT mutate Immich data or schema, read or mutate skipped-asset storage, read processing configuration, fetch batches, initialize or access geodata/resolver/cache/airport services, create protocol events, enrich a worker request, resolve an execution backend, launch a worker, or persist detector state. Detector completion SHALL not update processing state directly; the admitted coordinator's existing identity-checked scheduled path remains the sole owner of pending, no-work, cancellation, failure, child dispatch, and handle-release projection.
+A detector evaluation in this change SHALL perform only the database read needed for eligibility. It SHALL NOT mutate Immich data or schema, read or mutate skipped-asset storage, read processing configuration, fetch batches, initialize or access geodata/resolver/cache/airport services, create protocol events, enrich a worker request, resolve an execution backend, launch a worker, or persist detector state. Detector completion SHALL NOT update processing state directly. Existing scheduled preflight handling SHALL own no-work/cancellation/failure closure without a processing identity or state lifecycle; only a positive observation may proceed to the existing admission, pending, adapter, child-dispatch, and identity-checked cleanup path.
 
 #### Scenario: Detector reports no work
 - **WHEN** a scheduled evaluation completes with `HasWork = false`
-- **THEN** the detector itself has performed no mutation or heavy-service side effect and the existing scheduled local finalizer owns the completed-zero presentation
+- **THEN** the detector itself has performed no mutation or heavy-service side effect and the existing scheduled preflight closes with bounded no-work logging and no run identity, admission, or ProcessingState transition
 
 #### Scenario: Detector reports work
 - **WHEN** a scheduled evaluation completes with `HasWork = true`
-- **THEN** the detector itself has not launched or configured a worker and the existing coordinator decides whether to dispatch the already-admitted request
+- **THEN** the detector itself has not launched or configured a worker and the existing coordinator attempts shared admission before deciding whether to dispatch a newly admitted request
 
 ### Requirement: Cancellation and failure are not no-work decisions
-The detector SHALL observe the admitted request's cancellation token. Matching cancellation SHALL be surfaced as cancellation, and an unexpected detector fault SHALL be surfaced as failure; neither SHALL be converted to `HasWork = false` or a successful result. The existing scheduled predispatch finalizer SHALL retain bounded safe operator presentation and matching-handle cleanup, with no backend resolution, worker launch, fallback, or automatic retry.
+The detector SHALL observe the exact existing preflight token linked to scheduler/host cancellation. Matching cancellation SHALL be surfaced as cancellation, and an unexpected detector fault SHALL be surfaced as failure; neither SHALL be converted to `HasWork = false` or a successful result. Existing scheduled preflight handling SHALL retain bounded safe logging and cancellation/drain cleanup, with no run identity, admission, ProcessingState lifecycle, backend resolution, worker launch, fallback, or automatic retry.
 
 #### Scenario: Evaluation is cancelled
-- **WHEN** the matching admitted token is cancelled before detection completes
-- **THEN** cancellation is propagated distinctly from no work and the scheduled path performs its existing local cancellation finalization
+- **WHEN** the matching preflight token is cancelled before detection completes
+- **THEN** cancellation is propagated distinctly from no work and the scheduled path performs its existing pre-admission cancellation cleanup without creating a processing lifecycle
 
 #### Scenario: Evaluation fails
 - **WHEN** the eligibility read or detector adapter fails unexpectedly
 - **THEN** failure is propagated distinctly from no work and only bounded safe detail reaches the existing local failure presentation
 
 ### Requirement: Only internal scheduled launches use the detector
-Standard-mode internal scheduling SHALL use exactly one detector evaluation after local admission, pending-state publication, and matching state-adapter arming, and before backend resolution or worker launch. Dashboard manual processing, Web-only mode, and public Run-once execution SHALL bypass the detector: manual processing proceeds through its existing admitted child path, Web-only starts no internal scheduler or detector activity, and Run-once proceeds directly to the worker-side advisory lock and authoritative count. This change SHALL preserve the scheduler's pinned configuration snapshot, process-local admission, pending-state order, and accepted-attempt cleanup behavior.
+Standard-mode internal scheduling SHALL use exactly one detector evaluation before run identity creation, shared admission, pending-state publication, and matching state-adapter arming. Only positive detection SHALL proceed to ordinary shared admission; only admitted work may publish pending, arm the adapter, and dispatch one child. Dashboard manual processing, Web-only mode, and public Run-once execution SHALL bypass the detector: manual processing proceeds through its existing admitted child path, Web-only starts no internal scheduler or detector activity, and Run-once proceeds directly to the worker-side advisory lock and authoritative count. This change SHALL preserve the scheduler's pinned configuration snapshot, preflight cancellation/shutdown drain, shared admission, pending-state order, and admitted-attempt cleanup behavior.
 
 #### Scenario: Standard scheduled occurrence is admitted
-- **WHEN** a due Standard-mode occurrence acquires local admission
-- **THEN** it invokes the detector once at the established predispatch point and preserves the existing no-work or child-dispatch lifecycle
+- **WHEN** a due Standard-mode occurrence detects current work and then acquires shared admission
+- **THEN** detection has occurred exactly once before identity/admission/pending/adapter creation and the admitted request follows the existing child-dispatch lifecycle
+
+#### Scenario: Positive detection loses admission
+- **WHEN** detection reports work but another processing or maintenance operation owns shared admission
+- **THEN** the scheduled occurrence follows its existing contention outcome with no pending state, adapter, backend, child, reservation, retry, or queue
 
 #### Scenario: Dashboard manual run is admitted
 - **WHEN** a user starts a manual processing run
