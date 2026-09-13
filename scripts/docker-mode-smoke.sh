@@ -858,11 +858,12 @@ prepare_case_dirs() {
     fi
     # Probe each root as the declared identity before app start, then remove probes.
     # Container inspection independently establishes that both bind mounts are RW.
-    # shellcheck disable=SC2016 # Pass the path as argv, never interpolate shell code.
-    run_root setpriv --reuid "$IMAGE_UID" --regid "$IMAGE_GID" --clear-groups \
+    # Host ancestors are outside the bind mount: enter its root before dropping UID.
+    # shellcheck disable=SC2016 # The inner shell receives only the relative root as argv.
+    run_root env --chdir="$root" setpriv --reuid "$IMAGE_UID" --regid "$IMAGE_GID" --clear-groups \
         sh -c 'printf config > "$1/config/.write-probe" && printf data > "$1/data/.write-probe" &&
             test "$(cat "$1/config/.write-probe")" = config && test "$(cat "$1/data/.write-probe")" = data &&
-            rm "$1/config/.write-probe" "$1/data/.write-probe"' _ "$root" \
+            rm "$1/config/.write-probe" "$1/data/.write-probe"' _ . \
         || fail "$case_name permits independent config and data writes as the image identity"
     pass "$case_name permits independent config and data writes as the image identity"
     printf '%s' "$root"
