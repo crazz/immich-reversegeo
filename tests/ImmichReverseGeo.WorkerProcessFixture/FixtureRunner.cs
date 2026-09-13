@@ -66,6 +66,10 @@ internal sealed class FixtureRunner
         }
 
         var request = executeFrame.Request;
+        if (_options.IsProgressBurst)
+        {
+            return await RunProgressBurstAsync(request).ConfigureAwait(false);
+        }
 
         return _options.Scenario switch
         {
@@ -85,6 +89,93 @@ internal sealed class FixtureRunner
             FixtureScenario.Unresponsive => await RunUnresponsiveAsync(request).ConfigureAwait(false),
             _ => throw new InvalidOperationException("The selected fixture scenario is not executable.")
         };
+    }
+
+    private async Task<int> RunProgressBurstAsync(ProcessingRunRequest request)
+    {
+        await EmitStartedAndEligibilityAsync(request, _options.ProgressCount).ConfigureAwait(false);
+        Task stderr = WriteStandardErrorFloodAsync(262_177);
+        long sequence = 4;
+        try
+        {
+            for (long count = 1; count <= _options.ProgressCount; count++)
+            {
+                var progress = new ProgressChanged(request, new ProcessingProgress(count, count, 0, 0));
+                if (_options.Scenario == FixtureScenario.ProgressBurstGap && count == _options.ProgressCount / 2)
+                {
+                    // Bypass only the fixture's writer validation for this intentional
+                    // raw fault. The parent must reject it before coalescer intake.
+                    var invalid = WorkerProtocolMapper.Map(progress, sequence + 1, StartedAtUtc.AddTicks(sequence));
+                    await _output.WriteFrameAsync(_output.SerializeMapped(invalid)).ConfigureAwait(false);
+                    return WorkerProcessExitCodes.Completed;
+                }
+
+                await _output.WriteValidAsync(WorkerProtocolMapper.Map(
+                    progress, sequence, StartedAtUtc.AddTicks(sequence))).ConfigureAwait(false);
+                sequence++;
+                if (_options.BarrierEvery != 0 && count % _options.BarrierEvery == 0)
+                {
+                    await _output.WriteValidAsync(WorkerProtocolMapper.Map(
+                        new ActivityStarted(request, request.RunId, "burst activity"),
+                        sequence, StartedAtUtc.AddTicks(sequence))).ConfigureAwait(false);
+                    sequence++;
+                    foreach (var level in new[] { ProcessingLogLevel.Trace, ProcessingLogLevel.Information,
+                        ProcessingLogLevel.Warning, ProcessingLogLevel.Error })
+                    {
+                        await _output.WriteValidAsync(WorkerProtocolMapper.Map(
+                            new LogEmitted(request, level, $"burst {count} {level}"),
+                            sequence, StartedAtUtc.AddTicks(sequence))).ConfigureAwait(false);
+                        sequence++;
+                    }
+
+                    await _output.WriteValidAsync(WorkerProtocolMapper.Map(
+                        new ActivityEnded(request, request.RunId),
+                        sequence, StartedAtUtc.AddTicks(sequence))).ConfigureAwait(false);
+                    sequence++;
+                }
+            }
+
+            if (_options.Scenario == FixtureScenario.ProgressBurstCrash)
+            {
+                return 42;
+            }
+
+            var outcome = ProcessingRunOutcome.Completed;
+            if (_options.Scenario is FixtureScenario.ProgressBurstCancel or FixtureScenario.ProgressBurstUnresponsive)
+            {
+                await _output.WriteValidAsync(WorkerProtocolMapper.Map(
+                    new LogEmitted(request, ProcessingLogLevel.Information, "fixture:burst-armed"),
+                    sequence, StartedAtUtc.AddTicks(sequence))).ConfigureAwait(false);
+                sequence++;
+                var cancel = await _input.ReadCancelOrEndAsync().ConfigureAwait(false);
+                if (_options.Scenario == FixtureScenario.ProgressBurstUnresponsive)
+                {
+                    await _output.WriteValidAsync(WorkerProtocolMapper.Map(
+                        new LogEmitted(request, ProcessingLogLevel.Information, "fixture:burst-cancel-observed"),
+                        sequence, StartedAtUtc.AddTicks(sequence))).ConfigureAwait(false);
+                    sequence++;
+                    await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously).Task.ConfigureAwait(false);
+                }
+
+                if (cancel is null)
+                {
+                    throw new FixtureInputException("Controller input ended before burst cancellation.");
+                }
+
+                outcome = ProcessingRunOutcome.Cancelled;
+            }
+
+            await EmitTerminalAsync(request, outcome, sequence, _options.ProgressCount,
+                _options.ProgressCount, 0, 0).ConfigureAwait(false);
+            _output.AssertComplete();
+            return outcome == ProcessingRunOutcome.Cancelled
+                ? WorkerProcessExitCodes.Cancelled
+                : WorkerProcessExitCodes.Completed;
+        }
+        finally
+        {
+            await stderr.ConfigureAwait(false);
+        }
     }
 
     private Task<int> RunCoordinateAsync(CoordinateLookupWorkerJobDispatch dispatch)

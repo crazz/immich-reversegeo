@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using Microsoft.Extensions.Hosting;
 
 namespace ImmichReverseGeo.Web.Services;
@@ -91,7 +92,9 @@ internal sealed class CoordinateLookupPageControllerFactory(
     IWorkerJobAdmissionGate admission,
     ICoordinateLookupWorkerClient workerClient,
     ICoordinateLookupSettingsSnapshotProvider settings,
-    CoordinateLookupPageControllerHostLifetime hostLifetime)
+    CoordinateLookupPageControllerHostLifetime hostLifetime,
+    TimeProvider? time = null,
+    WorkerEventDeliveryPolicy? policy = null)
 {
     internal CoordinateLookupPageController Create(Action stateChanged)
     {
@@ -102,7 +105,9 @@ internal sealed class CoordinateLookupPageControllerFactory(
             settings,
             static () => Guid.NewGuid(),
             stateChanged,
-            hostLifetime.Unregister);
+            hostLifetime.Unregister,
+            time ?? TimeProvider.System,
+            policy ?? (WorkerEventDeliveryPolicy.ProductionEnabled ? new WorkerEventDeliveryPolicy() : null));
         if (!hostLifetime.Register(controller))
         {
             _ = controller.DisposeAsync();
@@ -170,6 +175,10 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
     private bool _attemptInProgress;
     private bool _disposeStarted;
     private bool _disposed;
+    private readonly ReadModelNotificationCadence? _cadence;
+    private object _notificationOwner = new();
+    private long _notificationRevision;
+    private CoordinateLookupPageState? _lastNotifiedState;
 
     internal CoordinateLookupPageController(
         IWorkerJobAdmissionGate admission,
@@ -177,7 +186,9 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
         ICoordinateLookupSettingsSnapshotProvider settings,
         Func<Guid> createJobId,
         Action stateChanged,
-        Action<CoordinateLookupPageController>? onDisposed = null)
+        Action<CoordinateLookupPageController>? onDisposed = null,
+        TimeProvider? time = null,
+        WorkerEventDeliveryPolicy? policy = null)
     {
         _admission = admission;
         _workerClient = workerClient;
@@ -185,6 +196,12 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
         _createJobId = createJobId;
         _stateChanged = stateChanged;
         _onDisposed = onDisposed ?? (static _ => { });
+        if (policy is not null)
+        {
+            policy.Validate();
+            _cadence = new(time ?? TimeProvider.System, policy.NotificationCadence, DispatchNotificationAsync);
+            _cadence.Bind(_notificationOwner);
+        }
     }
 
     internal CoordinateLookupPageState State
@@ -202,6 +219,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(submission);
         Task attempt;
+        long generation;
         lock (_gate)
         {
             if (_disposed || _attemptInProgress)
@@ -210,7 +228,10 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             }
 
             _attemptInProgress = true;
-            long generation = ++_generation;
+            generation = ++_generation;
+            _notificationOwner = new object();
+            _notificationRevision = 0;
+            _cadence?.Bind(_notificationOwner);
             _attemptCancellation = new CancellationTokenSource();
             _state = RetainResult(
                 CoordinateLookupPagePhase.Validating,
@@ -223,16 +244,18 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             _currentAttempt = attempt;
         }
 
-        Notify();
+        Notify(generation);
         return attempt;
     }
 
     internal Task CancelAsync()
     {
         ActiveOperation? active;
+        long generation;
         lock (_gate)
         {
             active = _active;
+            generation = _generation;
             if (_disposed
                 || active is null
                 || _state.TerminalObserved
@@ -248,7 +271,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
         return active.RequestStopAsync();
     }
 
@@ -271,6 +294,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             {
                 _disposeStarted = true;
                 _disposed = true;
+                _cadence?.Dispose();
                 _generation++;
                 active = _active;
                 attempt = _currentAttempt;
@@ -292,6 +316,11 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             }
             finally
             {
+                if (_cadence is not null)
+                {
+                    await _cadence.DisposeAsync().ConfigureAwait(false);
+                }
+
                 _onDisposed(this);
                 _disposedCompletion.TrySetResult();
             }
@@ -385,7 +414,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                 return;
             }
 
-            var sink = new EventSink(this, generation, lease.Context);
+            var sink = new AcceptedCapabilityEventSink(lease.Context, message => ApplyEvent(generation, lease.Context, message));
             CoordinateLookupWorkerStartResult start = await _workerClient.StartAsync(
                 lease,
                 request,
@@ -487,7 +516,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
         return true;
     }
 
@@ -515,11 +544,11 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                 false);
         }
 
-        Notify();
+        Notify(generation);
         return true;
     }
 
-    private void ApplyEvent(
+    private bool ApplyEvent(
         long generation,
         WorkerJobContext context,
         WorkerJobOutputMessage message)
@@ -533,7 +562,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                     && (message.JobId != context.JobId
                         || message.JobKind != context.JobKind)))
             {
-                return;
+                return false;
             }
 
             switch (message.Payload)
@@ -596,7 +625,8 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             }
         }
 
-        Notify();
+        Notify(generation);
+        return true;
     }
 
     private void CompleteAttempt(
@@ -655,7 +685,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
     }
 
     private void SetRetainedFailure(long generation, string error)
@@ -673,7 +703,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                 error);
         }
 
-        Notify();
+        Notify(generation);
     }
 
     private void SetBusy(long generation, ExclusiveHeavyOwnerBusyMetadata busy)
@@ -701,7 +731,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                 null);
         }
 
-        Notify();
+        Notify(generation);
     }
 
     private void SetUnavailable(long generation, string message, bool retainResult)
@@ -727,7 +757,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
     }
 
     private CoordinateLookupPageState RetainResult(
@@ -754,12 +784,26 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
         return !_disposed && generation == _generation;
     }
 
-    private void Notify()
+    internal NotificationCadenceObservation? NotificationObservation => _cadence?.Observation;
+
+    private void Notify(long generation)
     {
         lock (_gate)
         {
-            if (_disposed)
+            if (!CanMutate(generation))
             {
+                return;
+            }
+
+            if (_cadence is not null)
+            {
+                if (!ReferenceEquals(_lastNotifiedState, _state))
+                {
+                    _lastNotifiedState = _state;
+                    _cadence.Signal(_notificationOwner, ++_notificationRevision,
+                        final: !_state.IsActive || _state.TerminalObserved);
+                }
+
                 return;
             }
         }
@@ -772,6 +816,20 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
         {
             // Rendering is observational and cannot own worker finality.
         }
+    }
+
+    private ValueTask DispatchNotificationAsync(object owner, long revision)
+    {
+        lock (_gate)
+        {
+            if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+            {
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        _stateChanged();
+        return ValueTask.CompletedTask;
     }
 
     private static bool TryValidate(
@@ -871,18 +929,4 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
         }
     }
 
-    private sealed class EventSink(
-        CoordinateLookupPageController owner,
-        long generation,
-        WorkerJobContext context) : IWorkerJobEventSink
-    {
-        public ValueTask AcceptAsync(
-            WorkerJobOutputMessage message,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            owner.ApplyEvent(generation, context, message);
-            return ValueTask.CompletedTask;
-        }
-    }
 }

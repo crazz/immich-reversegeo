@@ -1,4 +1,7 @@
 using System.Threading.Channels;
+using ImmichReverseGeo.Tests.ChildWorkerCancellation;
+using ImmichReverseGeo.Tests.WorkerEventDelivery;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
@@ -12,6 +15,128 @@ public sealed class CacheMutationPageControllerTests
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
     private static readonly Guid JobId =
         Guid.Parse("11111111-2222-3333-4444-555555555555");
+
+    [TestMethod]
+    [TestCategory("Change65")]
+    public async Task AcceptedLosslessBurst_CoalescesOnlyNotificationsAndFlushesFinalResult()
+    {
+        var clock = new CancellationTestClock();
+        var admission = new RecordingAdmissionGate();
+        var worker = new RecordingWorkerClient();
+        var notifications = Channel.CreateUnbounded<CacheMutationPageState>();
+        CacheMutationPageController? controller = null;
+        controller = new(admission, worker, () => JobId,
+            () => { notifications.Writer.TryWrite(controller!.State); return Task.CompletedTask; },
+            () => Task.CompletedTask, time: clock, policy: new WorkerEventDeliveryPolicy());
+        await using var owned = controller;
+        Task run = controller.RefreshAsync(CacheMutationSource.Overture, "CHE");
+        FakeWorkerSession? session = null;
+        try
+        {
+            session = await worker.WaitForSessionAsync();
+            await session.CompletionObserved.WaitAsync(Bound);
+            await using var delivery = new CapabilityDeliveryHarness(admission.Lease!, worker.EventSink!, clock, 1002);
+            var ready = WorkerJobProtocolMapper.Ready(1, Result().StartedAtUtc, new WorkerJobReadyPayload([WorkerJobKind.CacheMutation]));
+            await delivery.SendAsync(ready);
+            await delivery.SendAsync(Started(JobId), 2);
+            for (int index = 1; index <= 1000; index++)
+            {
+                await delivery.SendAsync(Progress(JobId, WorkerJobKind.CacheMutation, message: $"Cache step {index}"), index + 2);
+            }
+
+            await delivery.Acknowledged.WaitAsync(Bound);
+            Assert.AreEqual("Cache step 1000", controller.State.Status, "latest state is readable before a cadence tick");
+            Assert.AreEqual(0L, controller.NotificationObservation!.OrdinaryDispatched);
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            var current = await notifications.Reader.ReadAsync().AsTask().WaitAsync(Bound);
+            Assert.AreEqual("Cache step 1000", current.Status);
+            Assert.AreEqual(1L, controller.NotificationObservation.OrdinaryDispatched);
+            await delivery.SendAsync(Terminal(Result()), 1003);
+            Assert.AreEqual(1003L, delivery.Queue.Observation.DeliveredLossless);
+            Assert.AreEqual(0L, delivery.Queue.Observation.ReplacedSnapshots, "cache steps are not absolute snapshots");
+            Assert.AreEqual(1L, controller.NotificationObservation.FinalAccepted, "terminal dispatch precedes delivery finality");
+            session.Complete(new CacheMutationWorkerOutcome.Completed(Result()));
+            await run.WaitAsync(Bound);
+            CacheMutationPageState final;
+            do
+            {
+                final = await notifications.Reader.ReadAsync().AsTask().WaitAsync(Bound);
+            }
+            while (final.Phase != CacheMutationPagePhase.Completed);
+            Assert.IsNotNull(final.Result);
+            Assert.IsFalse(final.HasAdmittedOperation);
+            Assert.AreEqual(2L, controller.NotificationObservation.FinalAccepted, "completed result has its own immediate final revision");
+            Assert.AreEqual(1, admission.Lease!.DisposeCount);
+        }
+        finally
+        {
+            (session ?? worker.LastSession)?.Complete(new CacheMutationWorkerOutcome.Cancelled());
+            await run.WaitAsync(Bound);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change65")]
+    public async Task AcceptedDelivery_RejectsOldGenerationWithoutMutatingOrReleasingCurrentJob()
+    {
+        var clock = new CancellationTestClock();
+        var admission = new RecordingAdmissionGate();
+        var worker = new RecordingWorkerClient();
+        await using var controller = new CacheMutationPageController(admission, worker, () => JobId,
+            () => Task.CompletedTask, () => Task.CompletedTask, time: clock, policy: new WorkerEventDeliveryPolicy());
+        Task firstRun = controller.RefreshAsync(CacheMutationSource.Overture, "CHE");
+        var firstSession = await worker.WaitForSessionAsync();
+        var firstLease = admission.Lease!;
+        var delivery = new CapabilityDeliveryHarness(firstLease, worker.EventSink!, clock, 3);
+        var ready = WorkerJobProtocolMapper.Ready(1, Result().StartedAtUtc, new WorkerJobReadyPayload([WorkerJobKind.CacheMutation]));
+        Task? secondRun = null;
+        FakeWorkerSession? secondSession = null;
+        StaleWorkerEventDeliveryException? stale = null;
+        try
+        {
+            await delivery.SendAsync(ready);
+            await delivery.SendAsync(Started(JobId), 2);
+            await delivery.SendAsync(Progress(JobId, WorkerJobKind.CacheMutation, message: "first generation"), 3);
+            await delivery.Acknowledged.WaitAsync(Bound);
+            firstSession.Complete(new CacheMutationWorkerOutcome.Cancelled());
+            await firstRun.WaitAsync(Bound);
+            secondRun = controller.RefreshAsync(CacheMutationSource.Overture, "CHE");
+            secondSession = await worker.WaitForSessionAsync();
+            var secondLease = admission.Lease!;
+            var current = controller.State;
+            await delivery.SendAsync(Progress(JobId, WorkerJobKind.CacheMutation, message: "stale generation"), 4);
+            stale = await Assert.ThrowsExactlyAsync<StaleWorkerEventDeliveryException>(() => delivery.Queue.Completion.WaitAsync(Bound));
+            Assert.AreEqual(current, controller.State, "authenticated old stream still cannot mutate the new page generation");
+            Assert.AreEqual(1L, delivery.Queue.Observation.StaleRejected);
+            Assert.AreEqual(1, firstLease.DisposeCount);
+            Assert.AreEqual(0, secondLease.DisposeCount, "old delivery cannot release the new owner");
+            await using var next = new CapabilityDeliveryHarness(secondLease, worker.EventSink!, clock, 3);
+            await next.SendAsync(ready);
+            await next.SendAsync(Started(JobId), 2);
+            await next.SendAsync(Progress(JobId, WorkerJobKind.CacheMutation, message: "current generation"), 3);
+            await next.Acknowledged.WaitAsync(Bound);
+            Assert.AreEqual("current generation", controller.State.Status);
+        }
+        finally
+        {
+            firstSession.Complete(new CacheMutationWorkerOutcome.Cancelled());
+            secondSession?.Complete(new CacheMutationWorkerOutcome.Cancelled());
+            await firstRun.WaitAsync(Bound);
+            if (secondRun is not null)
+            {
+                await secondRun.WaitAsync(Bound);
+            }
+
+            try
+            {
+                await delivery.DisposeAsync();
+            }
+            catch (StaleWorkerEventDeliveryException failure) when (ReferenceEquals(failure, stale))
+            {
+                // The already asserted original delivery fault is joined once.
+            }
+        }
+    }
 
     [TestMethod]
     public async Task Refresh_UsesOneEnvelopeIdentityAndImmutableRefreshRequest()
@@ -1090,6 +1215,7 @@ public sealed class CacheMutationPageControllerTests
         private readonly List<string> _ledger = ledger ?? [];
         internal int Starts { get; private set; }
         internal CacheMutationRequest? Request { get; private set; }
+        internal IWorkerJobEventSink? EventSink { get; private set; }
         internal bool StartUnavailable { get; init; }
         internal TaskCompletionSource? StartRelease { get; init; }
         internal int? ChildProcessId { get; init; }
@@ -1105,6 +1231,7 @@ public sealed class CacheMutationPageControllerTests
         {
             Starts++;
             Request = request;
+            EventSink = eventSink;
             _startRequests.Writer.TryWrite(request);
             if (StartRelease is not null)
             {

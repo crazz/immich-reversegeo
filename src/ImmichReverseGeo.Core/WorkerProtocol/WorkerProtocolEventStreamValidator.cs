@@ -37,19 +37,29 @@ public sealed class WorkerProtocolEventStreamValidator
     private bool _terminal;
     private readonly HashSet<Guid> _openActivities = [];
 
+    internal long LastAcceptedSequence => _lastSequence;
+
     // Lets typed consumers validate before their own projection without advancing this cursor.
     internal WorkerProtocolParseResult Preview(WorkerProtocolEvent @event)
+        => PreviewProjected(@event, 0);
+
+    // Only the Web accepted-event boundary can supply a nonzero count, after
+    // authenticating the exact coalescer delivery. Raw Validate always uses zero.
+    internal WorkerProtocolParseResult PreviewProjected(WorkerProtocolEvent @event, long suppressedProgress)
     {
         ArgumentNullException.ThrowIfNull(@event);
-        var failure = ValidateWithoutMutation(@event);
+        var failure = ValidateWithoutMutation(@event, suppressedProgress);
         return failure is null
             ? WorkerProtocolParseResult.Success(@event)
             : WorkerProtocolParseResult.Failed(failure.Code, failure.Diagnostic, failure.Detail);
     }
 
     public WorkerProtocolParseResult Validate(WorkerProtocolEvent @event)
+        => ValidateProjected(@event, 0);
+
+    internal WorkerProtocolParseResult ValidateProjected(WorkerProtocolEvent @event, long suppressedProgress)
     {
-        var result = Preview(@event);
+        var result = PreviewProjected(@event, suppressedProgress);
         if (result.IsSuccess)
         {
             Commit(@event);
@@ -78,8 +88,16 @@ public sealed class WorkerProtocolEventStreamValidator
         return WorkerProtocolStreamFinalizationResult.Complete();
     }
 
-    private WorkerProtocolFailure? ValidateWithoutMutation(WorkerProtocolEvent @event)
+    private WorkerProtocolFailure? ValidateWithoutMutation(WorkerProtocolEvent @event, long suppressedProgress)
     {
+        if (suppressedProgress < 0 || suppressedProgress > long.MaxValue - _lastSequence
+            || (suppressedProgress != 0
+                && (!_eligibility || @event.Type != WorkerProtocolV1.ProgressChangedType
+                    || @event.Payload is not ProgressChangedPayload)))
+        {
+            return Failure(WorkerProtocolFailureCode.InvalidSequence, "Only accepted progress may explain a projection sequence gap.");
+        }
+
         if (_lastSequence == 0)
         {
             if (@event.Type != WorkerProtocolV1.ReadyType || @event.Sequence != 1)
@@ -87,7 +105,7 @@ public sealed class WorkerProtocolEventStreamValidator
                 return Failure(WorkerProtocolFailureCode.InvalidLifecycle, "The first event must be ready at sequence one.", WorkerProtocolFailureDetail.Readiness);
             }
         }
-        else if (WorkerProtocolSequence.ValidateSuccessor(_lastSequence, @event.Sequence) is { } sequenceFailure)
+        else if (WorkerProtocolSequence.ValidateSuccessor(_lastSequence + suppressedProgress, @event.Sequence) is { } sequenceFailure)
         {
             return sequenceFailure;
         }
@@ -179,7 +197,10 @@ public sealed class WorkerProtocolEventStreamValidator
         return @event.Payload switch
         {
             ProgressChangedPayload progress when progress.ProcessedCount > _eligibleCount => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress must not exceed eligibility.", WorkerProtocolFailureDetail.ProgressConsistency),
-            ProgressChangedPayload progress when progress.ProcessedCount != _processedCount + 1 => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress must advance by one disposition.", WorkerProtocolFailureDetail.ProgressConsistency),
+            ProgressChangedPayload progress when suppressedProgress >= long.MaxValue - _processedCount
+                || progress.ProcessedCount != _processedCount + 1 + suppressedProgress => Failure(WorkerProtocolFailureCode.InvalidLifecycle, suppressedProgress == 0
+                    ? "Progress must advance by one disposition."
+                    : "Progress must advance by exactly the accepted snapshot count.", WorkerProtocolFailureDetail.ProgressConsistency),
             ProgressChangedPayload progress when progress.UpdatedCount < _updatedCount || progress.SkippedCount < _skippedCount || progress.FailedCount < _failedCount => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Progress counts must not regress.", WorkerProtocolFailureDetail.ProgressConsistency),
             ActivityStartedPayload started when _openActivities.Contains(started.ActivityId) => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "An activity may not start twice.", WorkerProtocolFailureDetail.ActivityCardinality),
             ActivityEndedPayload ended when !_openActivities.Contains(ended.ActivityId) => Failure(WorkerProtocolFailureCode.InvalidLifecycle, "Activity end requires a matching start.", WorkerProtocolFailureDetail.ActivityCardinality),

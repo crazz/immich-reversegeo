@@ -22,6 +22,8 @@ Wait for the run to finish before starting another pass. Work that does not obse
 
 Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. The Dashboard and Logs continue to show the run while that worker is active.
 
+During busy runs, progress and activity displays refresh up to ten times per second. Counters can jump over intermediate values. Completion, cancellation, and failure updates appear as soon as the worker result and cleanup allow. This display pacing also applies to Lookup and cache refreshes; it does not discard worker logs or change which assets are processed.
+
 The Service Status card stays visible while database statistics load or when the database is unavailable. It shows:
 
 - **Deployment mode:** `Standard` or `Web-only`

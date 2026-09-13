@@ -250,24 +250,34 @@ public class AdministrativeAreaResolverTerritoryTests
 
             var firstResolution = first.Resolver.ResolveAsync(fixture.Latitude, fixture.Longitude, new ProcessingConfig(), firstSession);
             var secondResolution = second.Resolver.ResolveAsync(fixture.Latitude, fixture.Longitude, new ProcessingConfig(), secondSession);
-            await Task.WhenAll(WaitAsync(first.Entered.Task), WaitAsync(second.Entered.Task));
+            try
+            {
+                await Task.WhenAll(WaitAsync(first.Entered.Task), WaitAsync(second.Entered.Task));
+                Assert.IsFalse(firstResolution.IsCompleted, "first source stays held while the second country index initializes");
 
-            var firstStart = reporter.EventsFor(firstRequest).OfType<ActivityStarted>().Single(activity => activity.Label == $"Downloading Overture administrative cache for {fixture.Alpha3}...");
-            var secondStart = reporter.EventsFor(secondRequest).OfType<ActivityStarted>().Single(activity => activity.Label == $"Downloading Overture administrative cache for {fixture.Alpha3}...");
-            Assert.AreNotEqual(firstStart.ActivityId, secondStart.ActivityId);
+                var firstStart = reporter.EventsFor(firstRequest).OfType<ActivityStarted>().Single(activity => activity.Label == $"Downloading Overture administrative cache for {fixture.Alpha3}...");
+                var secondStart = reporter.EventsFor(secondRequest).OfType<ActivityStarted>().Single(activity => activity.Label == $"Downloading Overture administrative cache for {fixture.Alpha3}...");
+                Assert.AreNotEqual(firstStart.ActivityId, secondStart.ActivityId);
 
-            second.Release.TrySetResult();
-            await WaitAsync(secondResolution);
-            Assert.AreEqual(0, reporter.EventsFor(firstRequest).OfType<ActivityEnded>().Count(activity => activity.ActivityId == firstStart.ActivityId));
-            Assert.AreEqual(1, reporter.EventsFor(secondRequest).OfType<ActivityEnded>().Count(activity => activity.ActivityId == secondStart.ActivityId));
+                second.Release.TrySetResult();
+                await WaitAsync(secondResolution);
+                Assert.AreEqual(0, reporter.EventsFor(firstRequest).OfType<ActivityEnded>().Count(activity => activity.ActivityId == firstStart.ActivityId));
+                Assert.AreEqual(1, reporter.EventsFor(secondRequest).OfType<ActivityEnded>().Count(activity => activity.ActivityId == secondStart.ActivityId));
 
-            first.Release.TrySetResult();
-            await WaitAsync(firstResolution);
-            Assert.AreEqual(1, reporter.EventsFor(firstRequest).OfType<ActivityEnded>().Count(activity => activity.ActivityId == firstStart.ActivityId));
-            AssertInformationLogs(reporter.EventsFor(firstRequest), ExpectedFreshOvertureLogs(fixture.Alpha3, fixture.DisplayName), fixture.Label);
-            AssertInformationLogs(reporter.EventsFor(secondRequest), ExpectedFreshOvertureLogs(fixture.Alpha3, fixture.DisplayName), fixture.Label);
-            AssertActivityIdsPaired(reporter.EventsFor(firstRequest), 1, firstStart.ActivityId);
-            AssertActivityIdsPaired(reporter.EventsFor(secondRequest), 1, secondStart.ActivityId);
+                first.Release.TrySetResult();
+                await WaitAsync(firstResolution);
+                Assert.AreEqual(1, reporter.EventsFor(firstRequest).OfType<ActivityEnded>().Count(activity => activity.ActivityId == firstStart.ActivityId));
+                AssertInformationLogs(reporter.EventsFor(firstRequest), ExpectedFreshOvertureLogs(fixture.Alpha3, fixture.DisplayName), fixture.Label);
+                AssertInformationLogs(reporter.EventsFor(secondRequest), ExpectedFreshOvertureLogs(fixture.Alpha3, fixture.DisplayName), fixture.Label);
+                AssertActivityIdsPaired(reporter.EventsFor(firstRequest), 1, firstStart.ActivityId);
+                AssertActivityIdsPaired(reporter.EventsFor(secondRequest), 1, secondStart.ActivityId);
+            }
+            finally
+            {
+                first.Release.TrySetResult();
+                second.Release.TrySetResult();
+                await WaitAsync(Task.WhenAll(firstResolution, secondResolution));
+            }
         }
         finally
         {
@@ -414,7 +424,7 @@ public class AdministrativeAreaResolverTerritoryTests
                 SourceOperation = async (iso3, ct) =>
                 {
                     entered.TrySetResult();
-                    await release.Task.WaitAsync(TestTimeout, ct);
+                    await release.Task.WaitAsync(ct);
                     CreateReadyOvertureCache(root, iso3);
                 }
             });

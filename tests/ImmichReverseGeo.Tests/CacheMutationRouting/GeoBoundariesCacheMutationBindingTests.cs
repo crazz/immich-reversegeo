@@ -5,6 +5,8 @@ using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Gadm.Services;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Tests.LookupWorkerRouting;
+using ImmichReverseGeo.Tests.ChildWorkerCancellation;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.AspNetCore.Components.RenderTree;
@@ -25,6 +27,59 @@ namespace ImmichReverseGeo.Tests.CacheMutationRouting;
 public sealed class GeoBoundariesCacheMutationBindingTests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
+
+    [TestMethod]
+    [TestCategory("Change65")]
+    public async Task DataCadence_UsesActualControllerCallbackForBurstAndImmediateFinalState()
+    {
+        var clock = new CancellationTestClock();
+        await using var fixture = await RenderedPageFixture.CreateAsync(
+            includeOverture: true, includeGadm: false, time: clock, policy: new WorkerEventDeliveryPolicy());
+        var controller = (CacheMutationPageController)fixture.Page.GetType()
+            .GetField("_cacheController", BindingFlags.Instance | BindingFlags.NonPublic)!.GetValue(fixture.Page)!;
+        fixture.Click = controller.RefreshAsync(CacheMutationSource.Overture, "CHE");
+        var session = await fixture.Worker.WaitForSessionAsync();
+        await session.CompletionObserved.WaitAsync(Bound);
+        int before = fixture.Renderer.RenderCount;
+        for (int index = 1; index <= 1000; index++)
+        {
+            await session.EmitAsync(new WorkerJobOutputMessage(
+                WorkerJobProtocolV2.ProgressCategory, WorkerJobProtocolV2.ProgressChangedType, index + 1,
+                DateTimeOffset.UnixEpoch, session.JobId, WorkerJobKind.CacheMutation,
+                new CacheMutationProgressPayload(CacheMutationProgressStep.ValidatingCandidate,
+                    CacheMutationSource.Overture, CacheMutationOperation.Refresh, "CHE", $"Rendered cache step {index}", null)));
+        }
+
+        Assert.AreEqual(0L, controller.NotificationObservation!.OrdinaryDispatched);
+        Assert.AreEqual(before, fixture.Renderer.RenderCount);
+        Task rendered = fixture.Renderer.NextRenderAsync();
+        clock.Advance(TimeSpan.FromMilliseconds(100));
+        await rendered.WaitAsync(Bound);
+        StringAssert.Contains((await fixture.Renderer.ReadAsync()).Text, "Rendered cache step 1000");
+        Assert.AreEqual(before + 1, fixture.Renderer.RenderCount);
+        AssertMutationControls((await fixture.Renderer.ReadAsync()).Frames, disabled: true);
+        session.Complete(new CacheMutationWorkerOutcome.Completed(Result("cadence-release")));
+        await fixture.Click.WaitAsync(Bound);
+        await fixture.Renderer.Dispatcher.InvokeAsync(() => { });
+        Assert.AreEqual(1L, controller.NotificationObservation.FinalAccepted);
+        Assert.AreEqual(CacheMutationPagePhase.Completed, controller.State.Phase);
+        // Reload is an existing separate callback; final cadence still posts the complete result.
+        while (true)
+        {
+            Task next = fixture.Renderer.NextRenderAsync();
+            if ((await fixture.Renderer.ReadAsync()).Text.Contains("Cache refresh completed.", StringComparison.Ordinal))
+            {
+                break;
+            }
+
+            await next.WaitAsync(Bound);
+        }
+
+        StringAssert.Contains((await fixture.Renderer.ReadAsync()).Text, "Cache refresh completed.");
+        AssertMutationControls((await fixture.Renderer.ReadAsync()).Frames, disabled: false);
+        clock.Advance(TimeSpan.FromSeconds(1));
+        Assert.AreEqual(1L, controller.NotificationObservation.OrdinaryDispatched);
+    }
 
     [TestMethod]
     [DataRow("completed-after-publication")]
@@ -1513,7 +1568,9 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             CacheMaintenanceAdmissionResult? maintenanceRejection = null,
             TaskCompletionSource? maintenanceRelease = null,
             CacheInventoryOptions? inventoryOptions = null,
-            int overtureJunkEntries = 0)
+            int overtureJunkEntries = 0,
+            TimeProvider? time = null,
+            WorkerEventDeliveryPolicy? policy = null)
         {
             var root = new TemporaryDirectory();
             if (includeOverture)
@@ -1547,7 +1604,7 @@ public sealed class GeoBoundariesCacheMutationBindingTests
             };
             var worker = new RecordingWorkerClient { StartRelease = startRelease };
             var lifetime = new CacheMutationPageControllerHostLifetime();
-            var factory = new CacheMutationPageControllerFactory(admission, worker, lifetime);
+            var factory = new CacheMutationPageControllerFactory(admission, worker, lifetime, time: time, policy: policy);
             var inventory = CreateInventory(root.Path, inventoryOptions);
             var page = new ImmichReverseGeo.Web.Components.Pages.GeoBoundaries();
             SetInjected(page, "CacheInventory", inventory);

@@ -1,6 +1,6 @@
 [
   {
-    "Key": "ImmichReverseGeo.Core.Processing.IProcessingEventReporter|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_2",
+    "Key": "ImmichReverseGeo.Core.Processing.IProcessingEventReporter|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_3",
     "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Core.Processing.IProcessingEventReporter",
     "Lifetime": "Singleton",
@@ -141,7 +141,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.IChildProcessingRunBackend|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_3",
+    "Key": "ImmichReverseGeo.Web.Services.IChildProcessingRunBackend|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_4",
     "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.IChildProcessingRunBackend",
     "Lifetime": "Scoped",
@@ -197,7 +197,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.IManualProcessingRunCoordinator|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_5",
+    "Key": "ImmichReverseGeo.Web.Services.IManualProcessingRunCoordinator|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_6",
     "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.Services.IManualProcessingRunCoordinator",
     "Lifetime": "Singleton",
@@ -316,7 +316,9 @@
     "Service": "ImmichReverseGeo.Web.Services.ProcessAssetsWebStatus",
     "Lifetime": "Singleton",
     "Dependencies": [
-      "ImmichReverseGeo.Web.Services.ProcessAssetsWebStatus"
+      "ImmichReverseGeo.Web.Services.ProcessAssetsWebStatus",
+      "ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDeliveryPolicy",
+      "System.TimeProvider"
     ]
   },
   {
@@ -335,7 +337,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.Services.ProcessingRunCoordinator|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec__DisplayClass2_0.\u003CAddProcessingCoordinatorServices\u003Eb__4",
+    "Key": "ImmichReverseGeo.Web.Services.ProcessingRunCoordinator|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec__DisplayClass2_0.\u003CAddProcessingCoordinatorServices\u003Eb__5",
     "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec__DisplayClass2_0",
     "Service": "ImmichReverseGeo.Web.Services.ProcessingRunCoordinator",
     "Lifetime": "Singleton",
@@ -352,6 +354,17 @@
       "Microsoft.Extensions.Logging.ILogger\u00601[ImmichReverseGeo.Web.Services.ProcessingRunCoordinator]",
       "Microsoft.Extensions.Options.IOptions\u00601[Microsoft.Extensions.Hosting.HostOptions]",
       "System.Func\u00601[System.Guid]",
+      "System.TimeProvider"
+    ]
+  },
+  {
+    "Key": "ImmichReverseGeo.Web.Services.ProcessingState|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_1",
+    "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec",
+    "Service": "ImmichReverseGeo.Web.Services.ProcessingState",
+    "Lifetime": "Singleton",
+    "Dependencies": [
+      "ImmichReverseGeo.Web.Services.ProcessingState",
+      "ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDeliveryPolicy",
       "System.TimeProvider"
     ]
   },
@@ -414,7 +427,7 @@
     ]
   },
   {
-    "Key": "ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridgeFactory|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_1",
+    "Key": "ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridgeFactory|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_2",
     "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec",
     "Service": "ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridgeFactory",
     "Lifetime": "Singleton",
@@ -483,7 +496,7 @@
     ]
   },
   {
-    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_6",
+    "Key": "Microsoft.Extensions.Hosting.IHostedService|ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec.\u003CAddProcessingCoordinatorServices\u003Eb__2_7",
     "Owner": "ImmichReverseGeo.Web.Services.ProcessingServiceRegistration\u002B\u003C\u003Ec",
     "Service": "Microsoft.Extensions.Hosting.IHostedService",
     "Lifetime": "Singleton",

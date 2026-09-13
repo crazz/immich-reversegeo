@@ -231,6 +231,17 @@ public sealed class WebOnlyDeploymentModeTests
                 first.Descriptor,
                 new EligibilityDetermined(firstRequest, 3),
                 3));
+        // Wait for the real projection before advancing virtual UI time. The
+        // old synchronous OnChanged callback no longer acknowledges mutation.
+        using (var mutationBound = new CancellationTokenSource(Bound))
+        {
+            while (state.LastRunStarted is null || state.TotalUnprocessed != 3)
+            {
+                mutationBound.Token.ThrowIfCancellationRequested();
+                await Task.Yield();
+            }
+        }
+        fixture.Clock.Advance(TimeSpan.FromMilliseconds(100));
         await activeState.WaitAsync(Bound);
         Assert.IsTrue(state.IsRunning, "manual-active-visible");
         Assert.AreEqual(3L, state.TotalUnprocessed, "manual-active-progress-visible");

@@ -6,6 +6,7 @@ using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
 namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -46,6 +47,8 @@ internal sealed class ProcessAssetsWorkerJobEventSink(
 {
     private readonly ProcessAssetsWorkerJobProjection _projection = new(request);
 
+    internal IAcceptedWorkerEventSink? AcceptedDeliverySink => processingSink as IAcceptedWorkerEventSink;
+
     public ValueTask AcceptAsync(
         WorkerJobOutputMessage message,
         CancellationToken cancellationToken)
@@ -73,6 +76,7 @@ internal sealed record ChildWorkerLauncherOptions
     internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
     internal TimeSpan ReadyTimeout { get; init; } = TimeSpan.FromSeconds(30);
     internal ChildWorkerEvidenceFinalityGate? EvidenceFinalityGate { get; init; }
+    internal WorkerEventDeliveryPolicy? EventDeliveryPolicy { get; init; }
 
     internal void Validate()
     {
@@ -82,6 +86,7 @@ internal sealed record ChildWorkerLauncherOptions
     private static void Validate(ChildWorkerLauncherOptions options)
     {
         ArgumentNullException.ThrowIfNull(options.TimeProvider, nameof(options));
+        options.EventDeliveryPolicy?.Validate();
         if (options.ReadyTimeout != Timeout.InfiniteTimeSpan && options.ReadyTimeout <= TimeSpan.Zero)
         {
             throw new ArgumentOutOfRangeException(nameof(options));
@@ -257,6 +262,7 @@ internal sealed record ChildWorkerCompletionObservation(
     InternalWorkerProtocolVersion ProtocolVersion)
 {
     internal bool AcceptedRunStarted { get; init; }
+    internal WorkerEventDeliveryObservation? EventDelivery { get; init; }
     internal Guid JobId => RunId;
 }
 

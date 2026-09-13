@@ -25,9 +25,14 @@ public sealed class ManualChildWorkerControlPlaneTests
     {
         await using var fixture = ManualChildFixture.Create();
         Task? stop = null;
+        var stopObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         void StopWhenPending()
         {
             stop ??= fixture.Coordinator.StopActiveRun();
+            if (stop is not null)
+            {
+                stopObserved.TrySetResult();
+            }
         }
 
         fixture.State.OnChanged += StopWhenPending;
@@ -38,6 +43,7 @@ public sealed class ManualChildWorkerControlPlaneTests
                 await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
                 "pending-stop-admission");
             await fixture.Launcher.Entered.Task.WaitAsync(Bound);
+            await stopObserved.Task.WaitAsync(Bound);
 
             ProcessingRunRequest request = fixture.Launcher.Request!;
             Assert.IsNotNull(stop, "pending-stop-operation");

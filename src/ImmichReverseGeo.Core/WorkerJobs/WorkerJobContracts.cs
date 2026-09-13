@@ -121,12 +121,19 @@ public sealed record ProcessAssetsResult : IWorkerJobResult
     }
 }
 
+internal enum WorkerProgressReplaceability
+{
+    Lossless,
+    ProcessAssetsAbsoluteCounts
+}
+
 public sealed record WorkerJobDescriptor
 {
     public WorkerJobKind Kind { get; }
     public Type RequestType { get; }
     public Type ResultType { get; }
     public WorkerJobArbitrationMetadata Arbitration { get; }
+    internal WorkerProgressReplaceability ProgressReplaceability { get; init; }
 
     public WorkerJobDescriptor(
         WorkerJobKind kind,
@@ -170,7 +177,10 @@ public static class WorkerJobDescriptors
             WorkerJobResourceClass.ExclusiveHeavyWorker,
             IsHeavy: true,
             IsCancellable: true,
-            IsGeodataBearing: true));
+            IsGeodataBearing: true))
+    {
+        ProgressReplaceability = WorkerProgressReplaceability.ProcessAssetsAbsoluteCounts
+    };
 
     public static WorkerJobDescriptor CoordinateLookup { get; } = new(
         WorkerJobKind.CoordinateLookup,

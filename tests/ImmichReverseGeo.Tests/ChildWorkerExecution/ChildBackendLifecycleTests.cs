@@ -362,16 +362,13 @@ public sealed class ChildBackendLifecycleTests
                 slowEntered.TrySetResult();
                 releaseSlow.Task.GetAwaiter().GetResult();
             }
-            else if (snapshot.Worker == ProcessAssetsWorkerState.Running)
-            {
-                throwObserved.TrySetResult();
-                throw new InvalidOperationException("Synthetic status observer failure.");
-            }
             else if (snapshot.Worker == ProcessAssetsWorkerState.Cancelling)
             {
                 _ = fixture.Status.Current;
                 using var nested = fixture.Status.Subscribe(_ => { });
                 reentrantObserved.TrySetResult();
+                throwObserved.TrySetResult();
+                throw new InvalidOperationException("Synthetic status observer failure.");
             }
         });
         using var completion = fixture.Status.Subscribe(snapshot =>
@@ -629,15 +626,15 @@ public sealed class ChildBackendLifecycleTests
     [TestMethod]
     public async Task WebComposition_ChildProjectionFailureUsesOneClassifiedFailureWithoutFallbackOrReplacement()
     {
-        await using var fixture = WebChildBackendFixture.Create(new ImmediateInvocationBuilder());
         var projectionCallback = 0;
-        void FailFirstProjection()
+        void FailFirstProjection(ProcessingEvent processingEvent)
         {
-            if (Interlocked.Exchange(ref projectionCallback, 1) == 0)
+            if (processingEvent is EligibilityDetermined && Interlocked.Exchange(ref projectionCallback, 1) == 0)
             {
                 throw new InvalidOperationException("Synthetic projection callback failure.");
             }
         }
+        await using var fixture = WebChildBackendFixture.Create(new ImmediateInvocationBuilder(), beforeProjection: FailFirstProjection);
 
         Assert.AreEqual(
             ProcessingRunAdmissionResult.Accepted,
@@ -646,7 +643,6 @@ public sealed class ChildBackendLifecycleTests
         await fixture.Launcher.WaitUntilEnteredAsync();
         ProcessingRunRequest request = fixture.Launcher.Request!;
         SessionTestProcess process = fixture.Launcher.Process!;
-        fixture.State.OnChanged += FailFirstProjection;
         try
         {
             process.StandardOutputSource.Enqueue(SessionTestSupport.Frame(WorkerProtocolMapper.Ready(1, SessionTestSupport.Start)));
@@ -671,11 +667,11 @@ public sealed class ChildBackendLifecycleTests
         }
         finally
         {
-            fixture.State.OnChanged -= FailFirstProjection;
+            process.Exit(0);
         }
 
-        process.Exit(0);
         await fixture.Coordinator.WaitForActiveRunAsync().WaitAsync(Bound);
+        Assert.AreEqual(1, projectionCallback, "failure was injected into actual eligibility projection, not an isolated UI observer");
 
         ProcessingRunFinalizationReceipt receipt = fixture.Reporter.GetFinalizationReceipt(request)!;
         Assert.AreEqual(ProcessingRunOutcome.Failed, receipt.Result.Outcome, "child-projection-classified-failed");
@@ -864,7 +860,8 @@ public sealed class ChildBackendLifecycleTests
             SessionInputStream? firstInput = null,
             Dictionary<string, string?>? firstEnvironment = null,
             IProcessingWorkDetector? scheduledGate = null,
-            bool gateAcceptedStatus = false)
+            bool gateAcceptedStatus = false,
+            Action<ProcessingEvent>? beforeProjection = null)
         {
             string root = Path.Combine(Path.GetTempPath(), "immich-reversegeo-change33", Guid.NewGuid().ToString("N"));
             var launcher = new ControlledSessionLauncher(
@@ -882,6 +879,11 @@ public sealed class ChildBackendLifecycleTests
                     Path.Combine(root, "data"),
                     Path.Combine(root, "config"),
                     DeploymentMode.Standard));
+                if (beforeProjection is not null)
+                {
+                    services.RemoveAll<ProcessingStateEventReporter>();
+                    services.AddSingleton(sp => new ProcessingStateEventReporter(sp.GetRequiredService<ProcessingState>(), beforeProjection));
+                }
                 services.RemoveAll<IProcessAssetsWorkerStatusSink>();
                 services.AddSingleton(sp => new RecordingStatusSink(
                     sp.GetRequiredService<ProcessAssetsWebStatus>(),

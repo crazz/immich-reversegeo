@@ -4,6 +4,7 @@ using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
@@ -84,7 +85,10 @@ public sealed partial class ChildWorkerLaunchingTests
 
     [TestMethod]
     [TestCategory("Change51")]
-    public async Task CacheMutationClient_HoldsOutcomeUntilProcessAndBothStreamsReachFinality()
+    [TestCategory("Change65")]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task CacheMutationClient_HoldsOutcomeUntilProcessAndBothStreamsReachFinality(bool acceptedDelivery)
     {
         var process = new ByteProcess(951);
         var factory = new RecordingFactory { Process = process };
@@ -100,11 +104,18 @@ public sealed partial class ChildWorkerLaunchingTests
                 "CHE"));
         var lease = new CacheAdmissionLease(dispatch);
         var sink = new CacheEventSink();
+        IWorkerJobEventSink selectedSink = acceptedDelivery
+            ? new AcceptedCapabilityEventSink(lease.Context, message =>
+            {
+                sink.Record(message);
+                return true;
+            })
+            : sink;
 
         CacheMutationWorkerStartResult start = await client.StartAsync(
             lease,
             dispatch.Request,
-            sink,
+            selectedSink,
             CancellationToken.None);
         var started = Assert.IsInstanceOfType<CacheMutationWorkerStartResult.Started>(start);
         ICacheMutationWorkerSession session = started.Session;
@@ -172,6 +183,16 @@ public sealed partial class ChildWorkerLaunchingTests
                 await session.Completion.WaitAsync(TimeSpan.FromSeconds(5)));
             Assert.AreEqual(result, outcome.Result);
             Assert.AreEqual(3, sink.Events.Length);
+            if (acceptedDelivery)
+            {
+                Assert.AreEqual(WorkerEventDeliveryFinality.Terminal, childSession.EventDeliveryObservation?.Finality);
+                Assert.AreEqual(3L, childSession.EventDeliveryObservation?.DeliveredLossless);
+                Assert.AreEqual(0L, childSession.EventDeliveryObservation?.ReplacedSnapshots);
+            }
+            else
+            {
+                Assert.IsNull(childSession.EventDeliveryObservation);
+            }
             Assert.AreEqual(1, process.DisposeCalls, "settlement-disposes-owned-process-once");
 
             await session.DisposeAsync();
@@ -408,13 +429,17 @@ public sealed partial class ChildWorkerLaunchingTests
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
+            Record(message);
+            return ValueTask.CompletedTask;
+        }
+
+        internal void Record(WorkerJobOutputMessage message)
+        {
             _events.Enqueue(message);
             if (message.Payload is WorkerJobTerminalPayload)
             {
                 _terminalObserved.TrySetResult();
             }
-
-            return ValueTask.CompletedTask;
         }
     }
 }

@@ -25,15 +25,15 @@ public sealed class FailureControlPlaneTests
     public async Task ManualChild_ReadyTimeoutAtExactBoundaryFailsOnceWithoutFallbackAndAllowsRetrigger()
     {
         var clock = new CancellationTestClock(SessionTestSupport.Start);
-        await using var fixture = FailureFixture.Create(clock);
-        long timerGeneration = clock.TimerGeneration;
+        var timers = new ReadinessAndGraceClock(clock);
+        await using var fixture = FailureFixture.Create(timers);
 
         Assert.AreEqual(
             ProcessingRunAdmissionResult.Accepted,
             await fixture.Coordinator.TriggerManualAsync().WaitAsync(Bound),
             "ready-timeout-admitted");
         await fixture.Launcher.FirstEntered.Task.WaitAsync(Bound);
-        await clock.WaitForTimerCreatedAsync(timerGeneration).WaitAsync(Bound);
+        await timers.ReadyTimerCreated.Task.WaitAsync(Bound);
 
         clock.Advance(TimeSpan.FromMilliseconds(29_999));
         Assert.IsFalse(
@@ -45,7 +45,7 @@ public sealed class FailureControlPlaneTests
         Assert.IsInstanceOfType<ChildWorkerStartupObservation.ReadyTimedOut>(
             await fixture.Launcher.First.Session.WaitForStartupAsync().WaitAsync(Bound),
             "ready-timeout-exact-boundary");
-        await clock.WaitForTimerCreatedAsync(timerGeneration + 1).WaitAsync(Bound);
+        await timers.GraceTimerCreated.Task.WaitAsync(Bound);
         clock.Advance(TimeSpan.FromSeconds(10));
         await fixture.Launcher.First.Process.KillObserved.Task.WaitAsync(Bound);
         Assert.AreEqual(0, fixture.Launcher.First.Input.WriteCalls, "ready-timeout-no-execute-at-boundary");
@@ -318,6 +318,33 @@ public sealed class FailureControlPlaneTests
             SessionTestSupport.Start,
             request.RunId,
             new CancelledPayload("manual", SessionTestSupport.Start, SessionTestSupport.Start, 0, 0, 0, 0))));
+    }
+
+    private sealed class ReadinessAndGraceClock(CancellationTestClock inner) : TimeProvider
+    {
+        internal TaskCompletionSource ReadyTimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal TaskCompletionSource GraceTimerCreated { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public override long TimestampFrequency => inner.TimestampFrequency;
+        public override DateTimeOffset GetUtcNow() => inner.GetUtcNow();
+        public override long GetTimestamp() => inner.GetTimestamp();
+        public override TimeZoneInfo LocalTimeZone => inner.LocalTimeZone;
+
+        public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
+        {
+            ITimer timer = inner.CreateTimer(callback, state, dueTime, period);
+            // This fixture uses the default 30-second ready and 10-second grace
+            // policy. The 100-ms UI timers cannot satisfy either acknowledgement.
+            if (dueTime == TimeSpan.FromSeconds(30))
+            {
+                ReadyTimerCreated.TrySetResult();
+            }
+            else if (dueTime == TimeSpan.FromSeconds(10))
+            {
+                GraceTimerCreated.TrySetResult();
+            }
+
+            return timer;
+        }
     }
 
     private sealed class FailureFixture : IAsyncDisposable

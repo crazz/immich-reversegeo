@@ -5,6 +5,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using Microsoft.Extensions.Hosting;
 
 namespace ImmichReverseGeo.Web.Services;
@@ -71,7 +72,9 @@ internal sealed class CacheMutationPageControllerFactory(
     IWorkerJobAdmissionGate admission,
     ICacheMutationWorkerClient workerClient,
     CacheMutationPageControllerHostLifetime hostLifetime,
-    ICacheMutationCompletionSink? completionSink = null)
+    ICacheMutationCompletionSink? completionSink = null,
+    TimeProvider? time = null,
+    WorkerEventDeliveryPolicy? policy = null)
 {
     internal CacheMutationPageController Create(
         Func<Task> stateChanged,
@@ -86,7 +89,9 @@ internal sealed class CacheMutationPageControllerFactory(
             stateChanged,
             reloadStatus,
             completionSink,
-            hostLifetime.Unregister);
+            hostLifetime.Unregister,
+            time ?? TimeProvider.System,
+            policy ?? (WorkerEventDeliveryPolicy.ProductionEnabled ? new WorkerEventDeliveryPolicy() : null));
         if (!hostLifetime.Register(controller))
         {
             _ = controller.DisposeAsync();
@@ -154,6 +159,10 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
     private bool _attemptInProgress;
     private bool _disposeStarted;
     private bool _disposed;
+    private readonly ReadModelNotificationCadence? _cadence;
+    private object _notificationOwner = new();
+    private long _notificationRevision;
+    private CacheMutationPageState? _lastNotifiedState;
 
     internal CacheMutationPageController(
         IWorkerJobAdmissionGate admission,
@@ -162,7 +171,9 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
         Func<Task> stateChanged,
         Func<Task> reloadStatus,
         ICacheMutationCompletionSink? completionSink = null,
-        Action<CacheMutationPageController>? onDisposed = null)
+        Action<CacheMutationPageController>? onDisposed = null,
+        TimeProvider? time = null,
+        WorkerEventDeliveryPolicy? policy = null)
     {
         _admission = admission ?? throw new ArgumentNullException(nameof(admission));
         _workerClient = workerClient ?? throw new ArgumentNullException(nameof(workerClient));
@@ -171,6 +182,12 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
         _reloadStatus = reloadStatus ?? throw new ArgumentNullException(nameof(reloadStatus));
         _completionSink = completionSink;
         _onDisposed = onDisposed ?? (static _ => { });
+        if (policy is not null)
+        {
+            policy.Validate();
+            _cadence = new(time ?? TimeProvider.System, policy.NotificationCadence, DispatchNotificationAsync);
+            _cadence.Bind(_notificationOwner);
+        }
     }
 
     internal CacheMutationPageState State
@@ -187,6 +204,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
     internal Task RefreshAsync(CacheMutationSource source, string iso3)
     {
         Task attempt;
+        long generation;
         lock (_gate)
         {
             if (_disposed || _attemptInProgress)
@@ -199,7 +217,10 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
                 CacheMutationOperation.Refresh,
                 iso3);
             var dispatch = new CacheMutationWorkerJobDispatch(_createJobId(), request);
-            long generation = ++_generation;
+            generation = ++_generation;
+            _notificationOwner = new object();
+            _notificationRevision = 0;
+            _cadence?.Bind(_notificationOwner);
             _attemptInProgress = true;
             _state = new CacheMutationPageState(
                 CacheMutationPagePhase.Admitting,
@@ -218,16 +239,18 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             _currentAttempt = attempt;
         }
 
-        Notify();
+        Notify(generation);
         return attempt;
     }
 
     internal Task CancelAsync()
     {
         ActiveOperation? active;
+        long generation;
         lock (_gate)
         {
             active = _active;
+            generation = _generation;
             if (_disposed
                 || active is null
                 || _state.TerminalObserved
@@ -243,7 +266,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
         return active.RequestStopAsync();
     }
 
@@ -264,6 +287,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             {
                 _disposeStarted = true;
                 _disposed = true;
+                _cadence?.Dispose();
                 _generation++;
                 active = _active;
                 attempt = _currentAttempt;
@@ -283,6 +307,11 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             }
             finally
             {
+                if (_cadence is not null)
+                {
+                    await _cadence.DisposeAsync().ConfigureAwait(false);
+                }
+
                 _onDisposed(this);
                 _disposedCompletion.TrySetResult();
             }
@@ -345,7 +374,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             CacheMutationWorkerStartResult start = await _workerClient.StartAsync(
                 lease,
                 dispatch.Request,
-                new EventSink(this, generation, lease.Context),
+                new AcceptedCapabilityEventSink(lease.Context, message => ApplyEvent(generation, lease.Context, message)),
                 CancellationToken.None).ConfigureAwait(false);
             if (start is CacheMutationWorkerStartResult.Unavailable unavailableStart)
             {
@@ -440,11 +469,11 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
         return true;
     }
 
-    private void ApplyEvent(
+    private bool ApplyEvent(
         long generation,
         WorkerJobContext context,
         WorkerJobOutputMessage message)
@@ -457,7 +486,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
                 || (message.Type != WorkerJobProtocolV2.ReadyType
                     && (message.JobId != context.JobId || message.JobKind != context.JobKind)))
             {
-                return;
+                return false;
             }
 
             switch (message.Payload)
@@ -506,7 +535,8 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             }
         }
 
-        Notify();
+        Notify(generation);
+        return true;
     }
 
     private bool CompleteAttempt(
@@ -573,7 +603,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
         return true;
     }
 
@@ -603,7 +633,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             };
         }
 
-        Notify();
+        Notify(generation);
     }
 
     private bool CanMutate(long generation) => !_disposed && generation == _generation;
@@ -616,17 +646,44 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
         }
     }
 
-    private void Notify()
+    internal NotificationCadenceObservation? NotificationObservation => _cadence?.Observation;
+
+    private void Notify(long generation)
     {
         lock (_gate)
         {
-            if (_disposed)
+            if (!CanMutate(generation))
             {
+                return;
+            }
+
+            if (_cadence is not null)
+            {
+                if (!ReferenceEquals(_lastNotifiedState, _state))
+                {
+                    _lastNotifiedState = _state;
+                    _cadence.Signal(_notificationOwner, ++_notificationRevision,
+                        final: !_state.IsActive || _state.TerminalObserved);
+                }
+
                 return;
             }
         }
 
         _ = InvokeSafelyAsync(_stateChanged);
+    }
+
+    private ValueTask DispatchNotificationAsync(object owner, long revision)
+    {
+        lock (_gate)
+        {
+            if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+            {
+                return ValueTask.CompletedTask;
+            }
+        }
+
+        return new ValueTask(_stateChanged());
     }
 
     private async Task InvokeCompletionSafelyAsync(CacheMutationResult result)
@@ -705,18 +762,4 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
         }
     }
 
-    private sealed class EventSink(
-        CacheMutationPageController owner,
-        long generation,
-        WorkerJobContext context) : IWorkerJobEventSink
-    {
-        public ValueTask AcceptAsync(
-            WorkerJobOutputMessage message,
-            CancellationToken cancellationToken)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            owner.ApplyEvent(generation, context, message);
-            return ValueTask.CompletedTask;
-        }
-    }
 }

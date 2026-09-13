@@ -633,7 +633,12 @@ public sealed class DeploymentModeCompositionMatrixTests
                 _ = application.Services.GetRequiredService<DisposalReceipt>();
                 observedState = application.Services.GetRequiredService<ProcessingState>();
                 var observedTransitions = 0;
-                observer = () => Interlocked.Increment(ref observedTransitions);
+                var manualTransition = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                observer = () =>
+                {
+                    Interlocked.Increment(ref observedTransitions);
+                    manualTransition.TrySetResult();
+                };
                 observedState.OnChanged += observer;
 
                 await application.StartAsync().WaitAsync(TimeSpan.FromSeconds(5));
@@ -648,6 +653,7 @@ public sealed class DeploymentModeCompositionMatrixTests
                 AssertMappedWebEndpoints(application, name + "-started-host");
                 Assert.AreEqual(ProcessingRunAdmissionResult.Accepted, await application.Services.GetRequiredService<IManualProcessingRunCoordinator>().TriggerManualAsync(), name + "-started-host-manual-accepted");
                 Assert.AreEqual(1, children.Count, name + "-started-host-manual-child");
+                await manualTransition.Task.WaitAsync(TimeSpan.FromSeconds(5));
                 Assert.IsGreaterThan(preManualTransitions, Volatile.Read(ref observedTransitions), name + "-observer-proves-manual-transition-receipt");
             }
             finally
@@ -938,7 +944,12 @@ public sealed class DeploymentModeCompositionMatrixTests
                 Assert.AreSame(status, fixture.Provider.GetRequiredService<IProcessAssetsWebStatus>(), item.Item1 + "-query-status-alias");
                 Assert.AreSame(status, fixture.Provider.GetRequiredService<IProcessAssetsWorkerStatusSink>(), item.Item1 + "-sink-status-alias");
                 var observedTransitions = 0;
-                Action observer = () => Interlocked.Increment(ref observedTransitions);
+                var manualTransition = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+                Action observer = () =>
+                {
+                    Interlocked.Increment(ref observedTransitions);
+                    manualTransition.TrySetResult();
+                };
                 ProcessingState state = fixture.Provider.GetRequiredService<ProcessingState>();
                 state.OnChanged += observer;
                 try
@@ -962,6 +973,7 @@ public sealed class DeploymentModeCompositionMatrixTests
                         Assert.AreEqual(0, fixture.ScheduleTimerCreations, item.Item1 + "-pre-manual-schedule-waits");
                         Assert.IsFalse(fixture.SettingsFileExists, item.Item1 + "-pre-manual-settings-persistence");
                         await fixture.Provider.GetRequiredService<IManualProcessingRunCoordinator>().TriggerManualAsync();
+                        await manualTransition.Task.WaitAsync(bound);
                         Assert.IsGreaterThan(preManualTransitions, Volatile.Read(ref observedTransitions), item.Item1 + "-manual-transition-observed");
                         return new ParallelResult(
                             item.Item1,
@@ -1568,7 +1580,12 @@ public sealed class DeploymentModeCompositionMatrixTests
         public override DateTimeOffset GetUtcNow() => Now;
         public override ITimer CreateTimer(TimerCallback callback, object? state, TimeSpan dueTime, TimeSpan period)
         {
-            Interlocked.Increment(ref _timerCreations);
+            // Only the known read-model timer is excluded; scheduler/retry and
+            // any other timer still count against the no-scheduling assertion.
+            if (callback.Target is not ImmichReverseGeo.Web.WorkerEventDelivery.ReadModelNotificationCadence)
+            {
+                Interlocked.Increment(ref _timerCreations);
+            }
             return TimeProvider.System.CreateTimer(callback, state, dueTime, period);
         }
     }

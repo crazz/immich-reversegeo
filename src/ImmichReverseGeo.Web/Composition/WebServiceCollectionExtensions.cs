@@ -61,7 +61,10 @@ internal static class WebServiceCollectionExtensions
         if (ReferenceEquals(context.DeploymentMode, DeploymentMode.Standard)
             || ReferenceEquals(context.DeploymentMode, DeploymentMode.WebOnly))
         {
-            services.AddSingleton(_ => new ProcessAssetsWebStatus(context.DeploymentMode));
+            services.AddSingleton(sp => ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDeliveryPolicy.ProductionEnabled
+                ? new ProcessAssetsWebStatus(context.DeploymentMode, sp.GetRequiredService<TimeProvider>(),
+                    new ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDeliveryPolicy())
+                : new ProcessAssetsWebStatus(context.DeploymentMode));
             services.AddSingleton<IProcessAssetsWebStatus>(sp =>
                 sp.GetRequiredService<ProcessAssetsWebStatus>());
             services.AddSingleton<IProcessAssetsWorkerStatusSink>(sp =>

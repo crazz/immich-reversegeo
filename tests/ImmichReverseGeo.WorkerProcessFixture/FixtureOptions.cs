@@ -20,6 +20,11 @@ internal enum FixtureScenario
     RawExit,
     CooperativeCancel,
     Unresponsive,
+    ProgressBurst,
+    ProgressBurstGap,
+    ProgressBurstCrash,
+    ProgressBurstCancel,
+    ProgressBurstUnresponsive,
     RealCoordinateSuccess,
     RealCoordinateNoCountry,
     RealCoordinateDegraded,
@@ -76,6 +81,11 @@ internal sealed record FixtureOptions(
 {
     internal const int MaximumStandardErrorBytes = 8 * 1024 * 1024;
     internal const int StandardErrorCapacity = 65_536;
+    internal int ProgressCount { get; init; }
+    internal int BarrierEvery { get; init; }
+    internal bool IsProgressBurst => Scenario is FixtureScenario.ProgressBurst
+        or FixtureScenario.ProgressBurstGap or FixtureScenario.ProgressBurstCrash
+        or FixtureScenario.ProgressBurstCancel or FixtureScenario.ProgressBurstUnresponsive;
 
     private static readonly IReadOnlyDictionary<string, FixtureScenario> ScenarioTokens =
         new Dictionary<string, FixtureScenario>(StringComparer.Ordinal)
@@ -96,6 +106,11 @@ internal sealed record FixtureOptions(
             ["raw-exit"] = FixtureScenario.RawExit,
             ["cooperative-cancel"] = FixtureScenario.CooperativeCancel,
             ["unresponsive"] = FixtureScenario.Unresponsive,
+            ["progress-burst"] = FixtureScenario.ProgressBurst,
+            ["progress-burst-gap"] = FixtureScenario.ProgressBurstGap,
+            ["progress-burst-crash"] = FixtureScenario.ProgressBurstCrash,
+            ["progress-burst-cancel"] = FixtureScenario.ProgressBurstCancel,
+            ["progress-burst-unresponsive"] = FixtureScenario.ProgressBurstUnresponsive,
             ["real-coordinate-success"] = FixtureScenario.RealCoordinateSuccess,
             ["real-coordinate-no-country"] = FixtureScenario.RealCoordinateNoCountry,
             ["real-coordinate-degraded"] = FixtureScenario.RealCoordinateDegraded,
@@ -260,7 +275,7 @@ internal sealed record FixtureOptions(
             return false;
         }
 
-        options = new FixtureOptions(
+        var parsedOptions = new FixtureOptions(
             scenario,
             resourceRoot,
             captureName,
@@ -270,6 +285,25 @@ internal sealed record FixtureOptions(
             unknownKind,
             sequenceFault,
             terminalKind);
+        if (!TryGetRequiredOption(values, "--progress-count", parsedOptions.IsProgressBurst, out var progressText, out error)
+            || !TryGetRequiredOption(values, "--barrier-every", parsedOptions.IsProgressBurst, out var barrierText, out error))
+        {
+            return false;
+        }
+
+        if (parsedOptions.IsProgressBurst)
+        {
+            if (!TryParseCanonicalInt(progressText!, out int progressCount) || progressCount is < 2 or > 1_000_000
+                || !TryParseCanonicalInt(barrierText!, out int barrierEvery) || barrierEvery > progressCount)
+            {
+                error = "Burst requires --progress-count from 2 through 1000000 and --barrier-every from 0 through that count.";
+                return false;
+            }
+
+            parsedOptions = parsedOptions with { ProgressCount = progressCount, BarrierEvery = barrierEvery };
+        }
+
+        options = parsedOptions;
         return true;
     }
 
@@ -283,6 +317,8 @@ internal sealed record FixtureOptions(
             or "--malformed-kind"
             or "--unknown-kind"
             or "--sequence-fault"
+            or "--progress-count"
+            or "--barrier-every"
             or "--terminal";
     }
 

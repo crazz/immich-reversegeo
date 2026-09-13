@@ -1,5 +1,6 @@
 @page "/logs"
 @rendermode InteractiveServer
+@using System.Threading
 @inject ProcessingState State
 @inject IJSRuntime JS
 @implements IDisposable
@@ -26,6 +27,7 @@
 
 @code {
     private string _levelFilter = "";
+    private int _disposed;
 
     private IEnumerable<string> FilteredLog =>
         string.IsNullOrEmpty(_levelFilter)
@@ -33,8 +35,29 @@
             : State.GetRecentLog().Where(l => l.Contains(_levelFilter));
 
     protected override void OnInitialized() => State.OnChanged += Refresh;
-    public void Dispose() => State.OnChanged -= Refresh;
-    private void Refresh() => InvokeAsync(StateHasChanged);
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) == 0)
+        {
+            State.OnChanged -= Refresh;
+        }
+    }
+
+    private void Refresh()
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (Volatile.Read(ref _disposed) == 0)
+            {
+                StateHasChanged();
+            }
+        });
+    }
 
     private async Task DownloadLog()
     {

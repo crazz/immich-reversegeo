@@ -131,6 +131,9 @@ internal sealed partial class ChildWorkerSession
 
         if (closeInputForContainment)
         {
+            // A write/flush fault does not prove that the worker rejected execute.
+            // Drain valid output during containment so accepted lifecycle evidence
+            // survives; forced-stop escalation and disposal can still abandon it.
             _ = StartContainmentInputClose();
         }
 
@@ -552,6 +555,7 @@ internal sealed partial class ChildWorkerSession
 
     private void EscalateAtDeadline()
     {
+        AbandonAcceptedDelivery();
         if (TryConfirmKnownExit(ChildWorkerCancellationExitRace.BeforeEscalation))
         {
             SetEscalation(false, ChildProcessKillOutcome.AlreadyExited);

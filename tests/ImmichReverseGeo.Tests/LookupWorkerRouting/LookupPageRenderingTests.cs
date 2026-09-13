@@ -2,6 +2,8 @@ using System.Reflection;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Tests.ChildWorkerCancellation;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using Microsoft.AspNetCore.Components.RenderTree;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -15,6 +17,77 @@ namespace ImmichReverseGeo.Tests.LookupWorkerRouting;
 public sealed class LookupPageRenderingTests
 {
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
+
+    [TestMethod]
+    [TestCategory("Change65")]
+    public async Task LookupCadence_UsesActualControllerCallbackForBurstAndImmediateFinalState()
+    {
+        var clock = new CancellationTestClock();
+        string directory = Path.Combine(Path.GetTempPath(), $"change65-lookup-render-{Guid.NewGuid():N}");
+        await using var admission = new WorkerJobCoordinator(WorkerJobDescriptors.Registered);
+        var worker = new CadenceWorkerClient();
+        var lifetime = new CoordinateLookupPageControllerHostLifetime();
+        var factory = new CoordinateLookupPageControllerFactory(admission, worker, new RenderingSettingsProvider(),
+            lifetime, clock, new WorkerEventDeliveryPolicy());
+        var page = new ImmichReverseGeo.Web.Components.Pages.Lookup();
+        SetInjected(page, "ControllerFactory", factory);
+        SetInjected(page, "Config", new ConfigService(NullLogger<ConfigService>.Instance, directory));
+        await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
+        Task run = Task.CompletedTask;
+        try
+        {
+            await renderer.AttachAsync(page);
+            var controller = GetController(page);
+            run = controller.SubmitAsync(new CoordinateLookupSubmission(47.4, 8.5, true, false, false));
+            var session = await worker.Started.Task.WaitAsync(Bound);
+            int before = renderer.RenderCount;
+            for (int index = 1; index <= 1000; index++)
+            {
+                await session.EmitAsync(new WorkerJobOutputMessage(
+                    WorkerJobProtocolV2.ProgressCategory, WorkerJobProtocolV2.ProgressChangedType, index + 1,
+                    DateTimeOffset.UnixEpoch, session.JobId, WorkerJobKind.CoordinateLookup,
+                    new CoordinateLookupProgressPayload(CoordinateLookupProgressStep.Country,
+                        CoordinateLookupSourceState.Ready, "USA", $"Rendered lookup step {index}")));
+            }
+
+            Assert.AreEqual(0L, controller.NotificationObservation!.OrdinaryDispatched);
+            Assert.AreEqual(before, renderer.RenderCount);
+            Task rendered = renderer.NextRenderAsync();
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            await rendered.WaitAsync(Bound);
+            StringAssert.Contains((await renderer.ReadAsync()).Text, "Rendered lookup step 1000");
+            Assert.AreEqual(before + 1, renderer.RenderCount);
+            Assert.AreEqual(7, DisabledMutableControlCount((await renderer.ReadAsync()).Frames));
+            session.Complete(new CoordinateLookupWorkerOutcome.Completed(Result()));
+            await run.WaitAsync(Bound);
+            Assert.AreEqual(1L, controller.NotificationObservation.FinalAccepted);
+            while (true)
+            {
+                Task next = renderer.NextRenderAsync();
+                if (DisabledMutableControlCount((await renderer.ReadAsync()).Frames) == 0)
+                {
+                    break;
+                }
+
+                await next.WaitAsync(Bound);
+            }
+
+            Assert.AreEqual(CoordinateLookupPagePhase.Completed, controller.State.Phase);
+            Assert.IsNotNull(controller.State.Result);
+            clock.Advance(TimeSpan.FromSeconds(1));
+            Assert.AreEqual(1L, controller.NotificationObservation.OrdinaryDispatched);
+        }
+        finally
+        {
+            worker.Session?.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
+            await run.WaitAsync(Bound);
+            await page.DisposeAsync().AsTask().WaitAsync(Bound);
+            if (Directory.Exists(directory))
+            {
+                Directory.Delete(directory, recursive: true);
+            }
+        }
+    }
 
     [TestMethod]
     public async Task Lookup_RendersLifecycleControlsRetainedResultsSafeErrorsAndBoundedDiagnostics()
@@ -476,5 +549,33 @@ public sealed class LookupPageRenderingTests
             IWorkerJobEventSink eventSink,
             CancellationToken cancellationToken) =>
             throw new AssertFailedException("Rendering does not start a worker.");
+    }
+
+    private sealed class CadenceWorkerClient : ICoordinateLookupWorkerClient
+    {
+        internal TaskCompletionSource<CadenceSession> Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        internal CadenceSession? Session { get; private set; }
+
+        public ValueTask<CoordinateLookupWorkerStartResult> StartAsync(IWorkerJobAdmissionLease admission,
+            CoordinateLookupRequest request, IWorkerJobEventSink eventSink, CancellationToken cancellationToken)
+        {
+            Session = new CadenceSession(admission.Context.JobId, eventSink);
+            Started.TrySetResult(Session);
+            return ValueTask.FromResult<CoordinateLookupWorkerStartResult>(new CoordinateLookupWorkerStartResult.Started(Session));
+        }
+    }
+
+    private sealed class CadenceSession(Guid jobId, IWorkerJobEventSink sink) : ICoordinateLookupWorkerSession
+    {
+        private readonly TaskCompletionSource<CoordinateLookupWorkerOutcome> _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public Guid JobId => jobId;
+        public WorkerJobKind JobKind => WorkerJobKind.CoordinateLookup;
+        public InternalWorkerProtocolVersion ProtocolVersion => InternalWorkerProtocolVersion.V2;
+        public bool IsCancellable => true;
+        public Task<CoordinateLookupWorkerOutcome> Completion => _completion.Task;
+        public Task RequestStopAsync() => Task.CompletedTask;
+        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+        internal ValueTask EmitAsync(WorkerJobOutputMessage message) => sink.AcceptAsync(message, CancellationToken.None);
+        internal void Complete(CoordinateLookupWorkerOutcome outcome) => _completion.TrySetResult(outcome);
     }
 }

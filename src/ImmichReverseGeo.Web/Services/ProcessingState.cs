@@ -2,7 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Web.Services;
 
@@ -11,8 +13,27 @@ namespace ImmichReverseGeo.Web.Services;
 /// All mutations are thread-safe via Interlocked or lock.
 /// UI subscribes to OnChanged to receive real-time updates.
 /// </summary>
-public class ProcessingState
+public class ProcessingState : IDisposable, IAsyncDisposable
 {
+    private readonly object _notificationGate = new();
+    private readonly ReadModelNotificationCadence? _notificationCadence;
+    private object _notificationOwner = new();
+    private long _notificationRevision;
+    private bool _disposed;
+
+    public ProcessingState()
+    {
+    }
+
+    internal ProcessingState(TimeProvider time, WorkerEventDeliveryPolicy policy)
+    {
+        policy.Validate();
+        _notificationCadence = new(time, policy.NotificationCadence, DispatchNotificationAsync);
+        _notificationCadence.Bind(_notificationOwner);
+    }
+
+    internal NotificationCadenceObservation? NotificationObservation => _notificationCadence?.Observation;
+
     private volatile bool _isRunning;
     private long _totalUnprocessed;
     private readonly object _stateLock = new();
@@ -102,6 +123,13 @@ public class ProcessingState
     /// </summary>
     public void MarkPending()
     {
+        lock (_notificationGate)
+        {
+            _notificationOwner = new object();
+            _notificationRevision = 0;
+            _notificationCadence?.Bind(_notificationOwner);
+        }
+
         _isRunning = true;
         Notify();
     }
@@ -110,6 +138,7 @@ public class ProcessingState
     {
         _isRunning = false;
         Notify();
+        FlushFinalNotification();
     }
 
     public void StartRun(long totalUnprocessed)
@@ -325,7 +354,90 @@ public class ProcessingState
         public static ProgressSnapshot Empty { get; } = new(0, 0, 0);
     }
 
-    private void Notify() => OnChanged?.Invoke();
+    private void Notify()
+    {
+        if (_notificationCadence is null)
+        {
+            OnChanged?.Invoke();
+            return;
+        }
+
+        lock (_notificationGate)
+        {
+            if (!_disposed)
+            {
+                _notificationCadence.Signal(_notificationOwner, ++_notificationRevision);
+            }
+        }
+    }
+
+    internal void FlushFinalNotification()
+    {
+        lock (_notificationGate)
+        {
+            if (!_disposed)
+            {
+                _notificationCadence?.Signal(_notificationOwner, _notificationRevision, final: true);
+            }
+        }
+    }
+
+    private ValueTask DispatchNotificationAsync(object owner, long revision)
+    {
+        Action? changed;
+        lock (_notificationGate)
+        {
+            if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            changed = OnChanged;
+        }
+
+        if (changed is not null)
+        {
+            foreach (Action subscriber in changed.GetInvocationList())
+            {
+                lock (_notificationGate)
+                {
+                    if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+                    {
+                        return ValueTask.CompletedTask;
+                    }
+                }
+
+                try
+                {
+                    subscriber();
+                }
+                catch
+                {
+                    // One disconnected component cannot prevent the others refreshing.
+                }
+            }
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        lock (_notificationGate)
+        {
+            _disposed = true;
+            _notificationCadence?.Dispose();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        if (_notificationCadence is not null)
+        {
+            await _notificationCadence.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     private void EndActivity(string activity)
     {

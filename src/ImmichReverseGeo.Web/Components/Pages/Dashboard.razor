@@ -293,13 +293,28 @@ else if (_dbError is not null)
 
     private void OnStateChanged()
     {
-        InvokeAsync(async () =>
+        if (Volatile.Read(ref _disposed) != 0)
         {
+            return;
+        }
+
+        _ = InvokeAsync(async () =>
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             // Reload DB stats when a run finishes
             if (!State.IsRunning && _wasRunning)
             {
                 await LoadStatsAsync();
             }
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return;
+            }
+
             _wasRunning = State.IsRunning;
             StateHasChanged();
         });

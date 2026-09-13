@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Web.WorkerFailureRecovery;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Web.Services;
 
@@ -98,7 +99,7 @@ internal interface IProcessAssetsWorkerStatusSink
     void Release(ProcessingRunRequest exactRequest);
 }
 
-internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcessAssetsWorkerStatusSink
+internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcessAssetsWorkerStatusSink, IDisposable, IAsyncDisposable
 {
     private readonly object _gate = new();
     private readonly HashSet<Subscription> _subscriptions = [];
@@ -109,6 +110,9 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
     private WorkerRunTransportPhase _highestTransport;
     private bool _cancellationWon;
     private bool _notificationDrainScheduled;
+    private readonly ReadModelNotificationCadence? _cadence;
+    private object _notificationOwner = new();
+    private bool _disposed;
 
     internal ProcessAssetsWebStatus(DeploymentMode deploymentMode)
     {
@@ -130,6 +134,14 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
             ProcessAssetsWorkerState.Idle,
             FailureSummary: null,
             Revision: 0);
+    }
+
+    internal ProcessAssetsWebStatus(DeploymentMode deploymentMode, TimeProvider time, WorkerEventDeliveryPolicy policy)
+        : this(deploymentMode)
+    {
+        policy.Validate();
+        _cadence = new(time, policy.NotificationCadence, DispatchNotificationAsync);
+        _cadence.Bind(_notificationOwner);
     }
 
     public ProcessAssetsWebStatusSnapshot Current
@@ -163,6 +175,8 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
         lock (_gate)
         {
             _currentRequest = exactRequest;
+            _notificationOwner = exactRequest;
+            _cadence?.Bind(_notificationOwner);
             _currentFinality = null;
             _highestTransport = WorkerRunTransportPhase.Admitted;
             _cancellationWon = cancellationAlreadyWon;
@@ -247,7 +261,7 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
             scheduleDrain = outcome == ProcessingRunOutcome.Failed
                 ? PublishUnderGate(
                     ProcessAssetsWorkerState.Failed,
-                    WorkerRunDiagnostics.Describe(category))
+                    WorkerRunDiagnostics.Describe(category), final: true)
                 : false;
         }
         ScheduleDrainIfNeeded(scheduleDrain);
@@ -271,7 +285,7 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
             _cancellationWon = false;
             scheduleDrain = retainFailure
                 ? false
-                : PublishUnderGate(ProcessAssetsWorkerState.Idle, failureSummary: null);
+                : PublishUnderGate(ProcessAssetsWorkerState.Idle, failureSummary: null, final: true);
         }
         ScheduleDrainIfNeeded(scheduleDrain);
     }
@@ -308,11 +322,17 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
 
     private bool PublishUnderGate(
         ProcessAssetsWorkerState worker,
-        string? failureSummary)
+        string? failureSummary,
+        bool final = false)
     {
         if (_current.Worker == worker
             && string.Equals(_current.FailureSummary, failureSummary, StringComparison.Ordinal))
         {
+            if (final)
+            {
+                _cadence?.Signal(_notificationOwner, _current.Revision, final: true);
+            }
+
             return false;
         }
 
@@ -322,6 +342,12 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
             FailureSummary = failureSummary,
             Revision = checked(_current.Revision + 1)
         };
+        if (_cadence is not null)
+        {
+            _cadence.Signal(_notificationOwner, _current.Revision, final);
+            return false;
+        }
+
         _notifications.Enqueue(new Notification(_current, [.. _subscriptions]));
         if (_notificationDrainScheduled)
         {
@@ -380,6 +406,57 @@ internal sealed class ProcessAssetsWebStatus : IProcessAssetsWebStatus, IProcess
         lock (_gate)
         {
             _subscriptions.Remove(subscription);
+        }
+    }
+
+    internal NotificationCadenceObservation? NotificationObservation => _cadence?.Observation;
+
+    private ValueTask DispatchNotificationAsync(object owner, long revision)
+    {
+        Notification notification;
+        lock (_gate)
+        {
+            if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            notification = new(_current, [.. _subscriptions]);
+        }
+
+        foreach (var subscription in notification.Subscriptions)
+        {
+            lock (_gate)
+            {
+                if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+                {
+                    return ValueTask.CompletedTask;
+                }
+            }
+
+            subscription.Deliver(notification.Snapshot);
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        lock (_gate)
+        {
+            _disposed = true;
+            _subscriptions.Clear();
+            _notifications.Clear();
+            _cadence?.Dispose();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        if (_cadence is not null)
+        {
+            await _cadence.DisposeAsync().ConfigureAwait(false);
         }
     }
 

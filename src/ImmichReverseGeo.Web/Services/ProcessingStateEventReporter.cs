@@ -637,6 +637,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         }
         finally
         {
+            Attempt(_state.FlushFinalNotification);
             try
             {
                 ReleaseArm();
@@ -662,6 +663,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         try
         {
             _state.RestoreFatalFailureSnapshot(updated, skipped, failed, $"Fatal: {failure.Message}");
+            _state.FlushFinalNotification();
         }
         catch
         {

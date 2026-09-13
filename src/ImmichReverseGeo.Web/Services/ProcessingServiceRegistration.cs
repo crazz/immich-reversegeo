@@ -1,5 +1,6 @@
 using System;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
@@ -40,7 +41,9 @@ internal static class ProcessingServiceRegistration
         services.TryAddSingleton(sp => new WorkerJobCoordinator(
             ImmichReverseGeo.Core.WorkerJobs.WorkerJobDescriptors.Registered,
             timeProvider: sp.GetRequiredService<TimeProvider>()));
-        services.AddSingleton<ProcessingState>();
+        services.AddSingleton(sp => WorkerEventDeliveryPolicy.ProductionEnabled
+            ? new ProcessingState(sp.GetRequiredService<TimeProvider>(), new WorkerEventDeliveryPolicy())
+            : new ProcessingState());
         services.AddSingleton<ProcessingStateEventReporter>();
         services.AddSingleton(sp => new ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridgeFactory(
             sp.GetRequiredService<ProcessingStateEventReporter>()));

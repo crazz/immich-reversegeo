@@ -3,13 +3,16 @@ using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
+using AcceptedDelivery = ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Web.WorkerEventStateBridge;
 
-internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncDisposable
+internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAcceptedWorkerEventSink, IAsyncDisposable
 {
     private const string ProjectionFailureDiagnostic = "Processing-state projection failed.";
     private const string ActivityCleanupFailureDiagnostic = "Projected activity cleanup failed.";
@@ -30,6 +33,7 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
     private int _disposeStarted;
     private int _isReady;
     private int _isTerminal;
+    private WorkerEventDeliveryScope? _deliveryScope;
 
     internal WorkerEventStateBridge(ProcessingRunRequest request, ProcessingStateEventReporter reporter)
     {
@@ -56,7 +60,76 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
 
         try
         {
+            if (_deliveryScope is not null)
+            {
+                throw Reject(new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidSequence,
+                    "A bound delivery stream requires its authenticated event envelope."));
+            }
+
             await AcceptInsideGateAsync(@event).ConfigureAwait(false);
+        }
+        finally
+        {
+            _projectionGate.Release();
+        }
+    }
+
+    public void BindDeliveryScope(WorkerEventDeliveryScope scope)
+    {
+        ArgumentNullException.ThrowIfNull(scope);
+        if (!_projectionGate.Wait(0))
+        {
+            throw new InvalidOperationException("A delivery scope must be bound before projection starts.");
+        }
+
+        try
+        {
+            if (IsDisposing || _validator.LastAcceptedSequence != 0
+                || (_deliveryScope is not null && !ReferenceEquals(_deliveryScope, scope))
+                || scope.Context.JobKind != WorkerJobKind.ProcessAssets || scope.Context.JobId != Request.RunId)
+            {
+                throw new InvalidOperationException("The delivery scope does not own this processing projection.");
+            }
+
+            _deliveryScope = scope;
+        }
+        finally
+        {
+            _projectionGate.Release();
+        }
+    }
+
+    public async ValueTask AcceptDeliveryAsync(AcceptedDelivery delivery, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(delivery);
+        if (!await TryEnterProjectionAsync(cancellationToken).ConfigureAwait(false))
+        {
+            throw new StaleWorkerEventDeliveryException();
+        }
+
+        try
+        {
+            long suppressed;
+            try
+            {
+                suppressed = delivery.ValidateAdvance(
+                    _deliveryScope ?? throw new InvalidOperationException("Delivery scope is not bound."),
+                    _validator.LastAcceptedSequence);
+            }
+            catch (InvalidOperationException)
+            {
+                throw Reject(new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidSequence,
+                    "The processing projection rejected the delivery sequence evidence."));
+            }
+
+            var compatibility = delivery.Input.CompatibilityEvent;
+            if (compatibility is null)
+            {
+                throw Reject(new WorkerProtocolFailure(WorkerProtocolFailureCode.InvalidPayload,
+                    "The accepted processing delivery requires its compatibility event."));
+            }
+
+            await AcceptInsideGateAsync(compatibility, suppressed).ConfigureAwait(false);
         }
         finally
         {
@@ -93,7 +166,7 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
         return true;
     }
 
-    private async ValueTask AcceptInsideGateAsync(WorkerProtocolEvent @event)
+    private async ValueTask AcceptInsideGateAsync(WorkerProtocolEvent @event, long suppressedProgress = 0)
     {
         if (_poisonObservation is not null)
         {
@@ -107,14 +180,14 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
         }
 
         var processingEvent = Map(@event);
-        var preview = _validator.Preview(@event);
+        var preview = _validator.PreviewProjected(@event, suppressedProgress);
         if (!preview.IsSuccess)
         {
             throw Reject(preview.Failure!);
         }
 
         await ProjectAsync(processingEvent).ConfigureAwait(false);
-        Commit(@event, processingEvent);
+        Commit(@event, processingEvent, suppressedProgress);
 
         if (@event.Type == WorkerProtocolV1.ReadyType)
         {
@@ -174,12 +247,12 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAsyncD
         }
     }
 
-    private void Commit(WorkerProtocolEvent @event, ProcessingEvent? processingEvent)
+    private void Commit(WorkerProtocolEvent @event, ProcessingEvent? processingEvent, long suppressedProgress)
     {
         WorkerProtocolParseResult committed;
         try
         {
-            committed = _validator.Validate(@event);
+            committed = _validator.ValidateProjected(@event, suppressedProgress);
         }
         catch
         {

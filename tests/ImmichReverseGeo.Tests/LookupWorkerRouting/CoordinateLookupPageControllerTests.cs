@@ -3,6 +3,9 @@ using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
 using System.Threading.Channels;
+using ImmichReverseGeo.Tests.ChildWorkerCancellation;
+using ImmichReverseGeo.Tests.WorkerEventDelivery;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Tests.LookupWorkerRouting;
 
@@ -13,6 +16,125 @@ public sealed class CoordinateLookupPageControllerTests
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(5);
     private static readonly Guid FirstJobId =
         Guid.Parse("11111111-2222-3333-4444-555555555555");
+
+    [TestMethod]
+    [TestCategory("Change65")]
+    public async Task AcceptedLosslessBurst_CoalescesOnlyNotificationsAndFlushesFinalResult()
+    {
+        var clock = new CancellationTestClock();
+        var admission = new RecordingAdmissionGate();
+        var worker = new RecordingWorkerClient();
+        var notifications = Channel.CreateUnbounded<CoordinateLookupPageState>();
+        CoordinateLookupPageController? controller = null;
+        controller = new(admission, worker, new SettingsProvider(), () => FirstJobId,
+            () => notifications.Writer.TryWrite(controller!.State), time: clock, policy: new WorkerEventDeliveryPolicy());
+        await using var owned = controller;
+        Task run = controller.SubmitAsync(Submission());
+        FakeWorkerSession? session = null;
+        try
+        {
+            session = await worker.WaitForSessionAsync();
+            await using var delivery = new CapabilityDeliveryHarness(admission.Lease!, worker.EventSink!, clock, 1002);
+            await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => worker.EventSink!.AcceptAsync(Ready(), CancellationToken.None).AsTask());
+            await delivery.SendAsync(Ready());
+            await delivery.SendAsync(Started(FirstJobId));
+            for (int index = 1; index <= 1000; index++)
+            {
+                await delivery.SendAsync(Progress(FirstJobId, $"Lookup step {index}"), index + 2);
+            }
+
+            await delivery.Acknowledged.WaitAsync(Bound);
+            Assert.AreEqual("Lookup step 1000", controller.State.Status, "latest state is readable before a cadence tick");
+            Assert.AreEqual(0L, controller.NotificationObservation!.OrdinaryDispatched);
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            var current = await notifications.Reader.ReadAsync().AsTask().WaitAsync(Bound);
+            Assert.AreEqual("Lookup step 1000", current.Status);
+            Assert.AreEqual(1L, controller.NotificationObservation.OrdinaryDispatched);
+            await delivery.SendAsync(Terminal(FirstJobId, Result(worker.Request!)), 1003);
+            Assert.AreEqual(1003L, delivery.Queue.Observation.DeliveredLossless);
+            Assert.AreEqual(0L, delivery.Queue.Observation.ReplacedSnapshots, "lookup steps are not absolute snapshots");
+            Assert.AreEqual(1L, controller.NotificationObservation.FinalAccepted, "terminal dispatch precedes delivery finality");
+            session.Complete(new CoordinateLookupWorkerOutcome.Completed(Result(worker.Request!)));
+            await run.WaitAsync(Bound);
+            CoordinateLookupPageState final;
+            do
+            {
+                final = await notifications.Reader.ReadAsync().AsTask().WaitAsync(Bound);
+            }
+            while (final.Phase != CoordinateLookupPagePhase.Completed);
+            Assert.IsNotNull(final.Result);
+            Assert.IsTrue(final.FormControlsEnabled);
+            Assert.AreEqual(2L, controller.NotificationObservation.FinalAccepted, "completed result has its own immediate final revision");
+            Assert.AreEqual(1, admission.Lease!.DisposeCount);
+        }
+        finally
+        {
+            (session ?? worker.LastSession)?.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
+            await run.WaitAsync(Bound);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change65")]
+    public async Task AcceptedDelivery_RejectsOldGenerationWithoutMutatingOrReleasingCurrentJob()
+    {
+        var clock = new CancellationTestClock();
+        var admission = new RecordingAdmissionGate();
+        var worker = new RecordingWorkerClient();
+        await using var controller = new CoordinateLookupPageController(admission, worker, new SettingsProvider(),
+            () => FirstJobId, () => { }, time: clock, policy: new WorkerEventDeliveryPolicy());
+        Task firstRun = controller.SubmitAsync(Submission());
+        var firstSession = await worker.WaitForSessionAsync();
+        var firstLease = admission.Lease!;
+        var delivery = new CapabilityDeliveryHarness(firstLease, worker.EventSink!, clock, 3);
+        Task? secondRun = null;
+        FakeWorkerSession? secondSession = null;
+        StaleWorkerEventDeliveryException? stale = null;
+        try
+        {
+            await delivery.SendAsync(Ready());
+            await delivery.SendAsync(Started(FirstJobId));
+            await delivery.SendAsync(Progress(FirstJobId, "first generation"), 3);
+            await delivery.Acknowledged.WaitAsync(Bound);
+            firstSession.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
+            await firstRun.WaitAsync(Bound);
+            secondRun = controller.SubmitAsync(Submission());
+            secondSession = await worker.WaitForSessionAsync();
+            var secondLease = admission.Lease!;
+            var current = controller.State;
+            await delivery.SendAsync(Progress(FirstJobId, "stale generation"), 4);
+            stale = await Assert.ThrowsExactlyAsync<StaleWorkerEventDeliveryException>(() => delivery.Queue.Completion.WaitAsync(Bound));
+            Assert.AreEqual(current, controller.State, "authenticated old stream still cannot mutate the new page generation");
+            Assert.AreEqual(1L, delivery.Queue.Observation.StaleRejected);
+            Assert.AreEqual(1, firstLease.DisposeCount);
+            Assert.AreEqual(0, secondLease.DisposeCount, "old delivery cannot release the new owner");
+            await using var next = new CapabilityDeliveryHarness(secondLease, worker.EventSink!, clock, 3);
+            await next.SendAsync(Ready());
+            await next.SendAsync(Started(FirstJobId));
+            await next.SendAsync(Progress(FirstJobId, "current generation"), 3);
+            await next.Acknowledged.WaitAsync(Bound);
+            Assert.AreEqual("current generation", controller.State.Status);
+        }
+        finally
+        {
+            firstSession.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
+            secondSession?.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
+            await firstRun.WaitAsync(Bound);
+            if (secondRun is not null)
+            {
+                await secondRun.WaitAsync(Bound);
+            }
+
+            try
+            {
+                await delivery.DisposeAsync();
+            }
+            catch (StaleWorkerEventDeliveryException failure) when (ReferenceEquals(failure, stale))
+            {
+                // The already asserted original delivery fault is joined once.
+            }
+        }
+    }
 
     [TestMethod]
     public async Task InvalidCoordinates_StopBeforeIdentityAdmissionAndWorkerLaunch()
@@ -880,6 +1002,8 @@ public sealed class CoordinateLookupPageControllerTests
             InternalWorkerProtocolVersion.V2;
         internal int Starts { get; private set; }
         internal CoordinateLookupRequest? Request { get; private set; }
+        internal IWorkerJobEventSink? EventSink { get; private set; }
+        internal FakeWorkerSession? LastSession { get; private set; }
 
         public async ValueTask<CoordinateLookupWorkerStartResult> StartAsync(
             IWorkerJobAdmissionLease admission,
@@ -889,6 +1013,7 @@ public sealed class CoordinateLookupPageControllerTests
         {
             Starts++;
             Request = request;
+            EventSink = eventSink;
             if (StartUnavailable)
             {
                 return new CoordinateLookupWorkerStartResult.Unavailable(
@@ -911,6 +1036,7 @@ public sealed class CoordinateLookupPageControllerTests
                     CancellationToken.None);
             }
 
+            LastSession = session;
             Assert.IsTrue(_started.Writer.TryWrite(session));
             if (HoldStartReturn)
             {

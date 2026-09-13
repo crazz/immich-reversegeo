@@ -40,13 +40,18 @@ public sealed partial class ChildWorkerLaunchingTests
             CreateInvocation(), request, bridge, TestOptions(), CancellationToken.None);
         var session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(launch, $"{label}: started-session").Session;
         var finalizer = new WorkerRunFinalizer(request, reporter, session.Clock);
+        var containmentRequested = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var resultTask = finalizer.Start(
             session,
             bridge,
-            fault => _ = session.RequestTermination(new ChildWorkerTerminationRequest(
-                fault.ObservedAt,
-                ChildWorkerTerminationIntent.FaultContainment,
-                fault.Reason)),
+            fault =>
+            {
+                _ = session.RequestTermination(new ChildWorkerTerminationRequest(
+                    fault.ObservedAt,
+                    ChildWorkerTerminationIntent.FaultContainment,
+                    fault.Reason));
+                containmentRequested.TrySetResult();
+            },
             static () => false);
 
         var suffix = scenario switch
@@ -57,6 +62,7 @@ public sealed partial class ChildWorkerLaunchingTests
         };
         process.StandardOutput.Write(Encoding.UTF8.GetBytes(ReadyFrame()));
         var startup = await session.Startup;
+        await containmentRequested.Task.WaitAsync(TimeSpan.FromSeconds(5));
         process.StandardOutput.Write(Encoding.UTF8.GetBytes(suffix));
         process.StandardOutput.Complete();
         process.StandardError.Complete();

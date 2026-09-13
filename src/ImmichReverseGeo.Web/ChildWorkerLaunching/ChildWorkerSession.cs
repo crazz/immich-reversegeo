@@ -5,6 +5,8 @@ using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
+using AcceptedDelivery = ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
 
@@ -79,6 +81,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private readonly ProcessAssetsWorkerJobProjection? _jobProjection;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _readyTimeout;
+    private readonly WorkerEventDeliveryQueue? _eventDelivery;
+    private readonly Task _deliveryObservation = Task.CompletedTask;
     private readonly TaskCompletionSource<ChildWorkerStartupObservation> _startup = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object _observationGate = new();
     private readonly object _terminalPreventingObservationGate = new();
@@ -159,7 +163,29 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         JobId = dispatch.Context.JobId;
         JobKind = dispatch.Context.JobKind;
 
-        if (resources.SetupFailed)
+        bool deliverySetupFailed = false;
+        var acceptedSink = eventSink is ProcessAssetsWorkerJobEventSink processingSink
+            ? processingSink.AcceptedDeliverySink
+            : eventSink as IAcceptedWorkerEventSink;
+        var deliveryPolicy = options.EventDeliveryPolicy
+            ?? (WorkerEventDeliveryPolicy.ProductionEnabled ? new WorkerEventDeliveryPolicy() : null);
+        if (acceptedSink is not null && deliveryPolicy is not null)
+        {
+            try
+            {
+                var scope = new WorkerEventDeliveryScope(protocolVersion, dispatch.Context);
+                acceptedSink.BindDeliveryScope(scope);
+                _eventDelivery = new WorkerEventDeliveryQueue(scope, dispatch.Descriptor, deliveryPolicy,
+                    _timeProvider, (delivery, token) => ProjectAcceptedDeliveryAsync(acceptedSink, delivery, token));
+                _deliveryObservation = ObserveDeliveryAsync();
+            }
+            catch
+            {
+                deliverySetupFailed = true;
+            }
+        }
+
+        if (resources.SetupFailed || deliverySetupFailed)
         {
             _startupAuthority = 2;
             _startup.SetResult(
@@ -360,6 +386,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     internal WorkerJobKind JobKind { get; }
     internal bool IsCancellable => _isCancellable;
     internal InternalWorkerProtocolVersion ProtocolVersion => _protocolVersion;
+    internal WorkerEventDeliveryObservation? EventDeliveryObservation => _eventDelivery?.Observation;
+    internal Task? EventDeliveryIntakeClosed => _eventDelivery?.IntakeClosed;
+    internal Task? EventDeliveryFirstBackpressure => _eventDelivery?.FirstBackpressure;
     internal Task<ChildWorkerStartupObservation> Startup => _startup.Task;
     internal Task<ChildWorkerCompletionObservation> Completion => _completion;
     internal Task<ChildWorkerCompletionObservation> EvidenceFinality => _evidenceFinality;
@@ -388,6 +417,7 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
 
         TryCommitPreReady(ChildWorkerStartupObservation.Disposed.Instance);
+        AbandonAcceptedDelivery();
         if (TryConfirmKnownExit(ChildWorkerCancellationExitRace.BeforeControl))
         {
             await _settlement.ConfigureAwait(false);
@@ -451,6 +481,19 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         var standardOutputFinality = await _standardOutputTask.ConfigureAwait(false);
         var standardErrorFinality = await _standardErrorTask.ConfigureAwait(false);
         var startup = await _startup.Task.ConfigureAwait(false);
+        await _deliveryObservation.ConfigureAwait(false);
+        if (_eventDelivery is not null)
+        {
+            try
+            {
+                await _eventDelivery.DisposeAsync().ConfigureAwait(false);
+            }
+            catch
+            {
+                RecordSinkFailure(isReady: false);
+            }
+        }
+
         lock (_observationGate)
         {
             return new ChildWorkerCompletionObservation(
@@ -468,7 +511,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                 JobKind,
                 ProtocolVersion)
             {
-                AcceptedRunStarted = _acceptedRunStarted
+                AcceptedRunStarted = _acceptedRunStarted,
+                EventDelivery = EventDeliveryObservation
             };
         }
     }
@@ -580,6 +624,20 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                 ChildWorkerFaultContainmentReason.StandardOutputReadFailed.Instance);
             return ChildWorkerStreamFinality.ReadFailed.Instance;
         }
+        finally
+        {
+            if (_eventDelivery is not null)
+            {
+                try
+                {
+                    await _eventDelivery.CompleteAsync().ConfigureAwait(false);
+                }
+                catch
+                {
+                    RecordSinkFailure(isReady: false);
+                }
+            }
+        }
     }
 
     private async Task ExecuteOnceAsync()
@@ -688,7 +746,13 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     {
         try
         {
-            if (_eventSink is IProcessAssetsWorkerJobEventSink processAssetsSink)
+            if (_eventDelivery is not null)
+            {
+                await _eventDelivery.EnqueueAsync(
+                    new WorkerEventDeliveryInput(_protocolVersion, jobEvent, compatibilityEvent),
+                    CancellationToken.None).ConfigureAwait(false);
+            }
+            else if (_eventSink is IProcessAssetsWorkerJobEventSink processAssetsSink)
             {
                 await processAssetsSink.AcceptProcessAssetsAsync(
                     jobEvent,
@@ -714,6 +778,48 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             {
                 _sinkCallbackAdmitted = false;
             }
+        }
+    }
+
+    private async ValueTask ProjectAcceptedDeliveryAsync(
+        IAcceptedWorkerEventSink sink,
+        AcceptedDelivery delivery,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            await sink.AcceptDeliveryAsync(delivery, cancellationToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch
+        {
+            RecordSinkFailure(delivery.Input.Message.Type == WorkerJobProtocolV2.ReadyType);
+            throw;
+        }
+    }
+
+    private async Task ObserveDeliveryAsync()
+    {
+        try
+        {
+            await _eventDelivery!.Completion.ConfigureAwait(false);
+        }
+        catch
+        {
+            RecordSinkFailure(isReady: false);
+        }
+    }
+
+    private void AbandonAcceptedDelivery()
+    {
+        if (_eventDelivery is not null)
+        {
+            // Its consumer task is already observed independently and joined by
+            // stream/completion finality. Do not hold process control on projection.
+            _ = _eventDelivery.AbandonAsync();
         }
     }
 
