@@ -388,7 +388,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     internal InternalWorkerProtocolVersion ProtocolVersion => _protocolVersion;
     internal WorkerEventDeliveryObservation? EventDeliveryObservation => _eventDelivery?.Observation;
     internal Task? EventDeliveryIntakeClosed => _eventDelivery?.IntakeClosed;
-    internal Task? EventDeliveryFirstBackpressure => _eventDelivery?.FirstBackpressure;
+    internal Task WaitForEventDeliveryBackpressureAsync(CancellationToken cancellationToken) =>
+        (_eventDelivery ?? throw new InvalidOperationException("This session has no accepted-event delivery queue."))
+            .WaitForBackpressureAsync(cancellationToken);
     internal Task<ChildWorkerStartupObservation> Startup => _startup.Task;
     internal Task<ChildWorkerCompletionObservation> Completion => _completion;
     internal Task<ChildWorkerCompletionObservation> EvidenceFinality => _evidenceFinality;

@@ -196,15 +196,15 @@ public sealed class WorkerEventDeliveryBurstTests
         InternalWorkerProtocolVersion version)
     {
         var clock = new CancellationTestClock();
-        // Capacity three cannot fill during ready/start/eligibility setup.
-        // Its first full wait must belong to the interleaved burst below.
         await using var fixture = new Fixture(clock, capacity: 3);
         var session = await fixture.LaunchAsync("progress-burst-unresponsive", version, 1_000, 100);
         try
         {
             await fixture.Entered.Task.WaitAsync(WorkerProcessFixtureLease.Watchdog);
-            Assert.IsNotNull(session.EventDeliveryFirstBackpressure);
-            await session.EventDeliveryFirstBackpressure.WaitAsync(WorkerProcessFixtureLease.Watchdog);
+            // Once eligibility is held, a current full-FIFO wait cannot be an
+            // earlier burst wait that the consumer has already allowed to pass.
+            using var watchdog = new CancellationTokenSource(WorkerProcessFixtureLease.Watchdog);
+            await session.WaitForEventDeliveryBackpressureAsync(watchdog.Token);
             Assert.AreEqual(3, session.EventDeliveryObservation!.FifoHighWater);
             Assert.AreEqual(7L, session.EventDeliveryObservation.AcceptedLossless,
                 "ready/start/eligibility plus three queued barriers and one waiting barrier");

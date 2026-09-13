@@ -17,6 +17,103 @@ public sealed class WorkerEventDeliveryQueueTests
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
 
     [TestMethod]
+    public async Task BackpressureObservation_DoesNotReuseAnEarlierWaitAfterConsumerAdvances()
+    {
+        var firstEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var firstRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondEntered = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var secondRelease = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var context = new WorkerJobContext(Guid.NewGuid(), WorkerJobKind.ProcessAssets, WorkerJobRequestOrigin.Manual);
+        var delivered = new List<long>();
+        using var watchdog = new CancellationTokenSource(Bound);
+        await using var queue = new WorkerEventDeliveryQueue(
+            new WorkerEventDeliveryScope(InternalWorkerProtocolVersion.V2, context),
+            WorkerJobDescriptors.ProcessAssets, new WorkerEventDeliveryPolicy { LosslessCapacity = 1 }, TimeProvider.System,
+            async (delivery, token) =>
+            {
+                if (delivery.Input.Message.Sequence == 2)
+                {
+                    firstEntered.TrySetResult();
+                    await firstRelease.Task.WaitAsync(token);
+                }
+                else if (delivery.Input.Message.Sequence == 3)
+                {
+                    secondEntered.TrySetResult();
+                    await secondRelease.Task.WaitAsync(token);
+                }
+
+                delivered.Add(delivery.Input.Message.Sequence);
+            });
+        Task AddAsync(long sequence) => queue.EnqueueAsync(new(InternalWorkerProtocolVersion.V2,
+            sequence == 1
+                ? WorkerJobProtocolMapper.Ready(1, DateTimeOffset.UtcNow, new WorkerJobReadyPayload([WorkerJobKind.ProcessAssets]))
+                : new WorkerJobOutputMessage(WorkerJobProtocolV2.DiagnosticCategory, WorkerJobProtocolV2.LogEmittedType,
+                    sequence, DateTimeOffset.UtcNow, context.JobId, context.JobKind, new WorkerJobLogPayload("trace", "retained"))),
+            watchdog.Token).AsTask();
+        try
+        {
+            await AddAsync(1);
+            await AddAsync(2);
+            await firstEntered.Task.WaitAsync(watchdog.Token);
+            await AddAsync(3);
+            Task firstWait = AddAsync(4);
+            await queue.WaitForBackpressureAsync(watchdog.Token);
+            Assert.IsFalse(firstWait.IsCompleted);
+            Assert.AreEqual(1L, queue.Observation.EnqueueWaits);
+
+            firstRelease.TrySetResult();
+            await secondEntered.Task.WaitAsync(watchdog.Token);
+            await firstWait.WaitAsync(watchdog.Token);
+            Task currentBackpressure = queue.WaitForBackpressureAsync(watchdog.Token);
+            Assert.IsFalse(currentBackpressure.IsCompleted,
+                "the earlier full-FIFO wait has ended; no producer is currently waiting");
+            Task secondWait = AddAsync(5);
+            await currentBackpressure.WaitAsync(watchdog.Token);
+            Assert.IsFalse(secondWait.IsCompleted);
+            Assert.AreEqual(2L, queue.Observation.EnqueueWaits);
+            Assert.AreEqual(5L, queue.Observation.AcceptedLossless);
+
+            secondRelease.TrySetResult();
+            await secondWait.WaitAsync(watchdog.Token);
+            await queue.CompleteAsync().WaitAsync(watchdog.Token);
+            CollectionAssert.AreEqual(new long[] { 1, 2, 3, 4, 5 }, delivered);
+        }
+        finally
+        {
+            firstRelease.TrySetResult();
+            secondRelease.TrySetResult();
+        }
+    }
+
+    [TestMethod]
+    [DataRow(false)]
+    [DataRow(true)]
+    public async Task BackpressureObservation_EndOfDeliveryWakesObserverWithoutInventingSaturation(bool abandon)
+    {
+        await using var fixture = new Fixture();
+        using var watchdog = new CancellationTokenSource(Bound);
+        Task observation = fixture.Queue.WaitForBackpressureAsync(watchdog.Token);
+        Assert.IsFalse(observation.IsCompleted);
+        await (abandon ? fixture.Queue.AbandonAsync() : fixture.Queue.CompleteAsync()).WaitAsync(Bound);
+        await Assert.ThrowsExactlyAsync<InvalidOperationException>(() => observation);
+        Assert.AreEqual(0L, fixture.Queue.Observation.EnqueueWaits);
+    }
+
+    [TestMethod]
+    public async Task BackpressureObservation_CancellationEndsOnlyTheObserver()
+    {
+        await using var fixture = new Fixture();
+        using var cancellation = new CancellationTokenSource();
+        Task observation = fixture.Queue.WaitForBackpressureAsync(cancellation.Token);
+        Assert.IsFalse(observation.IsCompleted);
+        cancellation.Cancel();
+        await Assert.ThrowsAsync<OperationCanceledException>(() => observation.WaitAsync(Bound));
+        Assert.AreEqual(WorkerEventDeliveryFinality.Open, fixture.Queue.Observation.Finality);
+        await fixture.StartAndBlockAsync();
+        Assert.AreEqual(3L, fixture.Queue.Observation.AcceptedLossless);
+    }
+
+    [TestMethod]
     public async Task CancellationBeforeEnqueue_DoesNotAcceptInputAndDisposalSettlesEmptyQueue()
     {
         await using var fixture = new Fixture();

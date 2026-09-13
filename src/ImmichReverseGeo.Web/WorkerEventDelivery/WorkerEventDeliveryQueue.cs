@@ -21,7 +21,7 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
     private readonly CancellationTokenSource _abandonCancellation = new();
     private readonly Task _consumer;
     private readonly TaskCompletionSource _intakeClosed = Signal();
-    private readonly TaskCompletionSource _firstBackpressure = Signal();
+    private TaskCompletionSource _backpressureChanged = Signal();
     private TaskCompletionSource _available = Signal();
     private TaskCompletionSource _space = Signal();
     private TaskCompletionSource _producerSettled = Signal();
@@ -33,6 +33,7 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
     private long _lastAccepted;
     private bool _producerActive;
     private bool _waitingLossless;
+    private bool _capacityWaitActive;
     private bool _closed;
     private bool _intakeComplete;
     private bool _terminalAccepted;
@@ -85,7 +86,34 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
     internal WorkerJobDescriptor Descriptor { get; }
     internal Task Completion => _consumer;
     internal Task IntakeClosed => _intakeClosed.Task;
-    internal Task FirstBackpressure => _firstBackpressure.Task;
+
+    // Observe a current capacity wait, not a historical first wait. The caller
+    // must hold its projection boundary if the observed condition must stay true.
+    internal async Task WaitForBackpressureAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Task changed;
+            lock (_gate)
+            {
+                _failure?.Throw();
+                if (_capacityWaitActive && _fifo.Count == _capacity)
+                {
+                    return;
+                }
+
+                if (_abandoned || _finished || (_intakeComplete && !_producerActive))
+                {
+                    throw new InvalidOperationException("Event delivery ended without a current capacity wait.");
+                }
+
+                changed = _backpressureChanged.Task;
+            }
+
+            await changed.WaitAsync(cancellationToken).ConfigureAwait(false);
+        }
+    }
 
     internal WorkerEventDeliveryObservation Observation
     {
@@ -176,6 +204,7 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
 
                     if (_fifo.Count < _capacity)
                     {
+                        _capacityWaitActive = false;
                         if (waitStarted is { } started)
                         {
                             _waitMilliseconds += ElapsedMilliseconds(started);
@@ -195,7 +224,8 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
                     {
                         waitStarted = _time.GetTimestamp();
                         _waits++;
-                        _firstBackpressure.TrySetResult();
+                        _capacityWaitActive = true;
+                        Pulse(ref _backpressureChanged);
                     }
 
                     space = _space.Task;
@@ -230,6 +260,7 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
 
                 _producerActive = false;
                 _waitingLossless = false;
+                _capacityWaitActive = false;
                 if (_closed)
                 {
                     _intakeComplete = true;
@@ -430,6 +461,7 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
                 _finished = true;
                 _inFlight = null;
                 Pulse(ref _space);
+                Pulse(ref _backpressureChanged);
             }
         }
     }
@@ -510,6 +542,7 @@ internal sealed class WorkerEventDeliveryQueue : IAsyncDisposable
             DiscardBuffered(null);
             Pulse(ref _available);
             Pulse(ref _space);
+            Pulse(ref _backpressureChanged);
         }
 
         try
