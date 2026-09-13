@@ -1326,7 +1326,10 @@ if ! cmp -s "$expected_runonce" "$EVIDENCE_ROOT/runonce-stdout.txt"; then
     fail "Run-once emits exact three-line no-work stdout"
 fi
 pass "Run-once emits exact three-line no-work stdout"
-require_equal "$(stat -c '%s' "$EVIDENCE_ROOT/runonce-stderr.txt")" "0" "Run-once successful stderr is empty"
+if ! awk -f "$REPO_ROOT/tests/docker-mode-smoke/runonce-lifecycle.awk" "$RAW_ROOT/runonce-stderr.txt"; then
+    fail "Run-once stderr contains exactly the five safe completed-role lifecycle events"
+fi
+pass "Run-once stderr contains exactly the five safe completed-role lifecycle events"
 require_equal "$(grep -Fxc 'Run started.' "$EVIDENCE_ROOT/runonce-stdout.txt")" "1" "Run-once reports one started attempt"
 require_equal "$(grep -Fxc 'Run completed: processed=0 updated=0 skipped=0 failed=0.' "$EVIDENCE_ROOT/runonce-stdout.txt")" "1" "Run-once reports one terminal attempt"
 require_mount_owner "$runonce_root/data/skipped.db" "Run-once data artifact has image UID/GID"
