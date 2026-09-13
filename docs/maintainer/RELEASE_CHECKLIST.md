@@ -1,38 +1,79 @@
 # Release Checklist
 
-## GitHub
+## Unreleased checkpoint: worker migration
 
-- Push `master`
-- Confirm CI passes
-- Confirm Pages deploy passes
-- Confirm the docs site renders correctly
-- Confirm the published container image can be pulled and started
+This is the Change 72 evidence checkpoint, reviewed on **2026-09-13 UTC by Codex, root solo**. The review is a separate same-author Brooks review; no independent reviewer or subagent was used. [Technical notes](../../CHANGELOG.md), [public summary](../website/changelog.md), [deployment operations](../website/deployment-modes.md) and [maintainer contracts](./WORKER_ARCHITECTURE_PROTOCOL.md) must agree.
 
-## Runtime
+**Publication is blocked.** No release version/date or published candidate tag has been selected. This checkpoint authorizes no master merge, release/image publication or production deployment. The implementation and archive commits must each pass all eight required CI jobs at their exact SHA. Final local receipts under `_out/execution/72/` record those post-commit facts without inventing a release identity.
 
-- Start the latest image with persistent `/data` and `/config` mounts
-- Confirm the published Web artifact contains `ImmichReverseGeo.Web.dll` with its matching `.runtimeconfig.json` and `.deps.json`; the processing worker runs from this same image and assembly
-- Production processing has no in-process selection or runtime fallback. Roll back only by reverting to the previous source or image version, rebuilding when needed, and redeploying the complete artifact. Preserve the failure evidence rather than adding a per-run fallback.
-- Verify the web UI loads
-- Verify `/healthz` if a health endpoint is available in the release being tested
-- Verify existing settings survive a container update
+## Image identities and evidence boundaries
 
-## Reverse Geocoding
+Every matrix row below inherits reviewer/date above and candidate **C**. Rows marked **P → C → P** also inherit the previous image **P**. Source/contract tests are explicitly distinguished from image execution.
 
-- Verify a lookup in a straightforward inland city
-- Suggested coordinate: `47.3769, 8.5417` should resolve to Zurich / Switzerland
-- Verify a lookup near a major airport
-- Suggested coordinate: `47.460972, 8.553525` should resolve to Zurich Airport infrastructure in Switzerland
-- Verify a lookup in a coastal or island-heavy country
-- Suggested coordinate: `4.2979, 73.0111` should resolve to Maldives with useful Overture division data
-- Verify processing writes city/state/country back to Immich as expected
-- Verify a country with on-demand Overture division download still works from a clean `/data` directory
+| Identity | Exact value and use |
+|---|---|
+| C: local candidate | Image ID `sha256:e5df3a125e3410ddf48485bbcea9c8651bb3fd06d15e1ad3fbdc778ee3742758`; Linux ARM64, native. Built once by the canonical Docker matrix and saved before its cleanup; exactly that image was reloaded for upgrade/rollback. No published tag. |
+| C source | Commit `5f602b31b60a9e528ec84c379220aed6067ab2af`, tree `e99783804ee788e2530d05c12599f5c4d9c23a6e`. All 603 runtime/test/script/CI inputs remain unchanged through the release-documentation change; frozen manifests provide the bridge to later documentation commits. |
+| Saved C archive | SHA-256 `621d6c9a62c818d0e69fbf171524cf8768d015c5eb4c476acc7c98522455d167`. The local image ID is not a registry manifest digest. |
+| P: published previous image | `ghcr.io/immich-reversegeo/immich-reversegeo@sha256:e82c6c11e26737ce79e633e22089bd582b57f23778049cd20888c25fc42f5dab`; revision `51860018406fda9b323db06f336509fd7e9b8cfa`, built 2026-04-12. Pulled by immutable digest. Its label says `latest`, not a numbered release. |
+| P platform | Linux AMD64 under QEMU 10.2.1 in the ARM64 test VM. This is a functional compatibility observation, not native AMD64 performance evidence. |
+| CI images | Each required Linux AMD64 Docker job builds its own single image from that run's exact commit. Its `run.txt` records its image ID. Do not equate these images with C across builds or architectures. |
 
-## Docs and Metadata
+The source candidate already passed [all eight jobs at 5f602b3](https://github.com/crazz/immich-reversegeo/actions/runs/34779879551). The landed block-69 [required Docker gate](https://github.com/crazz/immich-reversegeo/actions/runs/34776795424) is also green. Change 72 must capture its own implementation and archive CI; prior CI does not waive them.
 
-- Final README updates
-- Final changelog updates
-- Final installation/configuration docs
-- Final privacy URL
-- Final support URL
-- Final terms URL
+Local evidence is retained, gitignored maintainer output. Index: `_out/execution/72/local-gates-index.json`; source identity: `source-candidate-preflight.json`; image: `native-image-receipt.json`; compatibility: `upgrade-rollback-receipt.json`; final closure: `archive-closure-local.json`, all under that directory. A missing receipt or inaccessible CI artifact is a blocker for whoever signs an actual release; a path written here is not a substitute for reading it.
+
+## Required evidence matrix
+
+| Owner | Exact bounded claim | Landed source/test/doc | Passing evidence and identity |
+|---|---|---|---|
+| 1–39 | Earlier refactoring and geodata behavior remain covered by the current default suite; no inference of completion from planning alone. | [Master plan](../../MASTERPLAN.md), [Web tests](../../tests/ImmichReverseGeo.Tests), [Overture tests](../../tests/ImmichReverseGeo.Overture.Tests), [GADM tests](../../tests/ImmichReverseGeo.Gadm.Tests) | C source; full default command below: 2672 passed, 2 platform skips, 0 failures. `archive-artifact-inventory.json` and `prerequisite-archive-ci.json` preserve prerequisite review. The foreign local block-02 archive move is excluded; its versioned tasks are complete. |
+| 40–46 | Only absent mode defaults to Standard; exact values, invalid exit 2, startup-only selection, one neutral image/entrypoint, non-root, separate writable mounts and intended ports. | [Mode tests](../../tests/ImmichReverseGeo.Tests/ApplicationComposition/DeploymentModeCompositionMatrixTests.cs), [Docker producer](../../scripts/docker-mode-smoke.sh), [mode guide](../website/deployment-modes.md) | C source: 237 focused tests passed. C image: canonical `npm run test:docker-smoke`, one build, 230 assertions passed, two Standard admissions; bounded `native-docker-evidence/evidence/` and image receipt. |
+| 47–56 | Standard/Web-only UI, manual processing, Lookup and supported heavy Data jobs use same-image workers; local arbitration, cancellation/finality and lightweight Web dependency boundary. Run-once is direct. | [Composition tests](../../tests/ImmichReverseGeo.Tests/ApplicationComposition), [job tests](../../tests/ImmichReverseGeo.Tests/WorkerJobs), [architecture guide](./WORKER_ARCHITECTURE_PROTOCOL.md) | C source: focused 237 plus default suite and exact-source eight-job CI. C image: Standard manual UI run completed, worker Running → Idle, one new skipped record; Web-only UI retained saved schedule but reported scheduling disabled. Broad action/DI claims remain contract-tested, not all exercised by this tiny image fixture. |
+| 57–61; 62–64 no-go | Standard retains full current-eligibility `EXISTS` and existing schedule presets; no persisted watermark, incremental detector, periodic reconciliation cadence or NAS-specific control was added. | [Detector source](../../src/ImmichReverseGeo.Web/Services/ImmichDbRepository.cs), [detector tests](../../tests/ImmichReverseGeo.Tests/ProcessingWorkDetectorObservabilityTests.cs), [scheduling guide](../website/deployment-modes.md#nas-and-hdd-scheduling), [archived decisions](../../openspec/changes/archive) | C source: default suite and strict archive validation. Blocks 62–64 are complete no-go decisions, with no rejected build tasks or feature claims. Negative inspection of both changelogs and current detector is required; `archive-artifact-inventory.json` records task closure. |
+| 65–67; 71 | Protocol compatibility, coalescing/backpressure, failure/finality, bounded redacted telemetry, process-tree/stream/temp cleanup follow landed contracts. A terminal message alone does not establish cleanup. | [Worker protocol tests](../../tests/ImmichReverseGeo.Tests/WorkerProtocol), [telemetry tests](../../tests/ImmichReverseGeo.Tests/LifecycleTelemetry), [contract and failure guide](./WORKER_ARCHITECTURE_PROTOCOL.md) | C source: 683 focused protocol/finality tests passed; full suite and exact-source Linux/macOS/Windows lifecycle CI. These are contract/fixture observations, not arbitrary OS-kill guarantees. |
+| 68 | Selected repeated-worker fixture completes and preserves cleanup evidence; no calibrated numeric memory claim. | [Soak tests](../../tests/ImmichReverseGeo.Tests/WorkerMemorySoak), [soak guide](./worker-memory-soak.md) | C source: canonical `npm run test:performance:worker-memory` selected explicitly; 1 test passed, 15 iterations, no violations. Seed 6801, 5 warm-up + 10 measured, job weights 3:1:1, cancellation and failure enabled. Bundle `20260913T203716182Z-f01534595d404bad9c94e5009433c9a8`; `selected-soak-evidence.json`. |
+| 69 | Required `Docker Mode Integration` invokes exactly `npm run test:docker-smoke`; all modes/invalid values use one immutable image per run, non-root/mount/diagnostic/cleanup assertions retained. | [Required CI](../../.github/workflows/ci.yml), [Docker harness](../../scripts/docker-mode-smoke.sh) | C image: 230/230 assertions, exit 0, one build, zero owned containers/networks/volumes after cleanup. [Block-69 archive CI](https://github.com/crazz/immich-reversegeo/actions/runs/34776795424), [C-source CI](https://github.com/crazz/immich-reversegeo/actions/runs/34779879551); Change 72 exact-SHA receipts remain mandatory. |
+| 70–72 | Public/technical mode, retry, compatibility, memory and license wording agrees; private worker selectors/protocol controls are absent from both changelogs. | [Deployment guide](../website/deployment-modes.md), [maintainer guide](./WORKER_ARCHITECTURE_PROTOCOL.md), [technical notes](../../CHANGELOG.md), [public notes](../website/changelog.md), [data licensing](../website/data-sources.md#optional-gadm-administrative-data) | C source: `npm run docs:build`, rendered-route/link verification and semantic/negative-copy review recorded in local gates. Block-70 [archive CI](https://github.com/crazz/immich-reversegeo/actions/runs/34778537806) and block-71 [archive CI](https://github.com/crazz/immich-reversegeo/actions/runs/34779879551) passed. |
+| 72 upgrade/storage | Preexisting separate config/data remain usable; no Immich schema or persisted configuration migration occurs in the tested sequence. | [Config source](../../src/ImmichReverseGeo.Web/Services/ConfigService.cs), [skip store](../../src/ImmichReverseGeo.Web/Services/SkippedAssetsRepository.cs), [Immich queries](../../src/ImmichReverseGeo.Web/Services/ImmichDbRepository.cs) | P → C → P: live browser Settings/Dashboard checks and schema/data hashes. Enabled custom cron `17 3 * * 1`, batch 1, delay 0, parallelism 1 retained byte-for-byte. App DB role had no DDL permission. `upgrade-rollback-receipt.json`. |
+| 72 operations | Native C Run-once has one attempt, no child/listener, no restart/retry; managed 0/2/3/5/130 verified. Exit 4 is a controlled contract case. | [Run-once outcome tests](../../tests/ImmichReverseGeo.Tests/RunOnceDeploymentMode/RunOnceProcessOutcomeTests.cs), [Run-once composition](../../tests/ImmichReverseGeo.Tests/RunOnceDeploymentMode/RunOnceCompositionTests.cs), [public exit meanings](../website/deployment-modes.md#run-once-exit-codes) | C image: completed, invalid mode, held advisory lock, failed DB dependency and cooperative TERM while a real query was blocked. Each applicable attempt had one final observation; held process had no child or port 8080 listener. C source: full suite covers domain exit 4; it was not fault-injected into the production image. |
+| 72 rollback | Stopped-work rollback to exactly P reads original and C-created skipped records with the same settings; old/new apps never overlap. | [Rollback procedure below](#upgrade-and-rollback-procedure), [storage source above](../../src/ImmichReverseGeo.Web/Services/SkippedAssetsRepository.cs) | P → C → P: skipped rows 1 → 2 → 2, SQLite integrity/schema preserved, existing row retained, settings/sentinel/Immich schema and rows unchanged. Tiny three-asset fixture only; no administrative-cache or full-library compatibility claim. Owned test containers/networks/volumes removed. |
+
+### Test commands and retained attempts
+
+Run through the repository's reusable agent runner, preserving each attempt under `_out/agent-tests/`. All four successful local gates used unchanged source inputs and exited `0`:
+
+| Gate | Command | Result and frozen receipt under `_out/execution/72/` |
+|---|---|---|
+| Modes/DI | `npm run agent:test -- --filter 'FullyQualifiedName~ApplicationComposition\|FullyQualifiedName~DeploymentMode\|FullyQualifiedName~ApplicationRole'` | 237 passed, 0 skipped; 69.422 s including wrapper. `20260913T201938Z-focused-modes-b97ed5ed-result.json` |
+| Protocol/finality | `npm run agent:test -- --filter 'FullyQualifiedName~WorkerProtocol\|FullyQualifiedName~WorkerJobs\|FullyQualifiedName~WorkerProcessFailureMatrix\|FullyQualifiedName~ChildWorkerCancellation\|FullyQualifiedName~WorkerStdinRequestLoop\|FullyQualifiedName~WorkerFailureRecovery\|FullyQualifiedName~LifecycleTelemetry'` | 683 passed, 0 skipped; 55.781 s. `20260913T202222Z-focused-protocol-finality-5a211589-result.json` |
+| Default suite | `npm run agent:test` | 2672 passed, 2 Windows-specific skips on macOS, 0 failures; 142.374 s. Integration/Performance excluded normally. `20260913T205613Z-full-default-a8412fda-result.json` |
+| Selected soak | `npm run test:performance:worker-memory` with an **absolute** `IMMICH_REVERSEGEO_SOAK_CONFIG` file path | 1 passed, 15 iterations; 25.636 s. `20260913T203657Z-selected-soak-absolute-config-950a2454-result.json` |
+
+The soak configuration is retained in `_out/execution/72/soak-config.json`; the wrapper only supplies its absolute path. An initial relative-path launch failed before worker startup; its result remains preserved. The fixture uses a test process, production Web composition and a controlled worker apphost/host with local adapters on macOS ARM64, not image C. There is no container/cgroup measurement or numeric threshold profile. Sampling cannot establish an absolute peak, a total process-tree/container peak, lower total memory, universal RAM/RSS requirements or guaranteed reclamation. Missing samples never mean zero.
+
+Two local Docker-helper failures are retained separately: image-tag capture casing (canonical matrix itself passed; exact ID recovered without rebuilding), and an internal-network UI port setup (old app answered at its container IP; retry used a dedicated bridge and loopback publication). Corrected evidence must be read alongside those failures. No production source or canonical Docker harness changed.
+
+## Upgrade and rollback procedure
+
+1. Select the intended immutable image; do not infer worker-mode support from a mutable `latest` tag. Back up/snapshot `/config`, `/data` and affected Immich data while writers are stopped. Preserve previous image identity and container configuration.
+2. Stop new admissions and active work; wait for worker/process/stream/storage cleanup, then stop the old instance. Start the candidate with distinct persistent `/config` and `/data` mounts and the normal entrypoint. No mode variable means Standard; only exact `standard`, `web-only`, `run-once` are valid. Recreate the container for an environment change; mode is startup-only and not persisted.
+3. Check the interactive UI, saved settings and representative data, then a bounded manual run. In Web-only, saved schedule values remain visible/editable but the internal scheduler stays disabled. No public automation endpoint is added. Run-once has no listener/child/precheck, performs one direct attempt and exits; use no automatic restart and assign any retry/backoff to the operator.
+4. Interpret exits exactly: `0` completed/no work; `2` invalid invocation/mode; `3` advisory-lock busy; `4` domain failure; `5` startup/required dependency/infrastructure/cleanup failure; `130` orderly cancellation. An abrupt platform kill can yield an unmapped status. Committed or partial Immich writes, skip records and published caches are not automatically undone.
+5. To roll back, stop new admissions and active work again, wait for cleanup, and stop the candidate. Start exactly P with the same **tested** volumes and remove public mode environment configuration unsupported by P. Never run old and new apps concurrently during this path. Recheck settings and live data after startup.
+6. The exercised volume state contains one settings file, an old skipped row, one new skipped row and a sentinel, against a three-row synthetic Immich DB. Settings bytes, SQLite schema/integrity, sentinel, Immich schema and metadata rows matched before/after; the new skip row was intentionally retained. Newer settings, cache formats, forward-created data or other image-volume combinations remain unverified. Restore compatible backups where needed; do not promise universal backward compatibility, automatic reversal or zero downtime.
+
+AppConfig is unchanged from P's source; configuration serialization and the skipped-store table remain compatible in the inspected source. Runtime Immich queries introduce no DDL/schema migration. This supports the bounded fixture result, not a certification of all existing administrative caches or every user's data.
+
+## Final publication gate
+
+Keep this section open until an actual release is authorized and the facts exist. Do not remove a mandatory matrix row to get a green sign-off.
+
+- [ ] Select the real release version/tag and date; replace `Unreleased` in both changelogs together only then. Confirm their mutual links and exact mode/default/compatibility/retry/rollback meaning still agree.
+- [ ] Read the exact implementation and archive SHA receipts and all eight required jobs, including `Docker Mode Integration`; download/read the bounded Docker evidence with its one-build image ID. Re-run affected gates if runtime/image inputs changed after C.
+- [ ] Resolve any missing, stale, contradictory or failed prerequisite evidence. Blocks 62–64 remain finalized no-go decisions, not promised functionality. Recheck both changelogs for private selectors/protocol controls and rejected watermark/reconciliation/NAS claims.
+- [ ] Obtain the separate authorization for merge/publication/deployment. Review [image publishing](../../.github/workflows/docker-publish.yml), [release artifacts](../../.github/workflows/release.yml) and [Pages](../../.github/workflows/pages.yml); passing tests do not publish a release.
+- [ ] After authorized publication, pull the actual candidate tag by immutable digest, record source revision/platform and verify startup, mounts, UI/modes and the previous-image rollback identity. C is an unpublished local candidate and cannot fulfill this registry check.
+- [ ] Confirm the published docs build/render correctly, links/support/privacy/terms metadata are appropriate, and installation examples refer to a release that actually includes the modes. Optional GADM must remain visibly limited to academic and other non-commercial use.
+- [ ] Validate representative inland, airport and coastal/island Lookup results, an on-demand download and intended Immich writes for the actual release environment. Existing contract tests and the tiny migration fixture do not replace this operational validation.
+- [ ] Record final publisher/reviewer/date, immutable published image, exact CI URLs, compatibility matrix and explicit publish/no-publish decision. Current decision: **NO PUBLISH; Unreleased evidence checkpoint only.**
