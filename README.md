@@ -1,3 +1,5 @@
+# FORK for my experiments and bugfixing. AI assistance is used. If you dont know what you do - use original repo!
+
 # Immich ReverseGeo
 
 Immich ReverseGeo is a self-hosted companion service for [immich](https://immich.app) that improves the accuracy and usefulness of reverse-geocoded location names for photo assets.
