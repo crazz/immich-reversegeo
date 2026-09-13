@@ -1380,7 +1380,7 @@ Document cache atomicity: unique same-directory candidate, closed handles, valid
 
 **Dependencies and sequencing** — Re-read the finalized implementation and tests from blocks 15–32, 40–56, and 65–69 at apply start; do not infer concrete symbols from planning text. Block 70 is parallel-owned: consume its finalized public route only for a cross-link and do not edit or restate it. Complete after those prerequisites and before block 72; if source, tests, Docker evidence, or the block-70 route disagree, stop and record the drift rather than documenting an aspirational contract.
 
-**OpenSpec** — [71-document-worker-architecture-protocol](openspec/changes/71-document-worker-architecture-protocol/)
+**OpenSpec** — [71-document-worker-architecture-protocol](openspec/changes/archive/2026-09-13-71-document-worker-architecture-protocol/)
 
 ### 72. `chore: finalize release notes and migration guidance`
 
