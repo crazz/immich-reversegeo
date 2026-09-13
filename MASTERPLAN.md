@@ -1268,7 +1268,7 @@ Every scheduled check uses the full current-eligibility `EXISTS` observation. No
 
 **Dependencies and sequencing** — Apply only after re-reading landed blocks 15, 16, 21, 27, 44, 47, 49, and 51; stop rather than edit those contracts or invent parallel protocol/job/state types. Preserve worker-side lossless emission and primary reader/validator authority, v1 bytes and rollback, v2 one-job identity, existing log bounds, UI state ownership, and process/stdout/stderr/protocol/bridge cleanup. Do not modify block 64 scheduling or block 66 telemetry; complete this bounded observation seam before blocks 67–68 consume failure/load behavior.
 
-**OpenSpec** — [65-coalesce-worker-progress-events](openspec/changes/65-coalesce-worker-progress-events/)
+**OpenSpec** — [65-coalesce-worker-progress-events](openspec/changes/archive/2026-09-13-65-coalesce-worker-progress-events/)
 
 ### 66. `obs: add role and process lifecycle telemetry`
 
