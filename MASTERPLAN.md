@@ -1326,7 +1326,7 @@ Keep the Web process alive across warmup and measured phases, reset observations
 
 **Apply-time fixture boundary reconciliation** — The landed block-67 seam uses a test apphost and controlled descriptor, not the unchanged deployed worker executable or production command builder. Report parent RSS as the whole test-host process containing the production Web composition and child RSS as the production worker pipeline plus fixture overhead. Record those executable/composition identities in evidence and require compatible external profiles; no production-image RSS claim follows from this soak. Structural ownership, real job execution, no-network, sentinels and cleanup requirements remain mandatory.
 
-**OpenSpec** — [68-add-repeated-worker-memory-soak](openspec/changes/68-add-repeated-worker-memory-soak/)
+**OpenSpec** — [68-add-repeated-worker-memory-soak](openspec/changes/archive/2026-09-13-68-add-repeated-worker-memory-soak/)
 
 ### 69. `ci: add Docker mode integration job`
 
