@@ -6,7 +6,7 @@ icon: material/lifebuoy
 
 For bugs, feature ideas, or questions:
 
-- open an issue in the [GitHub repository](https://github.com/immich-reversegeo/immich-reversegeo/issues)
+- open an issue in the [GitHub repository](https://github.com/crazz/immich-reversegeo/issues)
 - include coordinates, expected result, and actual result when reporting lookup problems
 - include relevant log lines when reporting processing failures
 

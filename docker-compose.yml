@@ -2,7 +2,7 @@
 # Add this service to your existing Immich docker-compose.yml.
 services:
   immich-reversegeo:
-    image: ghcr.io/immich-reversegeo/immich-reversegeo:latest
+    image: ghcr.io/crazz/immich-reversegeo:latest
     container_name: immich-reversegeo
     pull_policy: always
     ports:
@@ -23,7 +23,7 @@ services:
   # Optional one-shot service: docker compose run --rm immich-reversegeo-run-once
   # The profile prevents an ordinary compose up from starting this job.
   immich-reversegeo-run-once:
-    image: ghcr.io/immich-reversegeo/immich-reversegeo:latest
+    image: ghcr.io/crazz/immich-reversegeo:latest
     pull_policy: always
     profiles: ["run-once"]
     volumes:

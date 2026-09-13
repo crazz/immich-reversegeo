@@ -5,7 +5,7 @@ Thanks for helping improve Immich ReverseGeo.
 ## Before You Start
 
 - Open an issue for bugs or feature ideas when possible.
-  Use [GitHub Issues](https://github.com/immich-reversegeo/immich-reversegeo/issues).
+  Use [GitHub Issues](https://github.com/crazz/immich-reversegeo/issues).
 - Keep changes focused. Small, clear pull requests are easier to review and ship.
 - If your change affects user-facing behavior, update the docs too.
 
@@ -28,6 +28,8 @@ Development defaults:
 - data dir: `./localdata`
 - bundled data dir: `./bundled-data`
 - config dir: `./localdata`
+
+Start with the [maintainer architecture overview](./docs/maintainer/ARCHITECTURE.md) for the project dependency graph, role composition and main execution flows.
 
 ### Common Task Scripts
 
@@ -54,6 +56,15 @@ The Docker task scripts use [`src/ImmichReverseGeo.Web/Dockerfile`](./src/Immich
 If Overture downloads fail in Linux containers with a DuckDB Azure SSL certificate error, check that the shared DuckDB bootstrap still sets `SET azure_transport_option_type='curl'` after `LOAD azure`. That was the confirmed fix for the current Docker/Linux Azure transport issue.
 
 The test projects use `MSTest.Sdk` on Microsoft.Testing.Platform for the .NET 10 test path. The repo-level runner selection lives in [`global.json`](./global.json).
+
+Stop the running dev app before testing. For agent runs or when you need a retained log for every attempt, use the reusable runner:
+
+```bash
+npm run agent:test
+npm run agent:test -- --filter 'TestCategory=Change65'
+```
+
+The runner preserves output under `_out/agent-tests/` and fails an empty selection. Default runs exclude Integration and Performance. Use the explicit integration instructions below for disposable database tests, or the [optional worker memory soak](./docs/maintainer/worker-memory-soak.md) for Performance work.
 
 For Visual Studio and other tooling that honors repo-level run settings, [`.runsettings`](./.runsettings) excludes `Integration` and `Performance` tests from normal default runs.
 
@@ -178,7 +189,7 @@ If the desired place is not in the candidate list, that usually means the fix be
 
 ## Docs
 
-For worker composition, protocol, finality and diagnostic evidence, see the repository-only [Worker architecture and protocol](./docs/maintainer/WORKER_ARCHITECTURE_PROTOCOL.md) reference.
+The [maintainer index](./docs/maintainer/README.md) links the architecture overview, worker protocol, dependency boundary, event delivery, memory soak and release evidence. Read the [worker contract reference](./docs/maintainer/WORKER_ARCHITECTURE_PROTOCOL.md) before changing composition, protocol or finality.
 
 The documentation site is built with Zensical using the existing [`mkdocs.yml`](./mkdocs.yml) compatibility path. Public website content lives under [`docs/website/`](./docs/website/). Generated output goes to [`_out/website/`](./_out/website/).
 

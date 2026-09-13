@@ -93,7 +93,7 @@ For memory pressure, compare the container host's observations during representa
 
 Immich ReverseGeo verifies the files needed to start its processing worker when the service starts. Pull or rebuild the complete application image, then recreate the service. Do not copy only the application DLL into an existing container or volume. Check the container logs for the startup message before trying to process assets.
 
-Standard and Web-only processing runs in temporary workers; Run-once performs its single attempt directly and serves no Web UI. If an upgrade introduces a worker problem, keep the safe failure logs and follow the release's rollback guidance for the previous complete image and your saved volumes. See [Deployment Modes](./deployment-modes.md) for supported operation and recovery.
+Standard and Web-only processing runs in temporary workers; Run-once performs its single attempt directly and serves no Web UI. If an upgrade introduces a worker problem, keep the safe failure logs and follow [Upgrading and Rollback](./upgrading.md#5-roll-back-if-needed) for the previous complete image and your saved volumes. See [Deployment Modes](./deployment-modes.md) for supported operation and recovery.
 
 ## A run says another run is active or its lock connection was lost
 

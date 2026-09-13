@@ -21,7 +21,7 @@ Immich ReverseGeo is a self-hosted companion for <a href="https://immich.app">im
 <div class="hero-actions">
   <a class="md-button md-button--primary" href="./getting-started">Get started</a>
   <a class="md-button" href="./installation">Installation</a>
-  <a class="md-button" href="https://github.com/immich-reversegeo/immich-reversegeo">GitHub</a>
+  <a class="md-button" href="https://github.com/crazz/immich-reversegeo">GitHub</a>
 </div>
 
 ## Why People Use It
@@ -92,7 +92,7 @@ Immich ReverseGeo is a strong fit if your photos already have GPS coordinates an
   </div>
   <div class="card">
     <h3>Immich ReverseGeo app</h3>
-    <p>The web app handles settings, processing, lookups, and download management.</p>
+    <p>The Web service handles controls and progress. Temporary workers perform processing, lookups, and cache refreshes inside the same container.</p>
   </div>
   <div class="card">
     <h3>Built-in data</h3>
@@ -103,6 +103,8 @@ Immich ReverseGeo is a strong fit if your photos already have GPS coordinates an
     <p>Extra country data is downloaded when needed for better state and city matching.</p>
   </div>
 </div>
+
+The [architecture guide](./architecture.md) explains process and storage ownership. Compare [deployment modes](./deployment-modes.md) to choose a Web service with scheduling, manual control, or a direct Run-once job. These changes are currently [Unreleased](./changelog.md#unreleased); check that your image includes them.
 
 ## Before You Run It On Real Data
 
@@ -135,6 +137,8 @@ Immich ReverseGeo is a strong fit if your photos already have GPS coordinates an
 <div class="quick-grid">
   <a class="quick-link" href="./getting-started">Getting Started</a>
   <a class="quick-link" href="./installation">Installation</a>
+  <a class="quick-link" href="./deployment-modes">Deployment Modes</a>
+  <a class="quick-link" href="./upgrading">Upgrading and Rollback</a>
   <a class="quick-link" href="./configuration">Configuration</a>
   <a class="quick-link" href="./using-the-app">Using the App</a>
   <a class="quick-link" href="./data-sources">Data Sources</a>

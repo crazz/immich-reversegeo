@@ -39,13 +39,23 @@ Save a configuration file under `_out/`, for example:
 }
 ```
 
-Then select it explicitly:
+Then select it with an absolute path from the repository root. The test process may run from a different working directory:
 
 ```sh
-IMMICH_REVERSEGEO_SOAK_CONFIG=_out/soak-config.json npm run test:performance:worker-memory
+IMMICH_REVERSEGEO_SOAK_CONFIG="$(pwd)/_out/soak-config.json" npm run test:performance:worker-memory
 ```
 
-On PowerShell, set `$env:IMMICH_REVERSEGEO_SOAK_CONFIG` before the same npm command and remove that variable afterward.
+On PowerShell:
+
+```powershell
+$env:IMMICH_REVERSEGEO_SOAK_CONFIG = (Resolve-Path '_out/soak-config.json').Path
+try {
+    npm run test:performance:worker-memory
+}
+finally {
+    Remove-Item Env:IMMICH_REVERSEGEO_SOAK_CONFIG
+}
+```
 
 Counts must be positive multiples of the sum of the weights, with at most 100,000 jobs per phase. Each weight must be between 1 and 100; Processing must exceed the other two weights combined. Failure cycles require at least two measured CacheMutation jobs so a successful peer remains. Warmup jobs always succeed. When enabled, every third measured Processing job is cooperatively cancelled and every second measured CacheMutation job fails before publication. Neither is retried automatically.
 

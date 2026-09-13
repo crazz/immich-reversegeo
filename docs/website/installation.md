@@ -25,7 +25,7 @@ The reference below uses **Standard**, with a Web UI and your saved schedule. Co
 - Services in the same Compose project use its existing network. With a separate project, explicitly join the database's network and use its reachable database hostname.
 - The Web port is bound to localhost. Use a private access path for a remote host; see [VPS and firewall notes](#vps-and-firewall-notes).
 
-This example uses `ghcr.io/immich-reversegeo/immich-reversegeo:latest` and the image's normal entrypoint. Its source is the reference Compose file from the same documentation revision:
+This example uses `ghcr.io/crazz/immich-reversegeo:latest` and the image's normal entrypoint. The new modes are currently [Unreleased](./changelog.md#unreleased); use a release that includes them rather than assuming the mutable tag already does. Its source is the reference Compose file from the same documentation revision:
 
 ```yaml title="docker-compose.yml"
 --8<-- "docker-compose.yml"
@@ -69,7 +69,7 @@ Use the [Run-once exit table](./deployment-modes.md#run-once-exit-codes) for aut
 
 Keep `stop_grace_period: 40s` on the Immich ReverseGeo service in your Compose file. During shutdown, the app rejects new processing runs, requests cancellation of active work, and waits for process and output cleanup. The setting gives the app time to finish before Docker forces the container to stop.
 
-Use `docker compose stop immich-reversegeo` for a planned stop. For an update, pull the new image and recreate the service with `docker compose up -d immich-reversegeo`. A forced stop or power loss can still interrupt processing; after restarting, check the Dashboard and logs before starting another run.
+Use `docker compose stop immich-reversegeo` for a planned stop. Follow [Upgrading and Rollback](./upgrading.md) to record image identities, pause schedules, back up persistent storage, replace the image and verify the result. A forced stop or power loss can still interrupt processing; after restarting, check the Dashboard and logs before starting another run.
 
 ## VPS and firewall notes
 

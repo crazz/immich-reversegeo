@@ -2,6 +2,8 @@
 
 Immich ReverseGeo is a self-hosted companion service for [immich](https://immich.app) that improves the accuracy and usefulness of reverse-geocoded location names for photo assets.
 
+The new architecture separates the long-lived Web UI from memory-heavy work. Web handles controls, scheduling and progress; temporary Worker processes load geographic data for processing, lookups and cache refreshes inside the same container. Each Worker exits after its job, allowing the operating system to reclaim its process memory and keeping those datasets out of Web between jobs. Peak container memory still depends on the workload and filesystem cache. See the [architecture guide](./docs/website/architecture.md) for details.
+
 It is built for people who already have GPS coordinates on their assets and want a local, repeatable way to write better `city`, `state`, and `country` values back into immich than the built-in basic reverse-geocoding flow typically provides.
 
 Immich ReverseGeo is an independent project and is not affiliated with immich. immich is a great product, and this project is built to work alongside it.
@@ -29,8 +31,12 @@ Immich ReverseGeo is an independent project and is not affiliated with immich. i
 
 ## Documentation
 
-- Installation and usage docs: [immich-reversegeo.github.io](https://immich-reversegeo.github.io/)
-- Contributor workflows: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Documentation website: [crazz.github.io/immich-reversegeo](https://crazz.github.io/immich-reversegeo/)
+- This revision: [Getting Started](./docs/website/getting-started.md), [Deployment Modes](./docs/website/deployment-modes.md), [Using the App](./docs/website/using-the-app.md), and [Upgrading and Rollback](./docs/website/upgrading.md).
+- [Architecture overview](./docs/website/architecture.md): how the Web service, temporary workers and persistent storage fit together.
+- Contributors: [local setup](./CONTRIBUTING.md) and [maintainer documentation](./docs/maintainer/README.md).
+
+The worker architecture and new deployment modes are currently [Unreleased](./docs/website/changelog.md#unreleased). Documentation in this revision can describe features not yet present in a published image.
 
 ## Docker
 
@@ -48,7 +54,7 @@ docker compose up -d
 
 using the provided `docker-compose.yml` as a service block inside their existing Immich compose file and the environment values already used for their Immich setup.
 
-See the official installation guide: [immich-reversegeo.github.io/installation](https://immich-reversegeo.github.io/installation/).
+See the [installation guide](https://crazz.github.io/immich-reversegeo/installation/).
 
 ## Contributing
 

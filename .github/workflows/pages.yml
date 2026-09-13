@@ -19,8 +19,11 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  deploy:
+  build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: read
     steps:
       - name: Checkout
         uses: actions/checkout@v6
@@ -35,14 +38,27 @@ jobs:
       - name: Install docs dependencies
         run: pip install -r docs/website/requirements.txt
 
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
       - name: Build site
         run: zensical build --clean
 
-      - name: Publish to root Pages repo
-        uses: JamesIves/github-pages-deploy-action@v4
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v4
         with:
-          token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
-          repository-name: immich-reversegeo/immich-reversegeo.github.io
-          branch: master
-          folder: _out/website
-          single-commit: true
+          path: _out/website
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

@@ -28,7 +28,7 @@ docker compose up -d immich-reversegeo
 
 ## Docker and Compose
 
-Use `ghcr.io/immich-reversegeo/immich-reversegeo:latest` with its normal entrypoint. Follow the complete [Installation example](./installation.md#preferred-setup), which reuses your Immich Compose project, database `.env`, network, and distinct persistent volumes. Choose an image release that includes these modes; see the [changelog](./changelog.md).
+Use `ghcr.io/crazz/immich-reversegeo:latest` with its normal entrypoint. Follow the complete [Installation example](./installation.md#preferred-setup), which reuses your Immich Compose project, database `.env`, network, and distinct persistent volumes. Choose an image release that includes these modes; see the [changelog](./changelog.md).
 
 - **Standard:** leave the mode variable absent. Publish container port `8080` only to a local or trusted host address.
 - **Web-only:** keep the same service, port and mounts, and add `IMMICH_REVERSEGEO_MODE=web-only` to its environment. Manual processing, Lookup and heavy Data actions remain available.
@@ -41,6 +41,15 @@ docker compose run --rm immich-reversegeo-run-once
 ```
 
 Cron or another scheduler can invoke this same command. Run-once reads the saved processing settings, starts no HTTP listener or child worker, performs one authoritative attempt without a preliminary scheduled-work check, waits for cleanup, and exits. It does not make a second pass or retry internally. Use Web-only when retaining a UI alongside external scheduling, and avoid concurrent maintenance of shared data as described under [multiple containers](./architecture.md#worker-jobs-and-multiple-containers).
+
+### Move from built-in to external scheduling
+
+1. Pause new scheduled work and let any active pass finish. Change the Web service to `web-only`, recreate it, and confirm that the Dashboard reports internal scheduling disabled.
+2. Save the desired processing and source settings through that Web UI. Keep the Run-once service on the same image, database environment and config/data volumes.
+3. Run the command above manually once. Inspect its exit code and console output before connecting it to automation; one attempt can process many batches. Its output belongs to that job container and does not populate the separate Web service's Logs page.
+4. Configure the external scheduler to run from the intended Compose directory, retain output and exit status, and decide its own retry/backoff policy. A Busy result means no pass ran, not successful processing.
+
+Pause that scheduler before cache or database maintenance. Changing the Web mode or stopping the Web service does not stop a separately running Run-once container. Use [Upgrading and Rollback](./upgrading.md) when changing image versions.
 
 ## Worker status and recovery
 

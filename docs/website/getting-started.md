@@ -50,7 +50,7 @@ DB_DATABASE_NAME=immich
 
 ## 2. Start the container
 
-Follow [Installation](./installation.md) for the complete Compose example. This walkthrough uses **Standard**, with a Web UI and built-in scheduling. Choose **Web-only** for the same UI and manual actions without a scheduler, or **Run-once** for an external scheduler with no UI; see [Deployment Modes](./deployment-modes.md).
+Follow [Installation](./installation.md) for the complete Compose example and choose an image release that includes the [new deployment modes](./deployment-modes.md). For a controlled first setup, use its **Web-only variation**: the UI and manual actions are available, and a saved schedule cannot start processing while you check the results. Switch to **Standard** later if you want built-in scheduling, or use **Run-once** for an external scheduler with no UI.
 
 Use Docker with persistent mounts for:
 
@@ -98,12 +98,18 @@ Use the Lookup page to confirm the basics before a full run:
   </div>
 </div>
 
-## 5. Run a small processing pass
+## 5. Review settings and run processing
 
-Use `Run Now` from the Dashboard for your first manual pass. Start with a conservative batch size first and confirm the resulting location names look right in immich before scaling up.
+Check Settings before allowing writes: confirm the database, schedule, batch size, parallelism and source choices. Keep automatic scheduling disabled while validating the first results, or start in Web-only when you need the built-in scheduler absent from startup. Optional GADM data is limited to academic and other non-commercial use; read [its license guidance](./data-sources.md#optional-gadm-administrative-data) before enabling it.
 
-If you want to start from a clean slate, the Reset Immich Geo Data page under Data can clear existing reverse geo `city`, `state`, and `country` values in immich before reprocessing.
+Use `Run Now` from the Dashboard when you are ready to update eligible assets. A conservative batch size and parallelism reduce the amount of concurrent work, but **batch size does not cap the entire pass**. A pass can continue through all eligible assets. For a strictly bounded write trial, use an isolated test library. `Stop` requests cancellation; it does not undo updates already saved.
 
-You can reset all reverse geo data, paste specific asset GUIDs to reset only those items, or reset everything that currently matches a selected city, state, or country.
+Inspect the resulting location names in Immich and the completion details in Logs. Wait for the active worker and cleanup to finish before starting another operation. The [architecture overview](./architecture.md) explains why a temporary worker appears during this work.
+
+To replace existing location names, first validate the desired result in Lookup, then use the appropriate [Reset Immich Geo Data action](./using-the-app.md#resetting-immich-location-data) after taking a backup. Resetting selected asset GUIDs clears only those records, but it does not restrict the next processing pass to those GUIDs; other eligible assets can also be processed.
+
+## 6. Choose ongoing scheduling
+
+Use Standard and enable a saved schedule when the app should choose when to run. Keep Web-only for manual control or when an external scheduler launches the separate Run-once job. Start with a schedule that suits your database and disks; [NAS and HDD scheduling](./deployment-modes.md#nas-and-hdd-scheduling) explains why even an empty scheduled check can touch the database.
 
 For more on the UI after setup, see [Using the App](./using-the-app.md).

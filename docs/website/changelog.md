@@ -6,7 +6,7 @@ icon: material/history
 
 This is the public-facing release summary for Immich ReverseGeo.
 
-Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/immich-reversegeo/blob/major-redesign/CHANGELOG.md).
+Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/immich-reversegeo/blob/master/CHANGELOG.md).
 
 ## Unreleased
 
@@ -14,7 +14,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/i
 - All modes use the same image and normal entrypoint, with separate persistent `/config` and `/data` mounts. Web-only keeps manual processing, Lookup, supported heavy Data actions and saved schedule values; its built-in scheduler is inactive and it adds no public automation endpoint. Standard keeps existing schedule choices and checks whether any currently eligible work exists when a schedule is due. See [Deployment Modes](./deployment-modes.md) for Compose examples and recovery steps.
 - In Standard and Web-only, processing, Lookup and cache download/export/refresh run in temporary workers from the same image. Conflicting local work is coordinated, and cancellation waits for work and cleanup to settle. Inventory, coordinated deletion and database maintenance stay in the Web service. Heavy geographic data leaves with the worker process, but the bounded repeated-worker checks do not promise lower total memory, an RSS limit, an absolute peak or a fixed amount reclaimed; no calibrated memory profile was used.
 - Run-once starts no listener or child worker and makes one direct attempt, without a preliminary scheduled-work check or internal retry. Use no automatic container restart and let your scheduler decide whether to launch again. Exits mean: `0` completed, including no work; `2` invalid invocation/mode; `3` busy; `4` domain failure; `5` startup, required dependency, infrastructure or cleanup failure; `130` orderly cancellation. Abrupt system termination can return another status. Already committed changes remain after failure or cancellation.
-- No Immich schema change or migration of Immich data or saved ReverseGeo configuration data is introduced. Back up your separate config/data volumes and affected Immich data before upgrading. The [tested image identities and rollback checklist](https://github.com/crazz/immich-reversegeo/blob/major-redesign/docs/maintainer/RELEASE_CHECKLIST.md) describe the limited settings/skip-list fixture. Stop new and active work, stop the upgraded container, then start the named previous image with the tested volumes; remove mode settings the older image does not understand. Newer settings, cache formats, forward-created data and retained or partial Immich writes may need compatible backups. Other image-volume combinations are unverified; rollback does not undo writes or provide zero downtime.
+- No Immich schema change or migration of Immich data or saved ReverseGeo configuration data is introduced. Back up your separate config/data volumes and affected Immich data before upgrading. The [tested image identities and rollback checklist](https://github.com/crazz/immich-reversegeo/blob/master/docs/maintainer/RELEASE_CHECKLIST.md) describe the limited settings/skip-list fixture. Stop new and active work, stop the upgraded container, then start the named previous image with the tested volumes; remove mode settings the older image does not understand. Newer settings, cache formats, forward-created data and retained or partial Immich writes may need compatible backups. Other image-volume combinations are unverified; rollback does not undo writes or provide zero downtime.
 - Optional GADM data is restricted to **academic and other non-commercial use**. Review the [data-source and license guidance](./data-sources.md#optional-gadm-administrative-data) before enabling it. These changes are Unreleased; do not assume a mutable published image tag already includes them.
 
 - Immich location resets and skip-list clearing now share the app's local work slot with processing, Lookup, and cache maintenance. The pages show actual results for Immich and the skip list, keep partial outcomes visible, and can retry only failed skip-list cleanup. See [Resetting Immich location data](./using-the-app.md#resetting-immich-location-data).
@@ -24,7 +24,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/i
 - Fixed the reported Hong Kong coordinates and expanded built-in coverage for Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.
 
-See the technical [CHANGELOG.md](https://github.com/crazz/immich-reversegeo/blob/major-redesign/CHANGELOG.md) for implementation details.
+See the technical [CHANGELOG.md](https://github.com/crazz/immich-reversegeo/blob/master/CHANGELOG.md) for implementation details.
 
 ## 2026-04-12
 

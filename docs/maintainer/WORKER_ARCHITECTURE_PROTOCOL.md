@@ -1,6 +1,6 @@
 # Worker architecture and protocol
 
-This repository-only reference describes landed contracts and their enforcing evidence. Supported operator configuration and recovery are in the [deployment-mode guide](../website/deployment-modes.md). Private controls below belong to the controller; they are not operator commands.
+This repository-only reference describes landed contracts and their enforcing evidence. Start with the [architecture overview](ARCHITECTURE.md) for the project map and main execution flows. Supported operator configuration and recovery are in the [deployment-mode guide](../website/deployment-modes.md). Private controls below belong to the controller; they are not operator commands.
 
 ## Composition and ownership
 
@@ -129,6 +129,6 @@ Never hand-edit or replay protocol frames, invoke private selectors as public op
 | Memory/lifetime soak | [Selected soak guide](worker-memory-soak.md) and its linked tests; record fixture, profile, platform and sampler limits |
 | Public operation | Final deployment-mode guide linked above; `npm run docs:build` verifies its generated route |
 
-The Docker producer retains results under `_out/docker-mode-smoke/`; CI archives the same producer's output. There is no separate `_out/docker-mode-integration/` producer. Selected soak outputs live under `_out/performance/worker-memory-soak/`. These are gitignored local evidence roots, not portable source links or proof that every profile ran. Use the produced receipt/run link with its image identity when reporting a result.
+The Docker producer retains results under `_out/docker-mode-smoke/`. The CI workflow uploads that producer's bounded `evidence/` files on failure, with seven-day retention; a successful CI job does not imply a downloadable artifact. Use its job log, and retain local receipts separately when needed. There is no separate `_out/docker-mode-integration/` producer. Selected soak outputs live under `_out/performance/worker-memory-soak/`. These are gitignored local evidence roots, not portable source links or proof that every profile ran. Use the produced receipt/run link with its image identity when reporting a result.
 
 For edits to this guide, compare the documented selector/version, job vocabulary, frame limit, exit ranks, advisory key/derivation, grace, EventIds and dependency categories against the linked source/tests. Resolve all repository links and the public cross-link, then build the site. Keep `docs/maintainer/` outside `mkdocs.yml` navigation (`docs_dir` remains `docs/website`). Correct documentation from landed evidence; do not change a runtime contract to make a documentation check pass.

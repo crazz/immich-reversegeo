@@ -43,7 +43,7 @@ These values are required because the app reads and updates immich data directly
   </div>
   <div class="step-card">
     <h3>Keep them in Docker or your host environment</h3>
-    <p>Set the database values where you launch the app, then restart it if you change them.</p>
+    <p>Set the database values where you launch the app, then recreate the container if you change them.</p>
   </div>
 </div>
 
@@ -71,7 +71,7 @@ Standard supports hourly, every-few-minutes, every-few-hours, daily, weekly, and
   </div>
   <div class="card">
     <h3>Batch size</h3>
-    <p>Controls how many photos are processed at a time before the next pause or write cycle.</p>
+    <p>Controls how many photos are read in each batch. It does not limit the total number processed by a pass.</p>
   </div>
   <div class="card">
     <h3>Parallelism</h3>
@@ -214,7 +214,7 @@ A good pull request should include:
 - a short explanation of why the new default is better
 - Lookup evidence showing that the desired place is really in the returned data
 
-See the contributor notes in [`CONTRIBUTING.md`](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/CONTRIBUTING.md#city-resolver-defaults).
+See the contributor notes in [`CONTRIBUTING.md`](https://github.com/crazz/immich-reversegeo/blob/master/CONTRIBUTING.md#city-resolver-defaults).
 
 ## Database connection details
 
@@ -225,9 +225,21 @@ The database section in Settings is read-only and mainly there as a sanity check
 
 ## Data layout
 
-Runtime data goes under `/data`.
+Keep separate persistent volumes for configuration and runtime data:
 
-Config goes under `/config` in production.
+```text
+/config/
+  settings.json             Saved processing settings and resolver overrides
+  dataprotection-keys/       Keys used by the Web interface
+/data/
+  overture-divisions/        Downloaded Overture country caches: {ISO3}.db
+  gadm-divisions/            Optional GADM country caches: {ISO3}.db
+  skipped.db                Assets excluded from later processing attempts
+```
+
+Country and airport datasets bundled with the image are separate from these downloaded caches. Database credentials come from the environment and are not saved in `settings.json`.
+
+All modes should use the same intended config/data volumes. `/data` contains skipped-asset tracking as well as caches, so preserve it during upgrades. See [Upgrading and Rollback](./upgrading.md) for the stopped-volume backup workflow.
 
 ## Operational notes
 
