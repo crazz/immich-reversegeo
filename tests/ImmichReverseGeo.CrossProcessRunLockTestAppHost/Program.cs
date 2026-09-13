@@ -45,6 +45,7 @@ internal static class Program
             builder.Services.RemoveAll<IProcessingRunDomainOperation>();
             builder.Services.AddSingleton<IProcessingRunDomainOperation, ControlledProcessingRunDomainOperation>();
             builder.Services.AddSingleton(options!);
+            MatrixDatabaseFixture.Configure(builder.Services, options!);
 
             var host = builder.Build();
             return await InternalWorkerHost.RunHostAsync(host, outcomes).ConfigureAwait(false);

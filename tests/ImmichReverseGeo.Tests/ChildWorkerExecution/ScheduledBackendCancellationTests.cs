@@ -109,16 +109,16 @@ public sealed class ScheduledBackendCancellationTests
         {
             launch = await fixture.Launcher.NextAsync();
             await ReadyAndAcceptAsync(launch);
-            long timerGeneration = clock.TimerGeneration;
+            int oneShotTimers = clock.OneShotTimerCount;
             stopping.Cancel();
             ChildWorkerTerminationRequest termination =
                 await launch.Session.FirstTerminationRequest.WaitAsync(Bound);
-            await clock.WaitForTimerCreatedAsync(timerGeneration).WaitAsync(Bound);
+            await clock.WaitForOneShotTimerCreatedAsync(oneShotTimers).WaitAsync(Bound);
 
             Task promptStop = fixture.Coordinator.StopActiveRun()
                 ?? throw new AssertFailedException("The scheduled child must retain its active handle.");
             Assert.AreSame(promptStop, fixture.Coordinator.WaitForActiveRunAsync(), "accepted-cancel-manual-stop-joins");
-            Assert.AreEqual(timerGeneration + 1, clock.TimerGeneration, "accepted-cancel-one-grace-timer");
+            Assert.AreEqual(oneShotTimers + 1, clock.OneShotTimerCount, "accepted-cancel-one-grace-timer");
             Assert.AreEqual(ChildWorkerTerminationIntent.Stop, termination.Intent, "accepted-cancel-stop-intent");
             Assert.AreEqual(SessionTestSupport.Start, termination.Deadline.FirstStopAtUtc, "accepted-cancel-first-deadline");
 

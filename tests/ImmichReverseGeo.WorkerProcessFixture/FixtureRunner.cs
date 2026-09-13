@@ -7,7 +7,7 @@ using ImmichReverseGeo.Core.WorkerProtocol;
 
 namespace ImmichReverseGeo.WorkerProcessFixture;
 
-internal sealed class FixtureRunner
+internal sealed partial class FixtureRunner
 {
     internal const string StandardErrorPrefix = "fixture-stderr-prefix\n";
     internal const string StandardErrorSuffix = "\nfixture-stderr-suffix\n";
@@ -25,6 +25,7 @@ internal sealed class FixtureRunner
     private readonly ControllerInputReader _input;
     private readonly FixtureProtocolOutput _output;
     private readonly Stream _standardError;
+    private readonly InternalWorkerProtocolVersion _protocolVersion;
 
     internal FixtureRunner(
         FixtureOptions options,
@@ -39,13 +40,24 @@ internal sealed class FixtureRunner
         ArgumentNullException.ThrowIfNull(standardError);
 
         _options = options;
-        _input = new ControllerInputReader(standardInput, protocolVersion);
+        _protocolVersion = protocolVersion;
+        _input = new ControllerInputReader(standardInput, protocolVersion,
+            includeCacheMutation: options.Scenario == FixtureScenario.FailureMatrix);
         _output = new FixtureProtocolOutput(standardOutput, protocolVersion);
         _standardError = standardError;
     }
 
     internal async Task<int> RunAsync()
     {
+        if (_options.Scenario == FixtureScenario.RealProcessingCancellation)
+        {
+            return await ProductionProcessingHostFixture.RunAsync(_options, _protocolVersion).ConfigureAwait(false);
+        }
+        if (_options.Scenario == FixtureScenario.FailureMatrix)
+        {
+            return await RunMatrixAsync().ConfigureAwait(false);
+        }
+
         if (_options.Scenario == FixtureScenario.PreReadyCrash)
         {
             await WriteStandardErrorAsync(PreReadyCrashDiagnostic).ConfigureAwait(false);
@@ -811,7 +823,10 @@ internal sealed class FixtureRunner
         }
     }
 
-    private async Task WriteStandardErrorFloodAsync(int totalBytes)
+    private Task WriteStandardErrorFloodAsync(int totalBytes) =>
+        WriteStandardErrorFloodAsync(_standardError, totalBytes);
+
+    private static async Task WriteStandardErrorFloodAsync(Stream standardError, int totalBytes)
     {
         var prefix = Encoding.UTF8.GetBytes(StandardErrorPrefix);
         var suffix = Encoding.UTF8.GetBytes(StandardErrorSuffix);
@@ -821,7 +836,7 @@ internal sealed class FixtureRunner
             throw new InvalidOperationException("The requested stderr size cannot contain its fixed markers.");
         }
 
-        await _standardError.WriteAsync(prefix).ConfigureAwait(false);
+        await standardError.WriteAsync(prefix).ConfigureAwait(false);
         var buffer = new byte[4096];
         var bodyOffset = 0;
         while (bodyOffset < bodyBytes)
@@ -832,12 +847,12 @@ internal sealed class FixtureRunner
                 buffer[index] = (byte)('a' + (bodyOffset + index) % 26);
             }
 
-            await _standardError.WriteAsync(buffer.AsMemory(0, count)).ConfigureAwait(false);
+            await standardError.WriteAsync(buffer.AsMemory(0, count)).ConfigureAwait(false);
             bodyOffset += count;
         }
 
-        await _standardError.WriteAsync(suffix).ConfigureAwait(false);
-        await _standardError.FlushAsync().ConfigureAwait(false);
+        await standardError.WriteAsync(suffix).ConfigureAwait(false);
+        await standardError.FlushAsync().ConfigureAwait(false);
     }
 
     private async Task WriteStandardErrorAsync(ReadOnlyMemory<byte> bytes)

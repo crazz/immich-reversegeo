@@ -18,7 +18,13 @@ internal sealed record CrossProcessRunLockAppHostOptions(
             ["held-success"] = CrossProcessRunLockScenario.HeldSuccess,
             ["domain-failure"] = CrossProcessRunLockScenario.DomainFailure,
             ["cooperative-cancel"] = CrossProcessRunLockScenario.CooperativeCancel,
-            ["ownership-loss"] = CrossProcessRunLockScenario.OwnershipLoss
+            ["ownership-loss"] = CrossProcessRunLockScenario.OwnershipLoss,
+            ["matrix-connect-failure"] = CrossProcessRunLockScenario.MatrixConnectFailure,
+            ["matrix-output-failure"] = CrossProcessRunLockScenario.MatrixOutputFailure,
+            ["matrix-unlock-false"] = CrossProcessRunLockScenario.MatrixUnlockFalse,
+            ["matrix-unlock-failure"] = CrossProcessRunLockScenario.MatrixUnlockFailure,
+            ["matrix-unlock-ambiguous"] = CrossProcessRunLockScenario.MatrixUnlockAmbiguous,
+            ["matrix-dispose-failure"] = CrossProcessRunLockScenario.MatrixDisposeFailure
         };
 
     internal static bool TryParse(string[] arguments, out CrossProcessRunLockAppHostOptions? options, out string error)
@@ -226,5 +232,11 @@ internal enum CrossProcessRunLockScenario
     HeldSuccess,
     DomainFailure,
     CooperativeCancel,
-    OwnershipLoss
+    OwnershipLoss,
+    MatrixConnectFailure,
+    MatrixOutputFailure,
+    MatrixUnlockFalse,
+    MatrixUnlockFailure,
+    MatrixUnlockAmbiguous,
+    MatrixDisposeFailure
 }

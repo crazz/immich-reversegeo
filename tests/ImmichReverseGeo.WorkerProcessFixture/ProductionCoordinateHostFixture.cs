@@ -7,6 +7,7 @@ using ImmichReverseGeo.Overture.Models;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.ProcessingRunLocking;
 using ImmichReverseGeo.Web.WorkerHost;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop;
@@ -80,7 +81,7 @@ internal static class ProductionCoordinateHostFixture
                 markerValue));
     }
 
-    private static void AddForbiddenPersistenceSentinels(
+    internal static void AddForbiddenPersistenceSentinels(
         IServiceCollection services,
         string root)
     {
@@ -93,6 +94,18 @@ internal static class ProductionCoordinateHostFixture
         services.RemoveAll<NpgsqlDataSource>();
         services.AddSingleton<NpgsqlDataSource>(_ =>
             ForbiddenPersistence<NpgsqlDataSource>(root));
+        services.RemoveAll<IProcessingRunLock>();
+        services.AddSingleton<IProcessingRunLock>(new ForbiddenRunLock(root));
+        File.WriteAllText(Path.Combine(root, "advisory-lock-probe-installed.marker"), "reject-acquisition");
+    }
+
+    private sealed class ForbiddenRunLock(string root) : IProcessingRunLock
+    {
+        public ValueTask<ProcessingRunLockAcquisition> AcquireAsync(CancellationToken cancellationToken)
+        {
+            File.WriteAllText(Path.Combine(root, "advisory-lock-accessed.marker"), "unexpected-acquisition");
+            throw new InvalidOperationException("Non-processing jobs must not acquire the processing advisory lock.");
+        }
     }
 
     private static T ForbiddenPersistence<T>(string root)

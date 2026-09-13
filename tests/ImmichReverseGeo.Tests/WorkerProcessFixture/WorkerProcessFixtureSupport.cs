@@ -17,7 +17,7 @@ internal enum FixtureCleanupPhase
     Drain
 }
 
-internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
+internal sealed partial class WorkerProcessFixtureLease : IAsyncDisposable
 {
     internal static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(30);
     private static readonly ConcurrentDictionary<Guid, WorkerProcessFixtureLease> Registry = new();
@@ -50,6 +50,11 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     internal ChildWorkerLauncherOptions LauncherOptions { get; init; } = ChildWorkerLauncherOptions.Default;
     internal ILogger LifecycleLogger { get; init; } = NullLogger.Instance;
     internal ChildWorkingSetUnavailable? WorkingSetUnavailableOverride { get; init; }
+    internal FixtureReadGate? StandardOutputGate { get; init; }
+    internal FixtureReadGate? StandardErrorGate { get; init; }
+    // A composed multi-attempt row owns this shared cache root. The lease still owns
+    // its unique registration root and all native resources, never the shared files.
+    internal string? SharedResourceRoot { get; init; }
 
     internal WorkerProcessFixtureLease(FixtureCleanupPhase? injectedFailure = null)
     {
@@ -104,7 +109,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
 
     internal string[] Arguments(string scenario, bool capture = true, params string[] options)
     {
-        var arguments = new List<string> { "--scenario", scenario, "--resource-root", Root };
+        var arguments = new List<string> { "--scenario", scenario, "--resource-root", SharedResourceRoot ?? Root };
         if (capture)
         {
             arguments.AddRange(["--capture-name", "request.ndjson"]);
@@ -228,6 +233,23 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         return direct;
     }
 
+    internal async Task<ChildWorkerLaunchResult> LaunchMissingExecutableAsync(
+        WorkerJobDispatch dispatch, IWorkerJobEventSink sink, InternalWorkerProtocolVersion protocolVersion)
+    {
+        ProtocolVersion = protocolVersion;
+        _expectedJobId = dispatch.Context.JobId;
+        _expectedJobKind = dispatch.Context.JobKind;
+        string missing = Path.Combine(Root, "missing-worker-executable");
+        Assert.IsFalse(File.Exists(missing));
+        var descriptor = new ChildProcessStartDescriptor(missing, [], Root,
+            protocolVersion == InternalWorkerProtocolVersion.V1
+                ? ChildProcessEnvironmentPolicy.InheritCurrentAndRemoveReservedProtocolVersion
+                : ChildProcessEnvironmentPolicy.InheritCurrentAndSetReservedProtocolVersionV2);
+        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this), LifecycleLogger);
+        return await launcher.LaunchDescriptorAsync(descriptor, dispatch, sink,
+            LauncherOptions, CancellationToken.None, protocolVersion);
+    }
+
     internal async Task<ChildWorkerCompletionObservation> CompleteAsync()
     {
         var result = await Session!.Completion.WaitAsync(Watchdog);
@@ -289,6 +311,8 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
 
     private async Task DisposeCoreAsync()
     {
+        StandardOutputGate?.Release();
+        StandardErrorGate?.Release();
         var failures = new List<Exception>();
         if (_process is not null)
         {
@@ -626,13 +650,15 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
             _owner = owner;
             ExitTask = inner.WaitForExitAsync();
             StandardInput = new RecordingInputStream(inner.StandardInput, owner.WrittenInput);
+            StandardOutput = owner.StandardOutputGate?.Wrap(inner.StandardOutput) ?? inner.StandardOutput;
+            StandardError = owner.StandardErrorGate?.Wrap(inner.StandardError) ?? inner.StandardError;
         }
 
         internal Task<int> ExitTask { get; }
         public int ProcessId => _inner.ProcessId;
         public Stream StandardInput { get; }
-        public Stream StandardOutput => _inner.StandardOutput;
-        public Stream StandardError => _inner.StandardError;
+        public Stream StandardOutput { get; }
+        public Stream StandardError { get; }
         public Task<int> WaitForExitAsync() => ExitTask;
         public ChildWorkingSetObservation ReadWorkingSet() => _owner.WorkingSetUnavailableOverride is { } reason
             ? ChildWorkingSetObservation.Unavailable(reason) : _inner.ReadWorkingSet();

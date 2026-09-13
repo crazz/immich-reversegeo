@@ -1302,6 +1302,12 @@ Every scheduled check uses the full current-eligibility `EXISTS` observation. No
 
 **Dependencies and sequencing** — Requires finalized blocks 15–32, child-processing cutover/modes in blocks 33–46, job/cache coordination through block 54, bounded event delivery from block 65, and the final lifecycle telemetry contract from block 66. Re-read block 66 immediately before completing this plan, preserve its event names/redaction/cardinality, and do not modify it. Block 67 adds tests/fixtures only, does not change protocol, launcher, arbitration, cache, mode, or production behavior, and precedes block 68's repeated-worker soak.
 
+**Apply-time telemetry reconciliation** — Follow finalized block66:6650 is present exactly for enqueue waits or replacements, including lossless FIFO pressure; unsaturated rows assert absence. Test harnesses may join best-effort telemetry with a bounded nonblocking sink, while production host finality remains child/streams/bridge/disposal/owner release without waiting for arbitrary logger delivery.
+
+**Apply-time protocol compatibility reconciliation** — Preserve landed version-specific behavior: v1 accepts additive envelope/payload properties and drops them from canonical output; v2 rejects unknown envelope/payload properties using its exact field sets. Test the two v2 locations separately and keep production codecs unchanged.
+
+**Apply-time spawn reconciliation** — A failed OS spawn finalizes ProcessAssets as Failed and Lookup/Cache as Unavailable under their existing page contracts; all three retain startup-failed process classification, no PID/terminal and one owner release. Readiness timeout after a successful spawn retains Failed finalization.
+
 **OpenSpec** — [67-add-process-level-failure-matrix](openspec/changes/67-add-process-level-failure-matrix/)
 
 ### 68. `test: add repeated worker memory soak`

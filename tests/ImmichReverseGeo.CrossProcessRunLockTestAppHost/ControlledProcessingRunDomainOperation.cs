@@ -22,6 +22,8 @@ internal sealed class ControlledProcessingRunDomainOperation(
     {
         ArgumentNullException.ThrowIfNull(session);
         ArgumentNullException.ThrowIfNull(executeProductionDomainAsync);
+        await File.WriteAllTextAsync(Path.Combine(options.ResourceRoot, "domain-entered.marker"),
+            "entered", cancellationToken).ConfigureAwait(false);
 
         await using var releasePipe = new NamedPipeClientStream(
             ".",
@@ -50,6 +52,15 @@ internal sealed class ControlledProcessingRunDomainOperation(
         switch (options.Scenario)
         {
             case CrossProcessRunLockScenario.HeldSuccess:
+            case CrossProcessRunLockScenario.MatrixUnlockFalse:
+            case CrossProcessRunLockScenario.MatrixUnlockFailure:
+            case CrossProcessRunLockScenario.MatrixUnlockAmbiguous:
+            case CrossProcessRunLockScenario.MatrixDisposeFailure:
+                return;
+            case CrossProcessRunLockScenario.MatrixOutputFailure:
+                MatrixDatabaseFixture.BreakOutput();
+                await session.ReportLogAsync(ProcessingLogLevel.Information,
+                    "matrix-secret-output-failure", cancellationToken).ConfigureAwait(false);
                 return;
             case CrossProcessRunLockScenario.DomainFailure:
                 throw new InvalidOperationException("Controlled Change32 domain failure.");

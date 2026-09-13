@@ -25,6 +25,7 @@ internal enum FixtureScenario
     ProgressBurstCrash,
     ProgressBurstCancel,
     ProgressBurstUnresponsive,
+    FailureMatrix,
     RealCoordinateSuccess,
     RealCoordinateNoCountry,
     RealCoordinateDegraded,
@@ -38,7 +39,9 @@ internal enum FixtureScenario
     RealCacheOutputFailure,
     RealCacheFailure,
     RealCacheCancellation,
-    RealCacheUnresponsive
+    RealCacheUnresponsive,
+    RealCacheMatrix,
+    RealProcessingCancellation
 }
 
 internal enum MalformedKind
@@ -83,6 +86,9 @@ internal sealed record FixtureOptions(
     internal const int StandardErrorCapacity = 65_536;
     internal int ProgressCount { get; init; }
     internal int BarrierEvery { get; init; }
+    internal ProcessMatrixFault? MatrixFault { get; init; }
+    internal Guid? MatrixJobId { get; init; }
+    internal CacheMatrixStage? CacheStage { get; init; }
     internal bool IsProgressBurst => Scenario is FixtureScenario.ProgressBurst
         or FixtureScenario.ProgressBurstGap or FixtureScenario.ProgressBurstCrash
         or FixtureScenario.ProgressBurstCancel or FixtureScenario.ProgressBurstUnresponsive;
@@ -111,6 +117,7 @@ internal sealed record FixtureOptions(
             ["progress-burst-crash"] = FixtureScenario.ProgressBurstCrash,
             ["progress-burst-cancel"] = FixtureScenario.ProgressBurstCancel,
             ["progress-burst-unresponsive"] = FixtureScenario.ProgressBurstUnresponsive,
+            ["failure-matrix"] = FixtureScenario.FailureMatrix,
             ["real-coordinate-success"] = FixtureScenario.RealCoordinateSuccess,
             ["real-coordinate-no-country"] = FixtureScenario.RealCoordinateNoCountry,
             ["real-coordinate-degraded"] = FixtureScenario.RealCoordinateDegraded,
@@ -124,7 +131,9 @@ internal sealed record FixtureOptions(
             ["real-cache-output-failure"] = FixtureScenario.RealCacheOutputFailure,
             ["real-cache-failure"] = FixtureScenario.RealCacheFailure,
             ["real-cache-cancellation"] = FixtureScenario.RealCacheCancellation,
-            ["real-cache-unresponsive"] = FixtureScenario.RealCacheUnresponsive
+            ["real-cache-unresponsive"] = FixtureScenario.RealCacheUnresponsive,
+            ["real-cache-matrix"] = FixtureScenario.RealCacheMatrix,
+            ["real-processing-cancellation"] = FixtureScenario.RealProcessingCancellation
         };
 
     internal bool UsesProductionCoordinateHost => Scenario is
@@ -143,7 +152,7 @@ internal sealed record FixtureOptions(
         FixtureScenario.RealCacheOutputFailure or
         FixtureScenario.RealCacheFailure or
         FixtureScenario.RealCacheCancellation or
-        FixtureScenario.RealCacheUnresponsive;
+        FixtureScenario.RealCacheUnresponsive or FixtureScenario.RealCacheMatrix;
 
     internal static bool TryParse(string[] arguments, out FixtureOptions? options, out string error)
     {
@@ -303,6 +312,56 @@ internal sealed record FixtureOptions(
             parsedOptions = parsedOptions with { ProgressCount = progressCount, BarrierEvery = barrierEvery };
         }
 
+        if (!TryGetRequiredOption(values, "--matrix-fault", scenario == FixtureScenario.FailureMatrix,
+            out var matrixFaultText, out error))
+        {
+            return false;
+        }
+
+        if (matrixFaultText is not null)
+        {
+            if (!ProcessMatrixFaults.TryParse(matrixFaultText, out var matrixFault))
+            {
+                error = "--matrix-fault must select a known closed matrix scenario.";
+                return false;
+            }
+
+            parsedOptions = parsedOptions with { MatrixFault = matrixFault };
+        }
+
+        if (!TryGetRequiredOption(values, "--matrix-job-id", parsedOptions.MatrixFault == ProcessMatrixFault.MissingReady,
+            out var matrixJobIdText, out error))
+        {
+            return false;
+        }
+
+        if (matrixJobIdText is not null)
+        {
+            if (!Guid.TryParseExact(matrixJobIdText, "D", out var jobId) || jobId == Guid.Empty
+                || jobId.ToString("D") != matrixJobIdText)
+            {
+                error = "--matrix-job-id requires a canonical nonempty job identity.";
+                return false;
+            }
+
+            parsedOptions = parsedOptions with { MatrixJobId = jobId };
+        }
+
+        if (!TryGetRequiredOption(values, "--cache-matrix-stage", scenario == FixtureScenario.RealCacheMatrix,
+            out var cacheStageText, out error))
+        {
+            return false;
+        }
+        if (cacheStageText is not null)
+        {
+            if (!CacheMatrixStages.TryParse(cacheStageText, out var cacheStage))
+            {
+                error = "--cache-matrix-stage requires a known closed cache stage.";
+                return false;
+            }
+            parsedOptions = parsedOptions with { CacheStage = cacheStage };
+        }
+
         options = parsedOptions;
         return true;
     }
@@ -319,6 +378,9 @@ internal sealed record FixtureOptions(
             or "--sequence-fault"
             or "--progress-count"
             or "--barrier-every"
+            or "--matrix-fault"
+            or "--matrix-job-id"
+            or "--cache-matrix-stage"
             or "--terminal";
     }
 

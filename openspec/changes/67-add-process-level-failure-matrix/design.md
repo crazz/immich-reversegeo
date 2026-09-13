@@ -36,13 +36,15 @@ This avoids fake parity such as exit 3 for lookup/cache. Alternative: generate e
 
 ### 2. Extend the block-26 fixture with closed, test-only scripts
 
-Use a closed unstartable launcher descriptor for command/spawn failure because no child fixture can run before process start. Add fixture modes that compose already-owned post-start primitives: never-ready, crash-after-ready, terminal-then-exit, mapped/unmapped exit, exact malformed/truncated/oversize/unknown-semantic/out-of-order bytes, additive-compatible properties, concurrent stdout protocol burst plus stderr flood, cooperative gate, unresponsive descendant tree, and controlled cache workspace operations. Inputs are closed selectors and bounded numeric sizes; no arbitrary command, path, frame, or shell fragment is accepted. Each invocation gets a unique root and a registry entry before start, and teardown kills/waits registered process trees and fails the test if fallback cleanup was needed or a descendant remains.
+Use a closed unstartable launcher descriptor for command/spawn failure because no child fixture can run before process start. Add fixture modes that compose already-owned post-start primitives: never-ready, crash-after-ready, terminal-then-exit, mapped/unmapped exit, exact malformed/truncated/oversize/unknown-semantic/out-of-order bytes, v1 additive-compatible properties and separate v2 unknown-envelope/unknown-payload rejection, concurrent stdout protocol burst plus stderr flood, cooperative gate, unresponsive descendant tree, and controlled cache workspace operations. Inputs are closed selectors and bounded numeric sizes; no arbitrary command, path, frame, or shell fragment is accepted. Each invocation gets a unique root and a registry entry before start, and teardown kills/waits registered process trees and fails the test if fallback cleanup was needed or a descendant remains.
 
 Alternative: add fault injection to the production worker. Rejected because test controls must not become a runtime attack surface or alter production branches. Alternative: create another helper executable. Rejected unless the existing staged fixture cannot host a required platform behavior; block 26 remains the single fixture owner.
 
 ### 3. Separate controller observations from expected domain outcomes
 
 A row stores raw observations first: command resolution/start, worker PID, ready, accepted frames, first protocol/bridge fault, committed terminal receipt, raw exit, both pump completions, cancellation/kill facts, stderr-tail metadata, process-tree probe, coordinator receipt, lock probe, and filesystem snapshot. Assertions then apply the existing block-30 classifier and block-66 sink contract. This makes a contradictory terminal/exit row prove both facts rather than comparing only a final UI value.
+
+OS spawn failure retains each current controller contract: ProcessAssets Failed, CoordinateLookup/CacheMutation Unavailable, with startup-failed classification and no PID or terminal. Readiness timeout after successful spawn remains Failed.
 
 A valid committed terminal is asserted before supplementary anomalies. A no-terminal row expects exactly one classifier-owned final outcome only after evidence finality. The test never infers process death from a cancellation token, exit from a terminal, drainage from exit, or release from a disabled UI control.
 
@@ -57,6 +59,8 @@ Alternative: configure a millisecond grace in process tests. Rejected because th
 ### 5. Drive protocol faults as exact byte streams while both pumps continue
 
 The fixture writes exact stdout byte sequences for malformed JSON, EOF truncation, invalid UTF-8/BOM/framing, 1,048,577-byte frames, duplicate/unknown semantic fields, wrong correlation, sequence gap/regression/duplicate, illegal lifecycle and post-terminal data. It independently fills stderr beyond both OS pipe capacity and the 65,536-byte retained tail. Pump-start gates prove both readers are active before the child begins flooding; exit and final bytes can be released in either order.
+
+Unknown-property cases preserve codec ownership: v1 ignores additive envelope/payload properties, while v2 uses exact property sets and rejects extra envelope or typed payload fields. Test those locations separately so envelope rejection cannot hide an untested payload boundary. No parser or protocol behavior changes in this block.
 
 Protocol telemetry asserts EventId 6630 and a closed category but never fixture bytes. Exit/classification asserts EventId 6641 only after both drains. Alternative: feed strings directly to the codec. Rejected because block 16 already owns codec purity; this matrix must prove framing, OS pipes, containment and final drainage together.
 
@@ -78,7 +82,7 @@ Alternative: categorize every process test Integration. Rejected because the pro
 
 For launched jobs, table expectations select from 6610–6612, 6620–6623, 6630, 6640–6641, and conditional 6650. Assertions match EventId/name, level, template fields, canonical `job_id`, exact `job_kind` and bounded origin, distinct controller/worker PIDs, ready/terminal booleans, raw exit and closed classifier codes, and non-negative monotonic durations. Redaction scans structured state, rendered message, scopes, and attached exceptions for every injected secret/payload/path/frame/stderr marker. A pre-launch invalid/Busy/Unavailable row asserts events 6610–6650 are absent because it never enters the launcher. A spawn-failure row expects 6610, no 6611/6612/6640, and one Warning 6641 with null worker PID and `process_classification=startup-failed`.
 
-Every 6641 assertion verifies block 66's complete `available` or explicit `unavailable` memory shape, method/scope/1000-ms interval and count/reason consistency, but memory values are not pass/fail resource thresholds. Non-coalescer rows use lifecycle/log frames and assert no 6650; one deliberate replaceable-progress pressure row asserts at most one exact bounded 6650. Block 68 owns repeated-worker memory behavior.
+Every 6641 assertion verifies block 66's complete `available` or explicit `unavailable` memory shape, method/scope/1000-ms interval and count/reason consistency, but memory values are not pass/fail resource thresholds. Ordinary unsaturated rows assert no 6650. Pipe-pressure rows may saturate the lossless FIFO even with no replaceable frames; assert one 6650 exactly when the final delivery observation has enqueue waits or replacements, copying its exact counters. Keep separate deterministic unsaturated and replaceable-progress pressure rows. Production shutdown waits for child/stream/bridge/disposal/owner finality. Tests additionally join best-effort telemetry observations with a bounded nonblocking recording sink; they do not add a logger dependency to production shutdown or process control. Block 68 owns repeated-worker memory behavior.
 
 ## Risks / Trade-offs
 

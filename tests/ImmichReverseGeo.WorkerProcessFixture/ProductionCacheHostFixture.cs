@@ -14,7 +14,7 @@ using NetTopologySuite.IO;
 
 namespace ImmichReverseGeo.WorkerProcessFixture;
 
-internal static class ProductionCacheHostFixture
+internal static partial class ProductionCacheHostFixture
 {
     internal static async Task<int> RunAsync(
         FixtureOptions options,
@@ -32,6 +32,7 @@ internal static class ProductionCacheHostFixture
             options.ResourceRoot,
             options.ResourceRoot);
         var builder = InternalWorkerHost.CreateBuilder(context, outcomes, protocolVersion);
+        ProductionCoordinateHostFixture.AddForbiddenPersistenceSentinels(builder.Services, options.ResourceRoot);
 
         if (options.Scenario == FixtureScenario.RealCacheOutputFailure)
         {
@@ -58,6 +59,12 @@ internal static class ProductionCacheHostFixture
                             alpha2,
                             cancellationToken)
                 }));
+        }
+
+        if (options.Scenario == FixtureScenario.RealCacheMatrix)
+        {
+            ConfigureMatrix(builder.Services, options);
+            return await InternalWorkerHost.RunHostAsync(builder.Build(), outcomes).ConfigureAwait(false);
         }
 
         builder.Services.RemoveAll<GadmDivisionCacheService>();

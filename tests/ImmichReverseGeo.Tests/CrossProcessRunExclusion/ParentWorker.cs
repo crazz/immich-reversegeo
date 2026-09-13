@@ -13,6 +13,10 @@ using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using Microsoft.Extensions.Logging.Abstractions;
 using Npgsql;
+using ImmichReverseGeo.Tests.LifecycleTelemetry;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
+using AcceptedDelivery = ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDelivery;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 using WebWorkerCommandInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
@@ -77,6 +81,13 @@ internal sealed class ParentWorker : IAsyncDisposable
     }
 
     internal CrossProcessRunExclusionCase OwnerCase => _case;
+    internal RecordingLifecycleLogs LifecycleLogs { get; } = new();
+    internal async Task JoinLifecycleTelemetryAsync()
+    {
+        var telemetry = _session!.Telemetry ?? throw new AssertFailedException("The launcher must bind lifecycle telemetry.");
+        await telemetry.CancellationObservation.WaitAsync(CrossProcessRunExclusionCase.Watchdog);
+        await telemetry.CoalescingObservation.WaitAsync(CrossProcessRunExclusionCase.Watchdog);
+    }
     internal ProcessCoordinatorFixture Fixture => _fixture;
     internal int ProcessId => _processId ?? throw new InvalidOperationException("The Change32 worker has not started.");
     internal string ApplicationName => _applicationName;
@@ -316,7 +327,10 @@ internal sealed class ParentWorker : IAsyncDisposable
                 return observed;
             }
 
-            await _eventAvailable.WaitAsync(CrossProcessRunExclusionCase.Watchdog, cancellationToken);
+            if (!await _eventAvailable.WaitAsync(CrossProcessRunExclusionCase.Watchdog, cancellationToken))
+            {
+                throw CreateCompletionTimeout("required-event");
+            }
         }
     }
 
@@ -343,7 +357,8 @@ internal sealed class ParentWorker : IAsyncDisposable
         ProcessingRunRequest request = processAssets.Request.ProcessingRequest;
         LauncherCalls++;
         BindRequest(request);
-        var launcher = new ChildWorkerLauncher(new RegisteredProcessFactory(this));
+        var launcher = new ChildWorkerLauncher(new RegisteredProcessFactory(this),
+            LifecycleLogs.CreateLogger(LifecycleEventCatalog.Category));
         var result = await launcher.LaunchDescriptorAsync(
             _descriptor,
             dispatch,
@@ -684,9 +699,30 @@ internal sealed class ParentWorker : IAsyncDisposable
     private sealed class TeeSink(
         ParentWorker owner,
         ProcessingRunRequest request,
-        IWorkerJobEventSink inner) : IWorkerJobEventSink
+        IWorkerJobEventSink inner) : IWorkerJobEventSink, IAcceptedWorkerEventSink
     {
         private readonly ProcessAssetsWorkerJobProjection _projection = new(request);
+        private IAcceptedWorkerEventSink Accepted => inner is ProcessAssetsWorkerJobEventSink processing
+            ? processing.AcceptedDeliverySink ?? throw new AssertFailedException("Processing lost its accepted delivery capability.")
+            : (IAcceptedWorkerEventSink)inner;
+
+        public ReadModelNotificationCadence.OwnerObservation? NotificationOwnerObservation => Accepted.NotificationOwnerObservation;
+        public void BindDeliveryScope(WorkerEventDeliveryScope scope) => Accepted.BindDeliveryScope(scope);
+
+        public async ValueTask AcceptDeliveryAsync(AcceptedDelivery delivery, CancellationToken cancellationToken)
+        {
+            owner.EnterSinkCallback();
+            try
+            {
+                await Accepted.AcceptDeliveryAsync(delivery, cancellationToken);
+                owner._events.Enqueue(_projection.Map(delivery.Input.Message));
+                owner._eventAvailable.Release();
+            }
+            finally
+            {
+                owner.ExitSinkCallback();
+            }
+        }
 
         public async ValueTask AcceptAsync(WorkerJobOutputMessage message, CancellationToken cancellationToken)
         {

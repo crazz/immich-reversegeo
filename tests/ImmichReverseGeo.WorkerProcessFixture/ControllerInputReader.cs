@@ -24,7 +24,8 @@ internal sealed class ControllerInputReader
     private int _readCount;
     private int _frameCount;
 
-    internal ControllerInputReader(Stream input, InternalWorkerProtocolVersion protocolVersion)
+    internal ControllerInputReader(Stream input, InternalWorkerProtocolVersion protocolVersion,
+        bool includeCacheMutation = false)
     {
         ArgumentNullException.ThrowIfNull(input);
         if (!Enum.IsDefined(protocolVersion))
@@ -38,7 +39,7 @@ internal sealed class ControllerInputReader
             ? new WorkerProtocolControllerInputValidator()
             : null;
         _v2Validator = protocolVersion == InternalWorkerProtocolVersion.V2
-            ? new WorkerJobControllerInputValidator([
+            ? new WorkerJobControllerInputValidator(includeCacheMutation ? WorkerJobDescriptors.Registered : [
                 WorkerJobDescriptors.ProcessAssets,
                 WorkerJobDescriptors.CoordinateLookup
             ])
@@ -137,13 +138,16 @@ internal sealed class ControllerInputReader
             CoordinateLookupExecutePayload execute => new CoordinateLookupWorkerJobDispatch(
                 validated.Message.JobId,
                 execute.Request),
+            CacheMutationExecutePayload execute => new CacheMutationWorkerJobDispatch(
+                validated.Message.JobId,
+                execute.Request),
             WorkerJobCancelPayload => CreateAcceptedDispatch(_v2Validator.Snapshot),
             _ => throw new FixtureInputException("The controller frame type was not supported.")
         };
         ProcessingRunRequest compatibilityRequest = dispatch switch
         {
             ProcessAssetsWorkerJobDispatch processAssets => processAssets.Request.ProcessingRequest,
-            CoordinateLookupWorkerJobDispatch => new ProcessingRunRequest(
+            CoordinateLookupWorkerJobDispatch or CacheMutationWorkerJobDispatch => new ProcessingRunRequest(
                 dispatch.Context.JobId,
                 ProcessingRunTrigger.Manual),
             _ => throw new FixtureInputException("The accepted job kind was not supported by the fixture.")
@@ -164,6 +168,7 @@ internal sealed class ControllerInputReader
             ProcessAssetsRequest processAssets when processAssets.ProcessingRequest.RunId == jobId =>
                 new ProcessAssetsWorkerJobDispatch(processAssets.ProcessingRequest),
             CoordinateLookupRequest coordinateLookup => new CoordinateLookupWorkerJobDispatch(jobId, coordinateLookup),
+            CacheMutationRequest cacheMutation => new CacheMutationWorkerJobDispatch(jobId, cacheMutation),
             _ => throw new FixtureInputException("The accepted request type was not supported by the fixture.")
         };
     }
