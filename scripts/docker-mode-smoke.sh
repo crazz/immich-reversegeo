@@ -25,6 +25,7 @@ invalid-mode, and private-protocol deployment boundaries on native Linux Docker.
 
 Options:
   --image IMAGE  Reuse an existing image; every case still uses its resolved ID.
+  --cleanup-only RUN_ID  Remove only this validated run's resources; no build/start.
   --help         Show this help.
 
 Harness verification:
@@ -34,6 +35,8 @@ Harness verification:
 EOF
 }
 
+CLEANUP_ONLY=0
+CLEANUP_RUN_ID=""
 PREBUILT_IMAGE="${DOCKER_SMOKE_IMAGE:-}"
 while (($# > 0)); do
     case "$1" in
@@ -43,6 +46,15 @@ while (($# > 0)); do
                 exit 2
             fi
             PREBUILT_IMAGE="$2"
+            shift 2
+            ;;
+        --cleanup-only)
+            if (($# != 2)) || [[ ! "$2" =~ ^immich46-[0-9]{8}T[0-9]{6}Z-[0-9]+-[a-f0-9]{6}$ ]]; then
+                printf '%s\n' 'docker-smoke: cleanup requires one canonical run ID.' >&2
+                exit 2
+            fi
+            CLEANUP_ONLY=1
+            CLEANUP_RUN_ID="$2"
             shift 2
             ;;
         --help|-h)
@@ -62,7 +74,7 @@ if [[ "$(uname -s)" != "Linux" ]]; then
     exit 2
 fi
 
-for prerequisite in bash docker curl jq sqlite3 openssl sha256sum stat timeout awk sed grep find date strace sleep; do
+for prerequisite in bash docker curl jq sqlite3 openssl sha256sum stat timeout awk sed grep find date strace sleep iptables nsenter setpriv; do
     if ! command -v "$prerequisite" >/dev/null 2>&1; then
         printf 'docker-smoke: required command is unavailable: %s\n' "$prerequisite" >&2
         exit 2
@@ -87,37 +99,48 @@ if ! STRACE_BIN="$(command -v strace)"; then
 fi
 readonly STRACE_BIN
 
-sleep 1 &
-trace_probe_pid=$!
-trace_probe_status=0
-if [[ "$(id -u)" == "0" ]]; then
-    timeout 5 "$STRACE_BIN" -qq -e trace=none -p "$trace_probe_pid" -o /dev/null >/dev/null 2>&1 || trace_probe_status=$?
-else
-    sudo -n timeout 5 "$STRACE_BIN" -qq -e trace=none -p "$trace_probe_pid" -o /dev/null >/dev/null 2>&1 || trace_probe_status=$?
-fi
-wait "$trace_probe_pid" >/dev/null 2>&1 || true
-if ((trace_probe_status != 0)); then
-    printf '%s\n' 'docker-smoke: strace cannot attach to a same-user process; ptrace capability is required for child-reap evidence.' >&2
-    exit 2
-fi
+if ((!CLEANUP_ONLY)); then
+    sleep 1 &
+    trace_probe_pid=$!
+    trace_probe_status=0
+    if [[ "$(id -u)" == "0" ]]; then
+        timeout 5 "$STRACE_BIN" -qq -e trace=none -p "$trace_probe_pid" -o /dev/null >/dev/null 2>&1 || trace_probe_status=$?
+    else
+        sudo -n timeout 5 "$STRACE_BIN" -qq -e trace=none -p "$trace_probe_pid" -o /dev/null >/dev/null 2>&1 || trace_probe_status=$?
+    fi
+    wait "$trace_probe_pid" >/dev/null 2>&1 || true
+    if ((trace_probe_status != 0)); then
+        printf '%s\n' 'docker-smoke: strace cannot attach to a same-user process; ptrace capability is required for child-reap evidence.' >&2
+        exit 2
+    fi
 
-if ! RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"; then
-    printf '%s\n' 'docker-smoke: cannot create the run timestamp.' >&2
-    exit 2
+    if ! RUN_TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"; then
+        printf '%s\n' 'docker-smoke: cannot create the run timestamp.' >&2
+        exit 2
+    fi
+    if ! RUN_RANDOM="$(openssl rand -hex 3)"; then
+        printf '%s\n' 'docker-smoke: cannot create the run identifier.' >&2
+        exit 2
+    fi
 fi
-if ! RUN_RANDOM="$(openssl rand -hex 3)"; then
-    printf '%s\n' 'docker-smoke: cannot create the run identifier.' >&2
-    exit 2
+RUN_SUFFIX="${CLEANUP_RUN_ID#immich46-}"
+if ((!CLEANUP_ONLY)); then
+    RUN_SUFFIX="$RUN_TIMESTAMP-$$-$RUN_RANDOM"
 fi
-readonly RUN_TIMESTAMP RUN_RANDOM
-readonly RUN_SUFFIX="$RUN_TIMESTAMP-$$-$RUN_RANDOM"
+readonly RUN_SUFFIX
 readonly RUN_ID="immich46-$RUN_SUFFIX"
 readonly LABEL_KEY="io.immich-reversegeo.docker-smoke.run"
 readonly LABEL_VALUE="$RUN_ID"
 readonly LABEL_FILTER="$LABEL_KEY=$LABEL_VALUE"
 readonly OUTPUT_ROOT="$REPO_ROOT/_out/docker-mode-smoke/$RUN_ID"
 readonly WORK_ROOT="$OUTPUT_ROOT/work"
-readonly EVIDENCE_ROOT="$OUTPUT_ROOT/evidence"
+readonly PUBLISHED_EVIDENCE_ROOT="$OUTPUT_ROOT/evidence"
+# Raw observations remain private and are never included in the CI artifact glob.
+EVIDENCE_ROOT="$WORK_ROOT/observations"
+if ((CLEANUP_ONLY)); then
+    EVIDENCE_ROOT="$PUBLISHED_EVIDENCE_ROOT"
+fi
+readonly EVIDENCE_ROOT
 readonly RAW_ROOT="$WORK_ROOT/raw"
 readonly ASSERTIONS_FILE="$EVIDENCE_ROOT/assertions.tsv"
 readonly NETWORK_NAME="$RUN_ID-network"
@@ -127,11 +150,31 @@ readonly POSTGRES_NAME="$RUN_ID-postgres"
 readonly IMAGE_TAG="${RUN_ID,,}-image:smoke"
 readonly FIXTURE_SQL="$REPO_ROOT/tests/docker-mode-smoke/fixture.sql"
 readonly SETTINGS_FIXTURE="$REPO_ROOT/tests/docker-mode-smoke/settings.json"
-if ! mkdir -p "$RAW_ROOT" "$EVIDENCE_ROOT"; then
+# Never follow a caller-provided path or source a cleanup manifest as shell code.
+for owned_path in "$REPO_ROOT/_out" "$REPO_ROOT/_out/docker-mode-smoke" "$OUTPUT_ROOT" "$WORK_ROOT" "$PUBLISHED_EVIDENCE_ROOT" "$OUTPUT_ROOT/run-id" "$OUTPUT_ROOT/firewall-owned"; do
+    if [[ -L "$owned_path" ]]; then
+        printf '%s\n' 'docker-smoke: refusing a symlink in the owned output tree.' >&2
+        exit 2
+    fi
+done
+if ((CLEANUP_ONLY)); then
+    if [[ ! -e "$OUTPUT_ROOT" ]]; then
+        exit 0
+    fi
+    if [[ ! -f "$OUTPUT_ROOT/run-id" ]] || [[ "$(cat "$OUTPUT_ROOT/run-id")" != "$RUN_ID" ]] \
+        || [[ "$(stat -c '%u' "$OUTPUT_ROOT/run-id")" != "$(id -u)" ]]; then
+        printf '%s\n' 'docker-smoke: refusing an unowned cleanup root.' >&2
+        exit 2
+    fi
+elif ! mkdir -p "$RAW_ROOT" "$EVIDENCE_ROOT" "$PUBLISHED_EVIDENCE_ROOT"; then
     printf 'docker-smoke: cannot create the run output root: %s\n' "$OUTPUT_ROOT" >&2
     exit 2
 fi
-: > "$ASSERTIONS_FILE"
+if ((!CLEANUP_ONLY)); then
+    printf '%s\n' "$RUN_ID" > "$OUTPUT_ROOT/run-id"
+    chmod 0700 "$RAW_ROOT" "$EVIDENCE_ROOT"
+    : > "$ASSERTIONS_FILE"
+fi
 
 CONTAINERS=()
 BACKGROUND_PIDS=()
@@ -147,6 +190,7 @@ CLEANUP_LEAK=0
 FIFO_WRITER_OPEN=0
 CREATED_CONTAINER=""
 DOCKER_COMMAND_TIMEOUT=30
+DATABASE_READINESS_DEADLINE=0
 STANDARD_ADMISSIONS=0
 STANDARD_PARENT_HOST_PID=""
 STANDARD_CHILD_HOST_PID=""
@@ -167,25 +211,32 @@ readonly PRIVATE_ATTACH_TIMEOUT=$((PRIVATE_READY_TIMEOUT + PRIVATE_OBSERVATION_B
 
 ADMIN_USER="irgeo46_admin_${RUN_SUFFIX//[^a-zA-Z0-9]/_}"
 DATABASE_NAME="irgeo46_${RUN_SUFFIX//[^a-zA-Z0-9]/_}"
+SCHEMA_NAME="fixture_${RUN_SUFFIX//[^a-zA-Z0-9]/_}"
+FIREWALL_CHAIN="IRG$(printf %s "$RUN_ID" | sha256sum | cut -c1-20)"
+NETWORK_SUBNETS=()
+EXPECTED_DENIED_PACKETS=0
 STANDARD_ROLE="irgeo46_standard_${RUN_SUFFIX//[^a-zA-Z0-9]/_}"
 WEBONLY_ROLE="irgeo46_webonly_${RUN_SUFFIX//[^a-zA-Z0-9]/_}"
 RUNONCE_ROLE="irgeo46_runonce_${RUN_SUFFIX//[^a-zA-Z0-9]/_}"
 STANDARD_APP="irgeo46-standard-$RUN_SUFFIX"
 WEBONLY_APP="irgeo46-webonly-$RUN_SUFFIX"
 RUNONCE_APP="irgeo46-runonce-$RUN_SUFFIX"
-ADMIN_PASSWORD="$(openssl rand -hex 24)"
-STANDARD_PASSWORD="$(openssl rand -hex 24)"
-WEBONLY_PASSWORD="$(openssl rand -hex 24)"
-RUNONCE_PASSWORD="$(openssl rand -hex 24)"
-INVALID_CANARY="$(openssl rand -hex 24)"
-INVALID_MODE="invalid-$INVALID_CANARY"
-SECRETS+=("$ADMIN_PASSWORD" "$STANDARD_PASSWORD" "$WEBONLY_PASSWORD" "$RUNONCE_PASSWORD" "$INVALID_CANARY" "$INVALID_MODE")
-if [[ -n "${DOCKER_SMOKE_REDACTION_SELF_CHECK_CANARY:-}" ]]; then
-    if [[ ! "$DOCKER_SMOKE_REDACTION_SELF_CHECK_CANARY" =~ ^[A-Za-z0-9_-]{16,64}$ ]]; then
-        printf '%s\n' 'docker-smoke: redaction self-check canary must contain 16-64 safe ASCII characters.' >&2
-        exit 2
+if ((!CLEANUP_ONLY)); then
+    ADMIN_PASSWORD="$(openssl rand -hex 24)"
+    STANDARD_PASSWORD="$(openssl rand -hex 24)"
+    WEBONLY_PASSWORD="$(openssl rand -hex 24)"
+    RUNONCE_PASSWORD="$(openssl rand -hex 24)"
+    INVALID_CANARY="$(openssl rand -hex 24)"
+    INVALID_MODE="invalid-$INVALID_CANARY"
+    SECRETS+=("$ADMIN_PASSWORD" "$STANDARD_PASSWORD" "$WEBONLY_PASSWORD" "$RUNONCE_PASSWORD" "$INVALID_CANARY" "$INVALID_MODE")
+    if [[ -n "${DOCKER_SMOKE_REDACTION_SELF_CHECK_CANARY:-}" ]]; then
+        if [[ ! "$DOCKER_SMOKE_REDACTION_SELF_CHECK_CANARY" =~ ^[A-Za-z0-9_-]{16,64}$ ]]; then
+            printf '%s\n' 'docker-smoke: redaction self-check canary must contain 16-64 safe ASCII characters.' >&2
+            exit 2
+        fi
+        SECRETS+=("$DOCKER_SMOKE_REDACTION_SELF_CHECK_CANARY")
     fi
-    SECRETS+=("$DOCKER_SMOKE_REDACTION_SELF_CHECK_CANARY")
+
 fi
 
 record() {
@@ -291,7 +342,17 @@ docker_available() {
 }
 
 docker() {
-    timeout "$DOCKER_COMMAND_TIMEOUT" "$DOCKER_BIN" "$@"
+    local command_budget="$DOCKER_COMMAND_TIMEOUT" remaining
+    if ((DATABASE_READINESS_DEADLINE > 0)); then
+        remaining=$((DATABASE_READINESS_DEADLINE - SECONDS))
+        if ((remaining <= 0)); then
+            return 124
+        fi
+        if ((remaining < command_budget)); then
+            command_budget="$remaining"
+        fi
+    fi
+    timeout "$command_budget" "$DOCKER_BIN" "$@"
 }
 
 run_root() {
@@ -386,27 +447,101 @@ capture_diagnostics() {
     if ! docker_available; then
         return 0
     fi
-
-    capture_sanitized "$EVIDENCE_ROOT/image-inspect.json" docker image inspect "$IMAGE_ID"
-    capture_sanitized "$EVIDENCE_ROOT/docker-info.txt" docker info
-    local container
+    local container case_name
     for container in "${CONTAINERS[@]}"; do
         if container_exists "$container"; then
-            capture_sanitized "$EVIDENCE_ROOT/$container-inspect.json" docker inspect "$container"
-            capture_sanitized "$EVIDENCE_ROOT/$container-logs.txt" docker logs --timestamps "$container"
-            capture_sanitized "$EVIDENCE_ROOT/$container-top.txt" docker top "$container" -eo pid,ppid,uid,gid,args
+            case_name="${container#"$RUN_ID-"}"
+            docker inspect "$container" | jq '[.[] | {
+                image: .Image,
+                state: {status: .State.Status, exitCode: .State.ExitCode,
+                    oomKilled: .State.OOMKilled, health: (.State.Health.Status // "none")},
+                user: .Config.User, workingDirectory: .Config.WorkingDir,
+                mounts: [.Mounts[] | {type: .Type, destination: .Destination, rw: .RW}],
+                networks: [.NetworkSettings.Networks[] | {ip: .IPAddress, gateway: .Gateway}],
+                ports: .NetworkSettings.Ports
+            }]' > "$EVIDENCE_ROOT/$case_name-inspect.json" 2>/dev/null || true
+            docker logs --tail 400 "$container" > "$RAW_ROOT/$case_name-final-stdout.txt" \
+                2> "$RAW_ROOT/$case_name-final-stderr.txt" || true
+            docker top "$container" -eo pid,ppid,uid,gid,comm \
+                > "$EVIDENCE_ROOT/$case_name-final-process.txt" 2>/dev/null || true
         fi
     done
-
-    if ((POSTGRES_READY)); then
-        capture_sanitized "$EVIDENCE_ROOT/postgres-activity.txt" pg_admin -P pager=off -x -c \
-            "SELECT pid, usename, application_name, state, wait_event_type, wait_event, query FROM pg_stat_activity WHERE datname = current_database() ORDER BY pid"
-        capture_sanitized "$EVIDENCE_ROOT/postgres-locks.txt" pg_admin -P pager=off -x -c \
-            "SELECT pid, locktype, classid, objid, objsubid, mode, granted FROM pg_locks WHERE database = (SELECT oid FROM pg_database WHERE datname = current_database()) ORDER BY pid, locktype"
+    if run_root iptables -w 2 -n -L "$FIREWALL_CHAIN" >/dev/null 2>&1; then
+        run_root iptables -w 2 -n -v -x -L "$FIREWALL_CHAIN" \
+            > "$EVIDENCE_ROOT/network-counters.txt" 2>/dev/null || true
     fi
+}
 
-    run_root find "$WORK_ROOT" -mindepth 1 -maxdepth 5 -printf '%M|%U|%G|%s|%p\n' 2>/dev/null \
-        | sanitize_stream > "$EVIDENCE_ROOT/work-tree.txt" || true
+publish_evidence() {
+    # Only explicit fields and harness assertions cross the artifact boundary.
+    # No HTML, SQL, environment, command arguments, protocol payloads or raw logs.
+    local file case_name stream destination secret found=0
+    for secret in "${SECRETS[@]}"; do
+        if grep -rlF -- "$secret" "$EVIDENCE_ROOT" >/dev/null 2>&1; then
+            found=1
+        fi
+    done
+    if ((found)); then
+        CLEANUP_LEAK=1
+        record FAIL "evidence-secret-scan-redacted"
+    fi
+    sanitize_stream < "$ASSERTIONS_FILE" | awk 'NR <= 512 && /^(PASS|FAIL)\t/ {
+        sub(/ \(expected .*$/, ""); gsub(/[^[:print:]\t]/, ""); print substr($0,1,240)
+    }' > "$PUBLISHED_EVIDENCE_ROOT/assertions.tsv"
+    printf 'run=%s\nimage=%s\nbuilds=%s\nstandard_admissions=%s\n' \
+        "$RUN_ID" "$IMAGE_ID" "$BUILT_IMAGE" "$STANDARD_ADMISSIONS" > "$PUBLISHED_EVIDENCE_ROOT/run.txt"
+    for case_name in packaging postgres standard webonly runonce invalid private; do
+        file="$EVIDENCE_ROOT/$case_name-inspect.json"
+        if [[ -f "$file" ]] && (( $(stat -c '%s' "$file") <= 65536 )); then
+            cp "$file" "$PUBLISHED_EVIDENCE_ROOT/$case_name-inspect.json"
+        fi
+        for stream in stdout stderr; do
+            file="$RAW_ROOT/$case_name-final-$stream.txt"
+            [[ -f "$file" ]] || continue
+            destination="$PUBLISHED_EVIDENCE_ROOT/$case_name-$stream.txt"
+            { printf 'captured_bytes=%s\n' "$(stat -c '%s' "$file")"
+              # Exact stable terminal lines; log headers contribute event IDs only.
+              awk 'NR <= 400 {
+                if ($0 == "Run started." || $0 == "Eligible assets: 0. Nothing to process." ||
+                    $0 == "Run completed: processed=0 updated=0 skipped=0 failed=0." ||
+                    $0 == "invalid-deployment-mode: IMMICH_REVERSEGEO_MODE must be one of: standard, web-only, run-once.") print;
+                if (index($0, "worker-exit-summary outcome=invalid-input phase=input message=worker invocation or input is invalid"))
+                    print "worker-exit-summary outcome=invalid-input phase=input message=worker invocation or input is invalid";
+                if (match($0, /\[(5901|660[1-5]|661[0-2]|662[0-3]|6630|664[01]|6650)\]/))
+                    print "event_id=" substr($0,RSTART+1,RLENGTH-2);
+              }' "$file"
+            } > "$destination"
+        done
+    done
+    # Numeric identities remain useful after a process has stopped; args are discarded.
+    : > "$PUBLISHED_EVIDENCE_ROOT/processes.tsv"
+    for file in "$EVIDENCE_ROOT/"*process*.txt "$EVIDENCE_ROOT/"*top.txt; do
+        [[ -f "$file" ]] || continue
+        awk 'NR <= 200 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ && $3 ~ /^[0-9]+$/ && $4 ~ /^[0-9]+$/ {
+            print $1 "\t" $2 "\t" $3 "\t" $4
+        }' "$file" >> "$PUBLISHED_EVIDENCE_ROOT/processes.tsv"
+    done
+    file="$EVIDENCE_ROOT/network-counters.txt"
+    if [[ -f "$file" ]]; then
+        awk 'NR <= 32 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9]+$/ {print $1 "\t" $2 "\t" $3}' \
+            "$file" > "$PUBLISHED_EVIDENCE_ROOT/network-counters.tsv"
+    fi
+    # Fail closed on the final projection, including unexpected injection canaries.
+    for secret in "${SECRETS[@]}"; do
+        if grep -rlF -- "$secret" "$PUBLISHED_EVIDENCE_ROOT" >/dev/null 2>&1; then
+            CLEANUP_LEAK=1
+            while IFS= read -r file; do
+                printf '%s\n' '[unsafe evidence removed]' > "$file"
+            done < <(grep -rlF -- "$secret" "$PUBLISHED_EVIDENCE_ROOT")
+        fi
+    done
+    if grep -riEq '(DB_PASSWORD|POSTGRES_PASSWORD|Config.Env|Password=|Username=|Host=)' "$PUBLISHED_EVIDENCE_ROOT"; then
+        CLEANUP_LEAK=1
+        # Only the explicitly projected evidence files can reach this directory.
+        while IFS= read -r file; do
+            printf '%s\n' '[unsafe evidence removed]' > "$file"
+        done < <(grep -rilE '(DB_PASSWORD|POSTGRES_PASSWORD|Config.Env|Password=|Username=|Host=)' "$PUBLISHED_EVIDENCE_ROOT")
+    fi
 }
 
 terminate_gate_backends() {
@@ -419,9 +554,85 @@ terminate_gate_backends() {
     done
 }
 
+cleanup_firewall() {
+    local parent
+    if [[ ! -f "$OUTPUT_ROOT/firewall-owned" ]] || [[ -L "$OUTPUT_ROOT/firewall-owned" ]] \
+        || [[ "$(cat "$OUTPUT_ROOT/firewall-owned")" != "$RUN_ID" ]]; then
+        return 0
+    fi
+    # Chain name is derived from the validated run ID, never caller-provided shell.
+    for parent in DOCKER-USER INPUT; do
+        while run_root iptables -w 2 -C "$parent" -m comment --comment "$RUN_ID" -j "$FIREWALL_CHAIN" >/dev/null 2>&1; do
+            run_root iptables -w 2 -D "$parent" -m comment --comment "$RUN_ID" -j "$FIREWALL_CHAIN" || { CLEANUP_LEAK=1; break; }
+        done
+    done
+    if run_root iptables -w 2 -n -L "$FIREWALL_CHAIN" >/dev/null 2>&1; then
+        run_root iptables -w 2 -F "$FIREWALL_CHAIN" || CLEANUP_LEAK=1
+        run_root iptables -w 2 -X "$FIREWALL_CHAIN" || CLEANUP_LEAK=1
+    fi
+    local remaining_rules
+    if ! remaining_rules="$(run_root iptables -w 2 -S)"; then
+        CLEANUP_LEAK=1
+    elif grep -Fq -- "$FIREWALL_CHAIN" <<< "$remaining_rules"; then
+        CLEANUP_LEAK=1
+    fi
+}
+
+install_egress_denial() {
+    local network subnet
+    run_root iptables -w 2 -C FORWARD -j DOCKER-USER \
+        || fail "Docker iptables DOCKER-USER capability is required"
+    run_root iptables -w 2 -N "$FIREWALL_CHAIN" || fail "create unique run-owned firewall chain"
+    printf '%s\n' "$RUN_ID" > "$OUTPUT_ROOT/firewall-owned"
+    for network in "$NETWORK_NAME" "$PUBLIC_NETWORK_NAME"; do
+        require_equal "$(docker network inspect --format '{{.EnableIPv6}}' "$network")" false "fixture bridge has no IPv6 routing"
+        subnet="$(docker network inspect "$network" | jq -r '.[0].IPAM.Config[0].Subnet')"
+        [[ "$subnet" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]] || fail "fixture has one IPv4 subnet"
+        NETWORK_SUBNETS+=("$subnet")
+        run_root iptables -w 2 -A "$FIREWALL_CHAIN" -s "$subnet" -m conntrack --ctstate ESTABLISHED,RELATED -j RETURN
+        run_root iptables -w 2 -A "$FIREWALL_CHAIN" -s "$subnet" -d "$postgres_ip" -p tcp --dport 5432 -j RETURN
+        run_root iptables -w 2 -A "$FIREWALL_CHAIN" -s "$subnet" -j DROP
+    done
+    run_root iptables -w 2 -A "$FIREWALL_CHAIN" -j RETURN
+    for network in DOCKER-USER INPUT; do
+        run_root iptables -w 2 -I "$network" 1 -m comment --comment "$RUN_ID" -j "$FIREWALL_CHAIN"
+        run_root iptables -w 2 -C "$network" -m comment --comment "$RUN_ID" -j "$FIREWALL_CHAIN" \
+            || fail "run-owned firewall attachment is active"
+    done
+    pass "egress denial installed before application startup"
+}
+
+denied_packets() {
+    run_root iptables -w 2 -n -v -x -L "$FIREWALL_CHAIN" | awk '$3 == "DROP" {sum += $1} END {print sum+0}'
+}
+
+verify_serving_egress_denial() {
+    local name="$1" before after target pid
+    before="$(denied_packets)"
+    require_equal "$before" "$EXPECTED_DENIED_PACKETS" "application has attempted no denied egress before the network probe"
+    pid="$(docker inspect --format '{{.State.Pid}}' "$name")"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || fail "network probe has a live owned container PID"
+    # Use the serving network namespace and host tools; no extra image or app.
+    # TEST-NET destination never needs a live external service; DROP counters prove enforcement.
+    for target in 192.0.2.1 "$(docker network inspect "$PUBLIC_NETWORK_NAME" | jq -r '.[0].IPAM.Config[0].Gateway')"; do
+        # shellcheck disable=SC2016 # Positional parameters belong to the inner shell.
+        if run_root nsenter --target "$pid" --net timeout 2 bash -c 'exec 7<>/dev/tcp/$1/443' _ "$target" >/dev/null 2>&1; then
+            fail "serving network cannot open external or host-gateway connections"
+        fi
+        after="$(denied_packets)"
+        ((after > before)) || fail "owned firewall counters prove each network probe was denied"
+        before="$after"
+    done
+    EXPECTED_DENIED_PACKETS="$before"
+    pass "serving external and host-gateway egress probes were denied"
+}
+
 cleanup() {
     local incoming_status="$1"
-    trap '' INT TERM
+    DATABASE_READINESS_DEADLINE=0
+    if ((!CLEANUP_ONLY)); then
+        trap '' INT TERM
+    fi
     trap - EXIT
     set +e
 
@@ -430,8 +641,10 @@ cleanup() {
         FIFO_WRITER_OPEN=0
     fi
 
-    capture_diagnostics
-    terminate_gate_backends
+    if ((!CLEANUP_ONLY)); then
+        capture_diagnostics
+        terminate_gate_backends
+    fi
 
     if [[ -n "$STANDARD_TRACER_OS_PID" && -e "/proc/$STANDARD_TRACER_OS_PID/status" ]]; then
         run_root kill -TERM "$STANDARD_TRACER_OS_PID" >/dev/null 2>&1 || CLEANUP_FORCED=1
@@ -493,9 +706,14 @@ cleanup() {
         done <<< "$labeled_volumes"
     fi
 
-    if ((BUILT_IMAGE)); then
-        docker image rm "$IMAGE_TAG" >/dev/null 2>&1 || CLEANUP_LEAK=1
+    if docker image inspect "$IMAGE_TAG" >/dev/null 2>&1; then
+        if [[ "$(docker image inspect --format "{{index .Config.Labels \"$LABEL_KEY\"}}" "$IMAGE_TAG")" == "$LABEL_VALUE" ]]; then
+            docker image rm "$IMAGE_TAG" >/dev/null 2>&1 || CLEANUP_LEAK=1
+        else
+            CLEANUP_LEAK=1
+        fi
     fi
+    cleanup_firewall
 
     local remaining_containers remaining_networks remaining_volumes
     if ! remaining_containers="$(docker ps -aq --filter "label=$LABEL_FILTER" 2>/dev/null)"; then
@@ -517,25 +735,8 @@ cleanup() {
         CLEANUP_LEAK=1
     fi
 
-    local secret evidence_file redacted_file secret_found=0
-    while IFS= read -r evidence_file; do
-        for secret in "${SECRETS[@]}"; do
-            if grep -Fq -- "$secret" "$evidence_file" 2>/dev/null; then
-                secret_found=1
-                redacted_file="$RAW_ROOT/redacted.$$.tmp"
-                if sanitize_stream < "$evidence_file" > "$redacted_file"; then
-                    mv "$redacted_file" "$evidence_file"
-                else
-                    rm -f "$redacted_file" "$evidence_file"
-                    printf '%s\n' '[evidence removed because redaction failed]' > "$evidence_file"
-                fi
-                break
-            fi
-        done
-    done < <(find "$EVIDENCE_ROOT" -type f -print 2>/dev/null)
-    if ((secret_found)); then
-        CLEANUP_LEAK=1
-        printf '%s\n' 'FAIL	evidence-secret-scan-redacted' >> "$ASSERTIONS_FILE"
+    if ((!CLEANUP_ONLY)); then
+        publish_evidence || CLEANUP_LEAK=1
     fi
 
     if [[ "$WORK_ROOT" != "$REPO_ROOT/_out/docker-mode-smoke/$RUN_ID/work" ]]; then
@@ -552,25 +753,30 @@ cleanup() {
     fi
 
     if ((CLEANUP_FORCED)); then
-        printf '%s\n' 'FAIL	cleanup-required-force' >> "$ASSERTIONS_FILE"
+        printf '%s\n' 'FAIL	cleanup-required-force' >> "$PUBLISHED_EVIDENCE_ROOT/assertions.tsv"
     else
-        printf '%s\n' 'PASS	cleanup-no-force' >> "$ASSERTIONS_FILE"
+        printf '%s\n' 'PASS	cleanup-no-force' >> "$PUBLISHED_EVIDENCE_ROOT/assertions.tsv"
     fi
     if ((CLEANUP_LEAK)); then
-        printf '%s\n' 'FAIL	cleanup-or-redaction-leak' >> "$ASSERTIONS_FILE"
+        printf '%s\n' 'FAIL	cleanup-or-redaction-leak' >> "$PUBLISHED_EVIDENCE_ROOT/assertions.tsv"
     else
-        printf '%s\n' 'PASS	cleanup-zero-owned-resources-and-secret-free-evidence' >> "$ASSERTIONS_FILE"
+        printf '%s\n' 'PASS	cleanup-zero-owned-resources-and-secret-free-evidence' >> "$PUBLISHED_EVIDENCE_ROOT/assertions.tsv"
     fi
 
     if ((incoming_status == 0 && (CLEANUP_FORCED || CLEANUP_LEAK))); then
         incoming_status=1
     fi
     if ((incoming_status == 0)); then
-        printf 'docker-smoke: PASS (%s) evidence=%s\n' "$RUN_ID" "$EVIDENCE_ROOT"
+        printf 'docker-smoke: PASS (%s) evidence=%s\n' "$RUN_ID" "$PUBLISHED_EVIDENCE_ROOT"
     else
-        printf 'docker-smoke: FAILED (%s) evidence=%s\n' "$RUN_ID" "$EVIDENCE_ROOT" >&2
+        printf 'docker-smoke: FAILED (%s) evidence=%s\n' "$RUN_ID" "$PUBLISHED_EVIDENCE_ROOT" >&2
     fi
     exit "$incoming_status"
+}
+
+cleanup_deadline() {
+    printf '%s\n' 'FAIL	external-cleanup-deadline' >> "$PUBLISHED_EVIDENCE_ROOT/assertions.tsv"
+    exit 124
 }
 
 on_signal() {
@@ -581,6 +787,12 @@ on_signal() {
 trap 'cleanup $?' EXIT
 trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
+
+if ((CLEANUP_ONLY)); then
+    # The caller supplies the 30-second external deadline, including daemon waits.
+    trap 'cleanup_deadline' TERM
+    cleanup 0
+fi
 
 await_background() {
     local pid="$1"
@@ -613,16 +825,14 @@ pg_as() {
         psql -X -v ON_ERROR_STOP=1 -U "$role" -d "$DATABASE_NAME" "$@"
 }
 
+postgres_accepting() {
+    [[ "$(docker inspect --format '{{.State.Health.Status}}' "$POSTGRES_NAME" 2>/dev/null)" == healthy ]] \
+        && docker exec -e PGPASSWORD="$ADMIN_PASSWORD" "$POSTGRES_NAME" \
+            pg_isready -U "$ADMIN_USER" -d "$DATABASE_NAME" >/dev/null 2>&1
+}
+
 postgres_ready() {
-    local raw="$RAW_ROOT/postgres-readiness.txt"
-    local ready=0
-    if docker exec -e PGPASSWORD="$ADMIN_PASSWORD" "$POSTGRES_NAME" \
-        pg_isready -U "$ADMIN_USER" -d "$DATABASE_NAME" > "$raw" 2>&1 \
-        && pg_admin -Atc 'SELECT 1' >> "$raw" 2>&1; then
-        ready=1
-    fi
-    sanitize_stream < "$raw" > "$EVIDENCE_ROOT/postgres-readiness.txt"
-    ((ready))
+    postgres_accepting && [[ "$(pg_admin -Atc "SELECT version FROM \"$SCHEMA_NAME\".smoke_fixture_version" 2>/dev/null)" == 69 ]]
 }
 
 prepare_case_dirs() {
@@ -646,6 +856,15 @@ prepare_case_dirs() {
     else
         sudo -n chmod 0750 "$root/config" "$root/data"
     fi
+    # Probe each root as the declared identity before app start, then remove probes.
+    # Container inspection independently establishes that both bind mounts are RW.
+    # shellcheck disable=SC2016 # Pass the path as argv, never interpolate shell code.
+    run_root setpriv --reuid "$IMAGE_UID" --regid "$IMAGE_GID" --clear-groups \
+        sh -c 'printf config > "$1/config/.write-probe" && printf data > "$1/data/.write-probe" &&
+            test "$(cat "$1/config/.write-probe")" = config && test "$(cat "$1/data/.write-probe")" = data &&
+            rm "$1/config/.write-probe" "$1/data/.write-probe"' _ "$root" \
+        || fail "$case_name permits independent config and data writes as the image identity"
+    pass "$case_name permits independent config and data writes as the image identity"
     printf '%s' "$root"
 }
 
@@ -677,7 +896,9 @@ create_app_container() {
     shift 6
     local name="$RUN_ID-$case_name"
     local args=(create --name "$name" --label "$LABEL_FILTER" --label "$LABEL_KEY.case=$case_name"
-        --network "$NETWORK_NAME" --mount "type=bind,src=$case_root/config,dst=/config"
+        --network "$NETWORK_NAME" --dns 127.0.0.1
+        --sysctl net.ipv6.conf.all.disable_ipv6=1 --sysctl net.ipv6.conf.default.disable_ipv6=1
+        --mount "type=bind,src=$case_root/config,dst=/config"
         --mount "type=bind,src=$case_root/data,dst=/data")
     if [[ -n "$role" ]]; then
         args+=(--env "DB_HOST=$POSTGRES_NAME" --env DB_PORT=5432 --env "DB_USERNAME=$role"
@@ -719,6 +940,9 @@ assert_common_container() {
         fail "$case_name has exact isolated config/data bind mounts"
     fi
     pass "$case_name has exact isolated config/data bind mounts"
+    require_equal "$(docker inspect "$name" | jq '[.[0].Mounts[] | select(.Destination == "/config" or .Destination == "/data")] | length == 2 and all(.[]; .RW == true)')" true "$case_name has two read-write mounts"
+    require_equal "$(docker inspect "$name" | jq -c '.[0].HostConfig.Dns')" '["127.0.0.1"]' "$case_name cannot forward external DNS"
+    require_equal "$(docker inspect "$name" | jq -r '.[0].HostConfig.Sysctls["net.ipv6.conf.all.disable_ipv6"]')" 1 "$case_name disables IPv6 bypass"
     socket_count="$(docker inspect "$name" | jq '[.[0].Mounts[]? | select(.Destination=="/var/run/docker.sock")] | length')"
     require_equal "$socket_count" "0" "$case_name has no Docker socket mount"
     mode_count="$(docker inspect "$name" | jq --arg prefix 'IMMICH_REVERSEGEO_MODE=' '[.[0].Config.Env[] | select(startswith($prefix))] | length')"
@@ -775,6 +999,7 @@ fetch_page() {
 host_tcp_open() {
     local host="$1"
     local port="$2"
+    # shellcheck disable=SC2016 # Positional parameters belong to the inner shell.
     timeout 3 bash -c 'exec 7<>/dev/tcp/$1/$2' _ "$host" "$port" >/dev/null 2>&1
 }
 
@@ -1070,8 +1295,9 @@ if [[ -n "$PREBUILT_IMAGE" ]]; then
     fi
     pass "explicit prebuilt image resolved once"
 else
+    BUILT_IMAGE=1
     DOCKER_COMMAND_TIMEOUT=1800 capture_sanitized "$EVIDENCE_ROOT/docker-build.log" docker build \
-        --file src/ImmichReverseGeo.Web/Dockerfile --tag "$IMAGE_TAG" .
+        --file src/ImmichReverseGeo.Web/Dockerfile --label "$LABEL_FILTER" --tag "$IMAGE_TAG" .
     IMAGE_ID="$(docker image inspect --format '{{.Id}}' "$IMAGE_TAG" 2>/dev/null || true)"
     if [[ -z "$IMAGE_ID" ]]; then
         fail "production Docker image builds once"
@@ -1102,7 +1328,7 @@ elif [[ "${DOCKER_SMOKE_INJECT_FAILURE:-}" == "retained-secret" ]]; then
     fi
     printf 'simulated-captured-secret=%s\n' "$DOCKER_SMOKE_REDACTION_SELF_CHECK_CANARY" > "$EVIDENCE_ROOT/redaction-self-check.txt"
     fail "intentional retained-evidence redaction self-check"
-elif [[ -n "${DOCKER_SMOKE_INJECT_FAILURE:-}" && "${DOCKER_SMOKE_INJECT_FAILURE:-}" != "after-postgres" ]]; then
+elif [[ -n "${DOCKER_SMOKE_INJECT_FAILURE:-}" && "${DOCKER_SMOKE_INJECT_FAILURE:-}" != "after-postgres" && "${DOCKER_SMOKE_INJECT_FAILURE:-}" != "missing-fixture-sentinel" && "${DOCKER_SMOKE_INJECT_FAILURE:-}" != "egress-attempt" ]]; then
     fail "unknown DOCKER_SMOKE_INJECT_FAILURE value"
 fi
 mkdir -p "$WORK_ROOT/packaging"
@@ -1142,19 +1368,23 @@ register_container "$POSTGRES_NAME"
 docker run --detach --name "$POSTGRES_NAME" --label "$LABEL_FILTER" --label "$LABEL_KEY.case=postgres" \
     --network "$NETWORK_NAME" --mount "type=volume,src=$POSTGRES_VOLUME_NAME,dst=/var/lib/postgresql/data" \
     --env "POSTGRES_USER=$ADMIN_USER" --env "POSTGRES_PASSWORD=$ADMIN_PASSWORD" \
-    --env "POSTGRES_DB=$DATABASE_NAME" "$POSTGRES_IMAGE" \
+    --env "POSTGRES_DB=$DATABASE_NAME" \
+    --health-cmd "pg_isready -U $ADMIN_USER -d $DATABASE_NAME" \
+    --health-interval 2s --health-timeout 2s --health-retries 30 "$POSTGRES_IMAGE" \
     -c log_statement=all -c log_connections=on -c log_disconnections=on \
     -c "log_line_prefix=%m [%p] user=%u,db=%d,app=%a " >/dev/null
 require_equal "$(docker inspect "$POSTGRES_NAME" | jq -c '.[0].HostConfig.PortBindings // {}')" "{}" "PostgreSQL publishes no host port"
 require_equal "$(docker inspect "$POSTGRES_NAME" | jq '.[0].NetworkSettings.Networks | length')" "1" "PostgreSQL has exactly one network"
 require_equal "$(docker inspect "$POSTGRES_NAME" | jq --arg private "$NETWORK_NAME" '.[0].NetworkSettings.Networks | has($private)')" "true" "PostgreSQL remains only on the internal network"
-wait_until 60 "PostgreSQL passes active readiness" postgres_ready
+database_deadline=$((SECONDS + 60))
+DATABASE_READINESS_DEADLINE="$database_deadline"
+wait_until 60 "PostgreSQL health and pg_isready permit fixture bootstrap" postgres_accepting
 POSTGRES_READY=1
 
 fixture_status=0
-docker exec -i -e PGPASSWORD="$ADMIN_PASSWORD" "$POSTGRES_NAME" \
+DOCKER_COMMAND_TIMEOUT=$((database_deadline - SECONDS)) docker exec -i -e PGPASSWORD="$ADMIN_PASSWORD" "$POSTGRES_NAME" \
     psql -X -v ON_ERROR_STOP=1 -U "$ADMIN_USER" -d "$DATABASE_NAME" \
-    -v "database_name=$DATABASE_NAME" \
+    -v "database_name=$DATABASE_NAME" -v "schema_name=$SCHEMA_NAME" -v "admin_role=$ADMIN_USER" \
     -v "standard_role=$STANDARD_ROLE" -v "standard_password=$STANDARD_PASSWORD" -v "standard_application_name=$STANDARD_APP" \
     -v "webonly_role=$WEBONLY_ROLE" -v "webonly_password=$WEBONLY_PASSWORD" -v "webonly_application_name=$WEBONLY_APP" \
     -v "runonce_role=$RUNONCE_ROLE" -v "runonce_password=$RUNONCE_PASSWORD" -v "runonce_application_name=$RUNONCE_APP" \
@@ -1162,18 +1392,24 @@ docker exec -i -e PGPASSWORD="$ADMIN_PASSWORD" "$POSTGRES_NAME" \
 sanitize_stream < "$RAW_ROOT/fixture-bootstrap.txt" > "$EVIDENCE_ROOT/fixture-bootstrap.txt"
 require_equal "$fixture_status" "0" "fixture bootstrap exits successfully"
 pass "minimal fixture schema and scoped roles applied"
+if [[ "${DOCKER_SMOKE_INJECT_FAILURE:-}" == "missing-fixture-sentinel" ]]; then
+    pg_admin -c 'DELETE FROM smoke_fixture_version' >/dev/null
+fi
+wait_until "$((database_deadline - SECONDS))" "PostgreSQL health, pg_isready and committed v69 sentinel all pass within 60s" postgres_ready
+DATABASE_READINESS_DEADLINE=0
 
-role_scope="$(pg_admin -Atc "SELECT (NOT rolsuper AND NOT rolcreaterole AND NOT rolcreatedb AND rolname <> (SELECT tableowner FROM pg_tables WHERE schemaname='public' AND tablename='asset')) FROM pg_roles WHERE rolname='${STANDARD_ROLE}'")"
+role_scope="$(pg_admin -Atc "SELECT (NOT rolsuper AND NOT rolcreaterole AND NOT rolcreatedb AND rolname <> (SELECT tableowner FROM pg_tables WHERE schemaname='${SCHEMA_NAME}' AND tablename='asset')) FROM pg_roles WHERE rolname='${STANDARD_ROLE}'")"
 require_equal "$role_scope" "t" "Standard app role is non-superuser, non-owner, and unprivileged"
 require_equal "$(pg_admin -Atc "SELECT relrowsecurity || '|' || relforcerowsecurity FROM pg_class WHERE oid='asset'::regclass")" "true|true" "asset fixture has enabled FORCE RLS"
 require_equal "$(pg_as "$STANDARD_ROLE" "$STANDARD_PASSWORD" -Atc 'SHOW lock_timeout')" "20s" "fixture lock timeout is finite and below Npgsql default command timeout"
 
 postgres_ip="$(container_ip "$POSTGRES_NAME")"
 wait_until 10 "native host reaches PostgreSQL container IP" host_tcp_open "$postgres_ip" 5432
+install_egress_denial
 
 if [[ "${DOCKER_SMOKE_INJECT_FAILURE:-}" == "after-postgres" ]]; then
     fail "intentional failure after PostgreSQL readiness"
-elif [[ -n "${DOCKER_SMOKE_INJECT_FAILURE:-}" ]]; then
+elif [[ -n "${DOCKER_SMOKE_INJECT_FAILURE:-}" && "${DOCKER_SMOKE_INJECT_FAILURE:-}" != "egress-attempt" ]]; then
     fail "unknown DOCKER_SMOKE_INJECT_FAILURE value"
 fi
 
@@ -1186,6 +1422,12 @@ standard_log_baseline="$(docker logs "$POSTGRES_NAME" 2>&1 | wc -l | tr -d ' ')"
 create_app_container standard '' "$STANDARD_ROLE" "$STANDARD_PASSWORD" yes "$standard_root"
 standard_name="$CREATED_CONTAINER"
 docker start "$standard_name" >/dev/null
+verify_serving_egress_denial "$standard_name"
+if [[ "${DOCKER_SMOKE_INJECT_FAILURE:-}" == "egress-attempt" ]]; then
+    probe_pid="$(docker inspect --format '{{.State.Pid}}' "$standard_name")"
+    run_root nsenter --target "$probe_pid" --net timeout 2 bash -c 'exec 7<>/dev/tcp/192.0.2.1/443' >/dev/null 2>&1 || true
+    require_equal "$(denied_packets)" "$EXPECTED_DENIED_PACKETS" "unexpected application egress fails the matrix"
+fi
 standard_port="$(http_port "$standard_name")"
 wait_until 45 "Standard HTTP SSR becomes ready" fetch_page "http://127.0.0.1:$standard_port/" "$EVIDENCE_ROOT/standard-dashboard-start.html"
 require_contains "$EVIDENCE_ROOT/standard-dashboard-start.html" "Standard" "Standard SSR reports Standard mode"
@@ -1251,6 +1493,7 @@ web_log_baseline="$(docker logs "$POSTGRES_NAME" 2>&1 | wc -l | tr -d ' ')"
 create_app_container webonly web-only "$WEBONLY_ROLE" "$WEBONLY_PASSWORD" yes "$webonly_root"
 webonly_name="$CREATED_CONTAINER"
 docker start "$webonly_name" >/dev/null
+verify_serving_egress_denial "$webonly_name"
 webonly_port="$(http_port "$webonly_name")"
 wait_until 45 "Web-only HTTP SSR becomes ready" fetch_page "http://127.0.0.1:$webonly_port/" "$EVIDENCE_ROOT/webonly-dashboard-start.html"
 require_contains "$EVIDENCE_ROOT/webonly-dashboard-start.html" "Web-only" "Web-only SSR reports Web-only mode"
@@ -1425,5 +1668,6 @@ require_contains "$EVIDENCE_ROOT/private-stderr.txt" \
     'worker-exit-summary outcome=invalid-input phase=input message=worker invocation or input is invalid' \
     "private pre-request EOF emits the canonical safe summary"
 
+require_equal "$(denied_packets)" "$EXPECTED_DENIED_PACKETS" "all cases attempted no external egress beyond the explicit firewall probes"
 capture_diagnostics
 pass "all five deployment-role rows used one immutable image ID"

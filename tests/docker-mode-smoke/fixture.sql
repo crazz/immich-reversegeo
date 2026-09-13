@@ -1,5 +1,10 @@
 \set ON_ERROR_STOP on
 
+BEGIN;
+CREATE SCHEMA :"schema_name";
+SET search_path TO :"schema_name", pg_catalog;
+ALTER ROLE :"admin_role" IN DATABASE :"database_name" SET search_path TO :"schema_name", pg_catalog;
+
 CREATE TABLE asset (
     id uuid PRIMARY KEY,
     "createdAt" timestamptz NOT NULL,
@@ -37,7 +42,11 @@ ALTER ROLE :"webonly_role" SET application_name TO :'webonly_application_name';
 ALTER ROLE :"runonce_role" SET application_name TO :'runonce_application_name';
 
 GRANT CONNECT ON DATABASE :"database_name" TO :"standard_role", :"webonly_role", :"runonce_role";
-GRANT USAGE ON SCHEMA public TO :"standard_role", :"webonly_role", :"runonce_role";
+ALTER ROLE :"standard_role" IN DATABASE :"database_name" SET search_path TO :"schema_name", pg_catalog;
+ALTER ROLE :"webonly_role" IN DATABASE :"database_name" SET search_path TO :"schema_name", pg_catalog;
+ALTER ROLE :"runonce_role" IN DATABASE :"database_name" SET search_path TO :"schema_name", pg_catalog;
+
+GRANT USAGE ON SCHEMA :"schema_name" TO :"standard_role", :"webonly_role", :"runonce_role";
 GRANT SELECT ON asset, asset_exif TO :"standard_role", :"webonly_role", :"runonce_role";
 GRANT UPDATE (city, state, country) ON asset_exif TO :"standard_role", :"runonce_role";
 
@@ -45,14 +54,14 @@ CREATE FUNCTION smoke_gate_worker_count()
 RETURNS boolean
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = pg_catalog, public
+SET search_path FROM CURRENT
 AS $$
 DECLARE
     must_hold boolean;
 BEGIN
     SELECT control.hold_worker
       INTO must_hold
-      FROM public.smoke_control AS control
+      FROM smoke_control AS control
      WHERE control.singleton
        AND control.worker_role = session_user;
 
@@ -101,4 +110,9 @@ SELECT CASE WHEN rolname = :'standard_role'
 
 SELECT relrowsecurity, relforcerowsecurity
   FROM pg_catalog.pg_class
- WHERE oid = 'public.asset'::regclass;
+ WHERE oid = 'asset'::regclass;
+
+-- Visible only after the complete fixture transaction commits.
+CREATE TABLE smoke_fixture_version (version integer PRIMARY KEY CHECK (version = 69));
+INSERT INTO smoke_fixture_version VALUES (69);
+COMMIT;

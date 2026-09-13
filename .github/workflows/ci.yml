@@ -10,6 +10,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   app:
     name: Build and Test
@@ -34,13 +38,44 @@ jobs:
       - name: Test
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --no-build --filter "TestCategory!=Integration&TestCategory!=Performance"
 
+  # Block 68 memory soak remains separately invoked, outside required PR CI.
+  docker-mode-integration:
+    name: Docker Mode Integration
+    needs: app
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
       - name: Install Docker smoke prerequisites
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends strace
+          sudo apt-get install -y --no-install-recommends strace sqlite3 jq iptables
 
       - name: Test Docker deployment modes
         run: npm run test:docker-smoke
+
+      - name: Clean owned Docker smoke resources
+        if: always()
+        run: |
+          shopt -s nullglob
+          status=0
+          for run in _out/docker-mode-smoke/immich46-*; do
+            timeout --signal=TERM --kill-after=5s 30s bash scripts/docker-mode-smoke.sh --cleanup-only "${run##*/}" || status=$?
+          done
+          exit "$status"
+
+      - name: Upload Docker mode failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-mode-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: _out/docker-mode-smoke/*/evidence/
+          if-no-files-found: error
+          retention-days: 7
 
   change23:
     name: Change 23 focused tests (${{ matrix.os }})
