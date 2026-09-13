@@ -178,6 +178,8 @@ If the desired place is not in the candidate list, that usually means the fix be
 
 ## Docs
 
+For worker composition, protocol, finality and diagnostic evidence, see the repository-only [Worker architecture and protocol](./docs/maintainer/WORKER_ARCHITECTURE_PROTOCOL.md) reference.
+
 The documentation site is built with Zensical using the existing [`mkdocs.yml`](./mkdocs.yml) compatibility path. Public website content lives under [`docs/website/`](./docs/website/). Generated output goes to [`_out/website/`](./_out/website/).
 
 To build or preview the docs locally, install the Python packages first:
