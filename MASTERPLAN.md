@@ -1404,7 +1404,7 @@ Bound memory wording to evidence: in Standard/Web-only, verified heavy geodata j
 
 **Dependencies and sequencing** — This is the final gate after all earlier numbered blocks, especially finalized/applied 40–56 and 65–71. Re-read their landed implementation, tests, CI evidence, and final block-70/71 documents at apply start; if behavior or evidence differs, stop and record the drift rather than documenting an aspirational contract. Block 72 changes no runtime, tests, CI, Compose, deployment guide, protocol guide, schema, or configuration and does not revive blocks 62–64.
 
-**OpenSpec** — [72-finalize-release-notes-migration-guidance](openspec/changes/72-finalize-release-notes-migration-guidance/)
+**OpenSpec** — [72-finalize-release-notes-migration-guidance](openspec/changes/archive/2026-09-13-72-finalize-release-notes-migration-guidance/)
 
 ### Checkpoint I
 
