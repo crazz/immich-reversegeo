@@ -1342,7 +1342,7 @@ The invoked block-46 contract uses a run-unique label/name prefix; one internal 
 
 **Dependencies and sequencing** — Requires applied and validated blocks 40–46 plus block 67's landed safe failure/telemetry catalog. If block 46 already invokes the harness inside `app`, relocate that single invocation rather than adding another. Block 68 remains parallel-owned and optional full soak stays outside required PR CI; a future explicit/scheduled performance workflow may invoke it, but this block adds no schedule. Complete before block 70 operational claims and block 72 release work.
 
-**OpenSpec** — [69-add-docker-mode-integration-job](openspec/changes/69-add-docker-mode-integration-job/)
+**OpenSpec** — [69-add-docker-mode-integration-job](openspec/changes/archive/2026-09-13-69-add-docker-mode-integration-job/)
 
 **Preflight reconciliation** — The existing harness does not yet enforce serving-network egress denial, conjunctive Docker-health/committed-fixture readiness, a unique schema, allow-listed bounded evidence, or a cleanup-only API. Close these gaps only in `scripts/docker-mode-smoke.sh` and `tests/docker-mode-smoke/fixture.sql`, then wire the same entry in `.github/workflows/ci.yml`. Preserve existing role assertions and deadlines (45s HTTP, 105s per Standard phase, 130s Web-only two-due observation, 30/45s Run-once and derived private budgets); add a bounded 30s external cleanup entry. No archived prerequisite plan, production runtime, second launcher/harness or soak changes.
 
