@@ -1360,7 +1360,7 @@ Use exactly `ghcr.io/immich-reversegeo/immich-reversegeo:latest`, separate persi
 
 **Dependencies and sequencing** — Requires finalized/applied blocks 40–56, no-go decisions 61–64, memory evidence 68, and Docker evidence 69; stop and reconcile if landed public behavior differs. This is planning/public documentation only: do not edit runtime implementation, block 71 maintainer protocol guidance, or block 72 release work.
 
-**OpenSpec** — [70-document-deployment-modes-operational-tradeoffs](openspec/changes/70-document-deployment-modes-operational-tradeoffs/)
+**OpenSpec** — [70-document-deployment-modes-operational-tradeoffs](openspec/changes/archive/2026-09-13-70-document-deployment-modes-operational-tradeoffs/)
 
 ### 71. `docs: document worker architecture and protocol`
 
