@@ -1308,7 +1308,7 @@ Every scheduled check uses the full current-eligibility `EXISTS` observation. No
 
 **Apply-time spawn reconciliation** — A failed OS spawn finalizes ProcessAssets as Failed and Lookup/Cache as Unavailable under their existing page contracts; all three retain startup-failed process classification, no PID/terminal and one owner release. Readiness timeout after a successful spawn retains Failed finalization.
 
-**OpenSpec** — [67-add-process-level-failure-matrix](openspec/changes/67-add-process-level-failure-matrix/)
+**OpenSpec** — [67-add-process-level-failure-matrix](openspec/changes/archive/2026-09-13-67-add-process-level-failure-matrix/)
 
 ### 68. `test: add repeated worker memory soak`
 
