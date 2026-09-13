@@ -8,6 +8,7 @@ This page covers the day-to-day UI for Immich ReverseGeo after setup is complete
 
 For install-time settings such as database values, schedules, and processing limits, see [Configuration](./configuration.md).
 For a source-by-source explanation of the geographic data behind the app, see [Data Sources](./data-sources.md).
+These pages are available in Standard and Web-only. For external scheduling without a UI, see [Deployment Modes](./deployment-modes.md).
 
 ## Dashboard
 
@@ -18,7 +19,7 @@ Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 - the Dashboard shows live progress, recent activity, and the last completed run
 - `Stop` requests cancellation of the current run; `Stopping…` remains visible while it finishes and releases resources
 
-Wait for the run to finish before starting another pass. Work that does not observe cancellation, such as a synchronous native operation, can take longer to stop. Stopping does not undo location updates already written.
+Wait for the run to finish before starting another pass. Work that does not observe cancellation, such as a synchronous native operation, can take longer to stop; after a bounded grace period the app can force-stop the worker's process tree. Stopping does not undo location updates already written.
 
 Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. The Dashboard and Logs continue to show the run while that worker is active.
 
@@ -34,6 +35,8 @@ Web-only disables the built-in scheduler without changing your saved schedule, a
 
 `Failed` remains visible so an unexpected worker failure does not immediately look idle. Open Logs for the recorded processing details. The next worker start clears the retained failure; restarting the Web host creates a fresh `Idle` status.
 
+See the [worker state table](./deployment-modes.md#worker-status-and-recovery) for each label. After a failure, inspect Logs, correct the cause, verify the previous worker and cleanup have finished, and then explicitly start a new attempt. The app does not replace or replay a failed worker request automatically. Saved location changes and published caches remain saved.
+
 ## Lookup
 
 Use the Lookup page when you want to test a coordinate before running a full processing pass.
@@ -46,9 +49,11 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 
 Lookup starts a temporary isolated worker in both Standard and Web-only mode. While it is checking availability, starting, or running, the coordinate and source options stay locked. The page shows the current lookup step and any active cache preparation. `Cancel` requests a stop and remains in `Cancelling…` until the worker has exited and its output has finished draining.
 
-If another lookup already owns the temporary worker slot, the page reports that it is busy and starts no second worker. If the worker cannot start or stops without a valid result, Lookup shows a short safe failure message. It does not switch to an in-process resolver. You can retry after the existing job has finished or after correcting the worker installation problem.
+If processing, another lookup, cache refresh, or coordinated maintenance owns the local work slot, the page reports that it is busy and starts no second worker. If the worker cannot start or stops without a valid result, Lookup shows a short safe failure message. It does not switch to an in-process resolver. Retry only after the previous operation and cleanup have finished and any reported cause is corrected.
 
 Lookup is always a preview. It may download or read geographic caches, but it does not update an Immich asset or write the displayed city, state, or country to `asset_exif`.
+
+Optional GADM data is restricted to academic and other non-commercial use; check the [license guidance](./data-sources.md#optional-gadm-administrative-data) before selecting it. Compare the Lookup result before enabling it for bulk processing.
 
 ## Data tools
 

@@ -18,91 +18,52 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
 
 ## Preferred setup
 
-The reference Compose file omits `IMMICH_REVERSEGEO_MODE`, which selects the compatible Standard default. Standard runs the Web app and schedule, and starts temporary child workers for accepted processing runs. If you need the Web interface and manual runs without the internal scheduler, set `IMMICH_REVERSEGEO_MODE=web-only`. Saved schedule values stay in Settings but remain inactive until you return to Standard mode.
+The reference below uses **Standard**, with a Web UI and your saved schedule. Compare [Deployment Modes](./deployment-modes.md) before choosing Web-only or the optional Run-once service.
 
-Use one exact lowercase value: `standard`, `web-only`, or `run-once`. This is an environment setting, not a `settings.json` option, so restart the container after changing it.
+- Add these services to your existing Immich Compose file and reuse its database `.env`.
+- Keep both named volumes: `/config` stores settings and `/data` stores geographic caches and runtime state.
+- Services in the same Compose project use its existing network. With a separate project, explicitly join the database's network and use its reachable database hostname.
+- The Web port is bound to localhost. Use a private access path for a remote host; see [VPS and firewall notes](#vps-and-firewall-notes).
 
-- Add the service to your existing Immich `docker-compose.yml`.
-- Reuse the same `.env` file that already contains your Immich database settings.
-- Keep `/config` and `/data` persisted with Docker volumes.
-- No extra Docker network configuration is needed when the service lives in the same compose project as Immich.
-
-Reference file:
-[docker-compose.yml](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/docker-compose.yml)
-
-Copy/paste snippet:
+This example uses `ghcr.io/immich-reversegeo/immich-reversegeo:latest` and the image's normal entrypoint. Its source is the reference Compose file from the same documentation revision:
 
 ```yaml title="docker-compose.yml"
---8<-- "https://raw.githubusercontent.com/immich-reversegeo/immich-reversegeo/master/docker-compose.yml"
+--8<-- "docker-compose.yml"
 ```
 
-This service expects:
+Your shared `.env` must supply the existing Immich database values, for example `DB_HOST=database`, `DB_PORT=5432`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_DATABASE_NAME`. Use your actual database service name and credentials. Do not store credentials in `settings.json`.
 
-- the same database connection values Immich already uses
-- to run in the same compose project and Docker network as Immich
-- a persistent `/config` volume for settings
-- a persistent `/data` volume for downloaded Overture data and runtime state
-- a free host port for the web UI, with `8080` as the default example
+Start the Web service:
 
-Typical variables come from the shared `.env` file:
-
-```env
-DB_HOST=database
-DB_PORT=5432
-DB_USERNAME=postgres
-DB_PASSWORD=...
-DB_DATABASE_NAME=immich
-DATA_DIR=/data
-CONFIG_DIR=/config
+```sh
+docker compose up -d immich-reversegeo
 ```
 
-Then start the stack:
+Only an absent `IMMICH_REVERSEGEO_MODE` selects Standard by default. Do not add an empty value to `.env`; empty, whitespace-only, padded, case-varied, or unknown values stop startup with exit `2`.
 
-```bash
-docker compose up -d
+### Web-only variation
+
+Uncomment this entry in the Web service's `environment` list:
+
+```yaml
+- IMMICH_REVERSEGEO_MODE=web-only
 ```
+
+Keep its image, port `8080`, database environment, network, and separate mounts. Recreate it with `docker compose up -d immich-reversegeo` so the new environment takes effect. The same UI, manual processing, Lookup, and heavy Data actions remain available; the internal scheduler is absent and saved schedule values remain unchanged. Mode is read only at startup and is not a Settings option.
 
 ## Optional Run-once job
 
-Run-once is intended for cron or another external scheduler. It starts no Web server, makes one processing attempt in the current process, waits for cleanup, and exits. Add this optional service beside the persistent service in the same Immich Compose file:
+The reference includes `immich-reversegeo-run-once` beside the Web service. It uses the same image, database environment, network, and persistent config/data volumes, with exact `IMMICH_REVERSEGEO_MODE=run-once`, no `ports`, and `restart: "no"`. No entrypoint or command override is needed. Its `run-once` profile prevents ordinary Compose startup from launching it.
 
-```yaml title="docker-compose.yml"
-services:
-  immich-reversegeo-run-once:
-    image: ghcr.io/immich-reversegeo/immich-reversegeo:latest
-    pull_policy: always
-    profiles: ["run-once"]
-    volumes:
-      - reversegeo-config:/config
-      - reversegeo-data:/data
-    env_file:
-      - .env
-    environment:
-      - IMMICH_REVERSEGEO_MODE=run-once
-    stop_grace_period: 40s
-    restart: "no"
-```
+Start one disposable attempt from the Compose directory:
 
-This uses the image's normal entrypoint, the existing Immich database settings and Compose network, and the same separate config and data volumes. It publishes no port. Start one disposable attempt with:
-
-```bash
+```sh
 docker compose run --rm immich-reversegeo-run-once
 ```
 
-A cron entry can change to the directory containing the Compose file and run that same command. Each launch creates one new attempt. Immich ReverseGeo does not retry, replay, roll back, or start a replacement process. If another deployment owns the database processing lock, the job exits immediately with code `3`; a later invocation is a new decision by your scheduler.
+Cron or another external scheduler can run that same command. Run-once has no Web listener or child worker, makes one authoritative attempt in its own process without a scheduled precheck, waits for cleanup, and exits. Configure processing settings through a Web mode before using the job. Web-only is useful when the UI remains available while an external scheduler owns cadence.
 
-Use the exit code as the automation result:
-
-| Code | Meaning |
-| --- | --- |
-| `0` | Completed, including when there was no eligible work |
-| `2` | Invalid deployment mode or reserved startup syntax |
-| `3` | Another Immich ReverseGeo deployment is already processing this database |
-| `4` | The processing attempt failed |
-| `5` | Required configuration, data, database, lock, lifecycle, or cleanup infrastructure failed |
-| `130` | The attempt was cooperatively cancelled during shutdown |
-
-The job writes ordinary readable progress to standard output and warnings or failures to standard error. Log text is for operators; the exit code is the stable automation contract. A failed or cancelled attempt can leave already committed asset updates and skipped-item records in place, so inspect the result before choosing whether to launch another attempt.
+Use the [Run-once exit table](./deployment-modes.md#run-once-exit-codes) for automation; logs are for human inspection. Busy exit `3` means no pass ran. There is no internal retry or automatic replacement. Already committed asset updates, skipped records, and published caches remain after cancellation or failure. Avoid running maintenance and an independent writer concurrently; see [multiple-container limits](./architecture.md#worker-jobs-and-multiple-containers).
 
 ## Stopping or updating the service
 

@@ -65,6 +65,7 @@ nav:
   - Setup:
       - Getting Started: getting-started.md
       - Installation: installation.md
+      - Deployment Modes: deployment-modes.md
       - Configuration: configuration.md
   - Guide / App:
       - Using the App: using-the-app.md

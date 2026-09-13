@@ -10,6 +10,8 @@ You do not need to understand the internals to use Immich ReverseGeo, but the ov
 
 For a plain-language explanation of the active geographic data sources, see [Data Sources](./data-sources.md).
 
+Choose how the service runs in [Deployment Modes](./deployment-modes.md). Standard and Web-only keep a Web service available; Run-once performs one processing attempt without a Web listener and exits.
+
 ## Main components
 
 <div class="feature-grid">
@@ -29,7 +31,7 @@ For a plain-language explanation of the active geographic data sources, see [Dat
 
 ### Processing pipeline
 
-The background processor:
+An admitted processing attempt:
 
 1. reads unprocessed assets from immich
 2. resolves bundled country
@@ -39,9 +41,11 @@ The background processor:
 
 ### Worker jobs and multiple containers
 
-Heavy jobs such as asset processing and coordinate Lookup run in an isolated child process. Administrative cache deletion runs directly in the Web process, but reserves the same local slot while it removes the final cache files. A busy request is rejected immediately and can be tried again after the active operation finishes.
+In Standard and Web-only, heavy jobs such as asset processing, coordinate Lookup, and cache download/export/refresh run in temporary worker processes. Administrative cache deletion and database maintenance run in the Web process with local coordination. A busy request is rejected immediately and can be tried again after the active operation finishes.
 
 The Web interface does not keep large geographic datasets in memory. Processing, Lookup, and cache downloads load them in worker processes, and that memory is reclaimed when each worker exits. The Data page reads cache summaries without loading those datasets.
+
+Run-once performs one attempt directly in its invoking process and exits after cleanup. It has no Web service, child worker, or internal retry. The process ownership boundary does not guarantee a particular total memory usage; [startup and memory guidance](./deployment-modes.md#startup-memory-and-disk-activity) explains the measurement limits.
 
 This slot is local to each web container. If you run multiple web containers, an operation in one container can overlap processing, Lookup, cache refresh, cache deletion, or database reset in another container. Asset processing also keeps its PostgreSQL advisory lock, which prevents two processing workers from updating Immich at the same time across containers; database resets do not broaden that processing-only lock. Run one interactive web container with no independent writer if you need strict exclusion while changing shared caches, Immich location fields, or the skip list.
 

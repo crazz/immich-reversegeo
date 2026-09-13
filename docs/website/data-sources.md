@@ -46,7 +46,7 @@ What it does not do by itself:
 
 - it is not the main state and city source for the final result
 - a territory outside the bundled fixture set can still be missing if the pinned Overture release has no country or dependency boundary for it
-- changing the bundled database requires an application or container restart because the country index stays in memory
+- to change bundled country data, install the complete updated image and recreate the service; an active worker keeps its loaded country index until it exits
 
 If a coordinate still looks wrong, use [Lookup](./using-the-app.md#lookup) first. Confirm the country identity, then inspect the downloaded Overture and optional GADM administrative results before changing settings.
 
@@ -236,6 +236,8 @@ The recommended workflow is:
 3. decide whether you want default Overture behavior, airport matching, or optional GADM for that use case
 
 ## Storage and network behavior
+
+In Standard and Web-only, heavy source work runs in temporary workers while the Web service reads lightweight cache summaries. Run-once owns source work in its one-shot process. See [Deployment Modes](./deployment-modes.md#startup-memory-and-disk-activity) for startup and memory expectations.
 
 - built-in Overture country and airport data ships inside the app image
 - downloaded Overture and GADM country caches are stored under `/data`

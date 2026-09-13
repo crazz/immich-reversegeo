@@ -50,17 +50,17 @@ DB_DATABASE_NAME=immich
 
 ## 2. Start the container
 
+Follow [Installation](./installation.md) for the complete Compose example. This walkthrough uses **Standard**, with a Web UI and built-in scheduling. Choose **Web-only** for the same UI and manual actions without a scheduler, or **Run-once** for an external scheduler with no UI; see [Deployment Modes](./deployment-modes.md).
+
 Use Docker with persistent mounts for:
 
 - `/config` for settings
 - `/data` for downloaded country data
 
-You can either:
-
-- add the `immich-reversegeo` service to your existing Immich compose file
+Add the `immich-reversegeo` service to your existing Immich Compose file, then start it:
 
 ```bash
-docker compose up -d
+docker compose up -d immich-reversegeo
 ```
 
 ## 3. Open the UI
