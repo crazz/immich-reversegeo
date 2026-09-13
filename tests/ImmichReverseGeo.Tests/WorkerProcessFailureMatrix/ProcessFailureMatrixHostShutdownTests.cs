@@ -32,6 +32,23 @@ public sealed class ProcessFailureMatrixHostShutdownTests
                 host.Coordinator.TryAdmit(ProcessFailureMatrixFixtureTests.Dispatch(lease, kind)));
             await clock.WaitForOneShotAsync(TimeSpan.FromSeconds(10), "shutdown/exact-grace-timer");
             await MatrixFileSignal.WaitAsync(lease.Root, "matrix-cancel-observed.marker", "shutdown/child-received-cancel");
+            if (lateDiagnostic)
+            {
+                // The child marker precedes its diagnostic write. Settle the
+                // intended projection before making the kill deadline eligible.
+                if (kind == WorkerJobKind.ProcessAssets)
+                {
+                    await host.Launcher.Tap(lease).WaitForLogAsync("matrix:cancel-observed");
+                }
+                else
+                {
+                    var rejection = await MatrixWait.ForAsync(lease.Session!.FirstTerminalPreventingObservation,
+                        "shutdown/disposed-page-rejected-late-diagnostic");
+                    Assert.IsInstanceOfType<ChildWorkerFaultContainmentReason.SinkFailure>(rejection.Reason);
+                    await MatrixWait.ForAsync(lease.Session.EventDeliveryIntakeClosed!,
+                        "shutdown/rejected-projection-closed-intake");
+                }
+            }
             clock.Advance(TimeSpan.FromMilliseconds(9_999));
             Assert.AreEqual(0, lease.TreeKillCalls);
             Assert.IsFalse(shutdown.IsCompleted);
