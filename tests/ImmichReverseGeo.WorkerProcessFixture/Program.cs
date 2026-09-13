@@ -41,6 +41,11 @@ internal static class Program
 
         try
         {
+            if (options!.Scenario is FixtureScenario.RealMemorySoak or FixtureScenario.RealMemorySoakNetworkProbe)
+            {
+                return await MemorySoakHostFixture.RunAsync(options, selected.Version).ConfigureAwait(false);
+            }
+
             if (options!.UsesProductionCacheHost)
             {
                 return await ProductionCacheHostFixture.RunAsync(

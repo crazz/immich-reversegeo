@@ -12,13 +12,14 @@ const repositoryDirectory = path.resolve(scriptDirectory, "..");
 const defaultProject = "tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj";
 const normalExclusions = "TestCategory!=Integration&TestCategory!=Performance";
 const performanceExclusion = "TestCategory!=Performance";
+const performanceSelection = "TestCategory=Performance&TestCategory!=Integration";
 const cleanupGraceMilliseconds = 2_000;
 
 function printHelp()
 {
-    console.log("Usage: node scripts/run-tests.mjs [--integration] [--filter expression] [--project path]");
+    console.log("Usage: node scripts/run-tests.mjs [--integration | --performance] [--filter expression] [--project path]");
     console.log("");
-    console.log("Runs the repository test suite, always excluding Performance tests.");
+    console.log("Default and Integration runs exclude Performance. --performance explicitly selects hermetic Performance tests.");
 }
 
 function failUsage(message)
@@ -32,6 +33,7 @@ function parseArguments(argumentsToParse)
 {
     const options = {
         integration: false,
+        performance: false,
         filter: undefined,
         project: undefined
     };
@@ -50,14 +52,15 @@ function parseArguments(argumentsToParse)
             return { help: true };
         }
 
-        if (argument === "--integration")
+        if (argument === "--integration" || argument === "--performance")
         {
-            if (options.integration)
+            const mode = argument.slice(2);
+            if (options.integration || options.performance)
             {
-                throw new Error("--integration may only be provided once.");
+                throw new Error("Choose --integration or --performance once; the modes cannot be combined.");
             }
 
-            options.integration = true;
+            options[mode] = true;
             continue;
         }
 
@@ -133,6 +136,11 @@ function buildTestArguments(options, project)
     {
         testArguments.push("--settings", "integration.runsettings");
     }
+    else if (options.performance)
+    {
+        testArguments.push("--settings", "performance.runsettings",
+            "--results-directory", "_out/performance/worker-memory-soak/test-results");
+    }
 
     if (project !== undefined)
     {
@@ -142,11 +150,17 @@ function buildTestArguments(options, project)
     let filter;
     if (options.filter !== undefined)
     {
-        filter = `(${options.filter})&${options.integration ? performanceExclusion : normalExclusions}`;
+        const selection = options.performance ? performanceSelection
+            : options.integration ? performanceExclusion : normalExclusions;
+        filter = `(${options.filter})&${selection}`;
     }
     else if (options.integration)
     {
         filter = `TestCategory=Integration&${performanceExclusion}`;
+    }
+    else if (options.performance)
+    {
+        filter = performanceSelection;
     }
     else
     {
@@ -424,7 +438,7 @@ async function main()
     try
     {
         project = options.project === undefined
-            ? (options.filter === undefined && !options.integration ? undefined : await validateProject(defaultProject))
+            ? (options.filter === undefined && !options.integration && !options.performance ? undefined : await validateProject(defaultProject))
             : await validateProject(options.project);
     }
     catch (error)

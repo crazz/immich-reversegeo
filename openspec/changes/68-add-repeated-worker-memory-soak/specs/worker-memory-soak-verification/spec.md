@@ -16,7 +16,7 @@ The worker memory soak SHALL run only when the `Performance` category is explici
 - **THEN** no worker memory soak case is selected
 
 ### Requirement: Production-path mixed worker workload
-The soak SHALL keep one exact production Standard or Web-only control process alive and SHALL launch jobs through the production launcher, worker executable, composition, and protocol path exposed by the existing process fixture. After configurable warmup, the measured seeded mix SHALL make ProcessAssets the declared majority and SHALL assign nonzero declared proportions to both v2 job kinds, CoordinateLookup and CacheMutation. Workloads SHALL use deterministic local database/cache/geodata fixtures and MUST NOT perform a live download, remote geodata access, or network export.
+The soak SHALL keep one production Standard or Web-only control composition alive inside a single test-host process. It SHALL reuse the existing process fixture apphost to run the real production InternalWorkerHost/job pipeline, production launcher descriptor entry, protocol, classifier, telemetry and disposal path. Closed command descriptors and deterministic local external-dependency substitutions SHALL remain fixture-owned; job execution and terminal generation MUST use production code rather than synthetic lifecycle frames. This seam does not exercise the unchanged deployed worker executable or production command builder. After configurable warmup, the measured seeded mix SHALL make ProcessAssets the declared majority and SHALL assign nonzero declared proportions to both v2 job kinds, CoordinateLookup and CacheMutation. Workloads SHALL use deterministic local database/cache/geodata fixtures and MUST NOT perform a live download, remote geodata access, or network export.
 
 #### Scenario: Measured mixed workload
 - **WHEN** warmup completes and measured iterations begin
@@ -45,7 +45,7 @@ A run configuration MAY enable deterministic cooperative-cancellation and contro
 - **THEN** each selected cycle reports its authoritative outcome and completes all structural cleanup before the sequence continues
 
 ### Requirement: Web control-plane isolation sentinel
-The Web control process SHALL remain alive across warmup and measured phases and SHALL expose the block-55/56 counting sentinels for forbidden heavy constructors/factories, country-index loading, native or DuckDB initialization, geodata open/query/export/cache mutation, and in-process execution. The soak SHALL reset measured observations after warmup and SHALL fail if any forbidden sentinel is touched by the Web process.
+The test-host process containing production Web composition SHALL remain alive across warmup and measured phases and SHALL expose the block-55/56 counting sentinels for forbidden heavy constructors/factories, country-index loading, native or DuckDB initialization, geodata open/query/export/cache mutation, and in-process execution. The soak SHALL reset measured observations after warmup and SHALL fail if any forbidden sentinel is touched by the Web process.
 
 #### Scenario: Isolated control plane
 - **WHEN** repeated workers initialize and release worker-only geodata state
@@ -56,7 +56,7 @@ The Web control process SHALL remain alive across warmup and measured phases and
 - **THEN** the soak fails regardless of reported RSS trend
 
 ### Requirement: Memory observations and profile-specific limits
-The harness SHALL report ordered Web working-set observations and the complete block-66 per-worker memory availability shape. Reports SHALL state that the block-66 sampler observes `WorkingSet64` after start, at one-second intervals, and opportunistically at finality; a short worker may therefore have only start/finality observations, and these values are neither an OS absolute peak nor process-tree/cgroup/system memory. Without an explicit compatible platform profile, memory values, deltas, slopes, and trends SHALL be diagnostic only and MUST NOT cause failure. An external profile MAY enable host-RSS or Linux cgroup-v2 numeric limits only after its platform/capability match, provenance, units, aggregation, warmup exclusion, and thresholds are recorded.
+The harness SHALL report ordered working-set observations for the whole test-host process containing production Web composition and the complete block-66 per-worker memory availability shape. Evidence SHALL identify the parent test-host and child fixture-apphost scopes, including harness overhead; external profiles SHALL match those scopes and MUST NOT imply production-image RSS. Structural Web-isolation sentinels remain mandatory. Reports SHALL state that the block-66 sampler observes `WorkingSet64` after start, at one-second intervals, and opportunistically at finality; a short worker may therefore have only start/finality observations, and these values are neither an OS absolute peak nor process-tree/cgroup/system memory. Without an explicit compatible platform profile, memory values, deltas, slopes, and trends SHALL be diagnostic only and MUST NOT cause failure. An external profile MAY enable host-RSS or Linux cgroup-v2 numeric limits only after its platform/capability match, provenance, units, aggregation, warmup exclusion, and thresholds are recorded.
 
 #### Scenario: Unprofiled run reports a trend
 - **WHEN** no compatible threshold profile is selected

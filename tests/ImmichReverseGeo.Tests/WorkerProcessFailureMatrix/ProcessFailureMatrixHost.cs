@@ -5,6 +5,7 @@ using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Tests.LifecycleTelemetry;
 using ImmichReverseGeo.Tests.CrossProcessRunExclusion;
 using ImmichReverseGeo.Tests.WorkerProcessFixture;
+using ImmichReverseGeo.Tests.ApplicationComposition;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.LifecycleTelemetry;
@@ -63,6 +64,12 @@ internal sealed class ProcessFailureMatrixHost : IAsyncDisposable
     {
         services.AddWebComposition(ApplicationCompositionContext.Create(CompositionEnvironment.Development,
             Root, Path.Combine(Root, "data"), Path.Combine(Root, "config")));
+        if (Launcher.IsMemorySoak)
+        {
+            var inspection = new WebBoundaryInspection();
+            inspection.Inspect(services, []);
+            Assert.IsEmpty(inspection.Failures, "Soak must start from the block-55/56 production Web boundary.");
+        }
         services.RemoveAll<IWorkerCommandInvocationBuilder>();
         services.AddSingleton<IWorkerCommandInvocationBuilder>(new MatrixCommandBuilder(protocolVersion));
         services.RemoveAll<IChildWorkerLauncher>();
@@ -77,6 +84,14 @@ internal sealed class ProcessFailureMatrixHost : IAsyncDisposable
         services.RemoveAll<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>();
         services.AddSingleton<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>(_ =>
             RejectHeavy<ImmichReverseGeo.Gadm.Services.GadmDivisionsService>());
+        if (Launcher.IsMemorySoak)
+        {
+            foreach (var boundary in ControlPlaneDependencyPolicy.HeavyTypes)
+            {
+                services.RemoveAll(boundary.Key);
+                services.AddSingleton(boundary.Key, _ => SoakSentinel.Forbid<object>("production Web", boundary.Value));
+            }
+        }
     }
 
     internal static async Task<ProcessFailureMatrixHost> CreateAsync(string fault, TimeProvider? time = null,
@@ -123,6 +138,8 @@ internal sealed class ProcessFailureMatrixHost : IAsyncDisposable
     internal CacheMutationPageController Cache { get; private set; } = null!;
     internal int Releases => Volatile.Read(ref _releases);
     internal int ForbiddenHeavyResolutions => Volatile.Read(ref _forbiddenHeavyResolutions);
+    internal BoundaryRuntimeSentinel SoakSentinel { get; } = new(BoundaryRole.Standard);
+    internal object ProbeSoakBoundary(Type serviceType) => _provider.GetRequiredService(serviceType);
     internal Task StopHostAsync() => (_host ?? throw new InvalidOperationException("This row did not start a host.")).StopAsync();
 
     internal async Task RunAsync(WorkerJobKind kind)
@@ -135,7 +152,7 @@ internal sealed class ProcessFailureMatrixHost : IAsyncDisposable
                 await MatrixWait.ForAsync(Processing.WaitForActiveRunAsync(), "processing/owned-finality");
                 break;
             case WorkerJobKind.CoordinateLookup:
-                await MatrixWait.ForAsync(Lookup.SubmitAsync(new(47, 8, false, false, false)), "lookup/owned-finality");
+                await MatrixWait.ForAsync(Lookup.SubmitAsync(new(47, 8, false, false, Launcher.IsMemorySoak)), "lookup/owned-finality");
                 break;
             case WorkerJobKind.CacheMutation:
                 await MatrixWait.ForAsync(Cache.RefreshAsync(CacheMutationSource.Gadm, "CHE"), "cache/owned-finality");
@@ -221,6 +238,19 @@ internal sealed class ProcessFailureMatrixHost : IAsyncDisposable
         internal Task<WorkerProcessFixtureLease> Started => _started.Task;
         internal MatrixEventTap Tap(WorkerProcessFixtureLease lease) => _taps[lease.Request.RunId];
         internal string CacheStage { get; set; } = "success";
+        internal bool IsMemorySoak => fault == "memory-soak";
+        internal bool SoakCancellation { get; set; }
+        internal string? SoakInputDirectory { get; set; }
+        internal async Task ReleaseSoakLeaseAsync(WorkerProcessFixtureLease lease)
+        {
+            Assert.IsTrue(IsMemorySoak);
+            Assert.IsTrue(lease.Session!.Settlement.IsCompletedSuccessfully);
+            await lease.DisposeAsync();
+            Assert.IsTrue(_leases.TryDequeue(out var owned));
+            Assert.AreSame(lease, owned);
+            Assert.IsTrue(_taps.TryRemove(lease.Request.RunId, out _));
+            logs.DrainEntries();
+        }
         internal Task<WorkerProcessFixtureLease> NextLaunchAsync() =>
             MatrixWait.ForAsync(_launches.Reader.ReadAsync().AsTask(), "matrix/next-registered-native-launch");
 
@@ -245,6 +275,29 @@ internal sealed class ProcessFailureMatrixHost : IAsyncDisposable
             Assert.IsTrue(_taps.TryAdd(request.RunId, tap), "Every launch must own a new job identity.");
             try
             {
+                if (IsMemorySoak)
+                {
+                    Directory.CreateDirectory(Path.Combine(lease.Root, "bundled-data"));
+                    File.Copy(Path.Combine(root, "bundled-data", "iso3166.json"),
+                        Path.Combine(lease.Root, "bundled-data", "iso3166.json"));
+                    if (SoakInputDirectory is not null)
+                    {
+                        string input = Path.Combine(lease.Root, "soak-input");
+                        Directory.CreateDirectory(input);
+                        foreach (string name in new[] { "assets.db", "gadm.db", "source.gpkg" })
+                        {
+                            File.Copy(Path.Combine(SoakInputDirectory, name), Path.Combine(input, name));
+                        }
+                    }
+                    var soakSession = dispatch.Context.JobKind == WorkerJobKind.CacheMutation
+                        ? await lease.LaunchAsync("real-cache-matrix", dispatch, tap, invocation.ProtocolVersion, false,
+                            "--cache-matrix-stage", CacheStage)
+                        : await lease.LaunchAsync(SoakCancellation ? "real-processing-cancellation" : "real-memory-soak",
+                            dispatch, tap, invocation.ProtocolVersion, false);
+                    _started.TrySetResult(lease);
+                    _launches.Writer.TryWrite(lease);
+                    return new ChildWorkerLaunchResult.Started(soakSession);
+                }
                 if (fault == "spawn-failure")
                 {
                     return await lease.LaunchMissingExecutableAsync(dispatch, tap, invocation.ProtocolVersion);

@@ -8,7 +8,7 @@ The soak is intentionally opt-in and potentially long. It needs enough repetitio
 
 **Goals:**
 
-- Sustain one production Standard/Web-only control process across warmup and measured mixed worker jobs.
+- Sustain one test-host process containing the production Standard/Web-only control composition across warmup and measured mixed worker jobs.
 - Exercise ProcessAssets as the majority workload and both v2 worker jobs at declared nonzero proportions through the real production process path.
 - Gate each next launch on complete prior worker/process/stream/handle/filesystem finality.
 - Produce reviewable structural and memory-trend evidence under one run-unique `_out` root.
@@ -26,7 +26,7 @@ The soak is intentionally opt-in and potentially long. It needs enough repetitio
 
 ### 1. Reuse the real production process path and landed fixture ownership
 
-Extend block 67's process fixture orchestration so the parent is the exact production Standard/Web-only composition and each worker uses the production command builder, shell-free launcher, executable role, stdin request, stdout protocol reader, classifier, telemetry, and disposal path. Fixture seams replace external data/dependency inputs only; they do not substitute a synthetic child or branch production behavior on a test selector. At apply start, bind to landed names and stop if this would require a second launcher or production fault seam.
+Extend block 67's process fixture orchestration with its actual landed boundary: the long-lived test host contains the production Standard/Web-only composition, and the existing fixture apphost runs the real production InternalWorkerHost/job pipeline. WorkerProcessFixtureLease supplies a closed shell-free descriptor to the production ChildWorkerLauncher descriptor entry; the production stdin/stdout protocol, classifier, telemetry and disposal path remain unchanged. Fixture code owns command selection and local external-data/dependency substitutions, while all job execution and terminal generation use production code rather than the synthetic failure-matrix frame generator. Do not claim the unchanged deployed executable or production command builder is exercised by this seam, and do not introduce a second launcher, process owner or production fault seam.
 
 Alternative: loop a lightweight helper process. Rejected because process cleanup evidence would not cover the worker's production composition and geodata ownership.
 
@@ -62,7 +62,7 @@ RSS growth alone never substitutes for a constructor sentinel and a flat RSS lin
 
 ### 6. Report memory trends with source-specific caveats
 
-Collect monotonic-time-stamped Web `WorkingSet64` observations at phase boundaries and after each job. Consume, do not duplicate, block 66's child memory observation: successful samples and explicit unavailable reasons, sample count, method/scope, and its 1000-ms interval. For short-lived workers, reports call out that only immediate-start and opportunistic-finality samples may exist. Summaries include counts, min/median/max where available, first/last and simple deltas/trend description, but default assertions do not fail on these values or a fitted slope.
+Collect monotonic-time-stamped controller `WorkingSet64` observations at phase boundaries and after each job. The controller measurement covers the whole test-host process containing the production Web composition; child measurements cover the fixture apphost hosting the production worker pipeline. Both include harness overhead. Record these executable/composition identities, retain the structural Web sentinels, and require external profiles to match these exact scopes; this is not production-image RSS evidence. Consume, do not duplicate, block 66's child memory observation: successful samples and explicit unavailable reasons, sample count, method/scope, and its 1000-ms interval. For short-lived workers, reports call out that only immediate-start and opportunistic-finality samples may exist. Summaries include counts, min/median/max where available, first/last and simple deltas/trend description, but default assertions do not fail on these values or a fitted slope.
 
 An optional external JSON platform profile declares an id/version/provenance, OS/architecture/runtime/container expectations, measurement source, units, warmup treatment, minimum sample/iteration conditions, and numeric limits. Supported sources are controller host RSS and Linux cgroup-v2 files such as `memory.current`/`memory.peak` when capability probes confirm the intended cgroup scope. A mismatch or unavailable source produces a bounded not-applied decision, not a guessed fallback. Structural checks always remain active.
 

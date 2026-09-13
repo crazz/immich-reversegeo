@@ -41,7 +41,9 @@ internal enum FixtureScenario
     RealCacheCancellation,
     RealCacheUnresponsive,
     RealCacheMatrix,
-    RealProcessingCancellation
+    RealProcessingCancellation,
+    RealMemorySoak,
+    RealMemorySoakNetworkProbe
 }
 
 internal enum MalformedKind
@@ -133,7 +135,9 @@ internal sealed record FixtureOptions(
             ["real-cache-cancellation"] = FixtureScenario.RealCacheCancellation,
             ["real-cache-unresponsive"] = FixtureScenario.RealCacheUnresponsive,
             ["real-cache-matrix"] = FixtureScenario.RealCacheMatrix,
-            ["real-processing-cancellation"] = FixtureScenario.RealProcessingCancellation
+            ["real-processing-cancellation"] = FixtureScenario.RealProcessingCancellation,
+            ["real-memory-soak"] = FixtureScenario.RealMemorySoak,
+            ["real-memory-soak-network-probe"] = FixtureScenario.RealMemorySoakNetworkProbe
         };
 
     internal bool UsesProductionCoordinateHost => Scenario is

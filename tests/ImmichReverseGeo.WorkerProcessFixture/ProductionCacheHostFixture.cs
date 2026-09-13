@@ -159,12 +159,20 @@ internal static partial class ProductionCacheHostFixture
         return new WKBWriter().Write(polygon);
     }
 
-    private static async Task CreateSourceAsync(
+    internal static async Task CreateSourceAsync(
         string resourceRoot,
         string destination,
         CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        string localSource = Path.Combine(resourceRoot, "soak-input", "source.gpkg");
+        if (File.Exists(localSource))
+        {
+            await using var input = File.OpenRead(localSource);
+            await using var output = new FileStream(destination, FileMode.CreateNew, FileAccess.Write, FileShare.None);
+            await input.CopyToAsync(output, cancellationToken).ConfigureAwait(false);
+            return;
+        }
         await File.WriteAllTextAsync(
             Path.Combine(resourceRoot, "network-substituted.marker"),
             "checked-in-local-source",

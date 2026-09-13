@@ -8,6 +8,7 @@
     "test:integration": "dotnet test --settings integration.runsettings --filter \"TestCategory=Integration\" --ignore-exit-code 8",
     "agent:test": "node scripts/run-tests.mjs",
     "agent:test:integration": "node scripts/run-tests.mjs --integration",
+    "test:performance:worker-memory": "node scripts/run-tests.mjs --performance --filter FullyQualifiedName~ConfiguredMixedSoak_RequiresRealWorkerFinalityBeforeEveryNextLaunch",
     "test:docker-smoke": "bash scripts/docker-mode-smoke.sh",
     "start": "dotnet run --project src/ImmichReverseGeo.Host",
     "docker:build": "docker compose -f docker-compose.local.yml build --no-cache",

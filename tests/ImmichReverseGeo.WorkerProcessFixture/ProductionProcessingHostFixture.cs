@@ -79,7 +79,7 @@ internal static class ProductionProcessingHostFixture
 
     // This normal-suite row declares PostgreSQL not applicable; real fixed-key
     // ownership is exercised separately by the Integration matrix.
-    private sealed class HermeticRunLock(string root) : IProcessingRunLock
+    internal sealed class HermeticRunLock(string root) : IProcessingRunLock
     {
         public ValueTask<ProcessingRunLockAcquisition> AcquireAsync(CancellationToken cancellationToken) =>
             ValueTask.FromResult<ProcessingRunLockAcquisition>(new ProcessingRunLockAcquisition.Acquired(new Lease(root)));

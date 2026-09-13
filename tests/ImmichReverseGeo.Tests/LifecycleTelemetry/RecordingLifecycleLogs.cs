@@ -12,6 +12,12 @@ internal sealed class RecordingLifecycleLogs : ILoggerProvider, ISupportExternal
     private readonly ConcurrentQueue<Entry> _entries = new();
 
     internal Entry[] Entries => _entries.ToArray();
+    internal void DrainEntries()
+    {
+        while (_entries.TryDequeue(out _))
+        {
+        }
+    }
     public ILogger CreateLogger(string categoryName) => new Recorder(this, categoryName);
     public void SetScopeProvider(IExternalScopeProvider scopeProvider) => _scopes = scopeProvider;
     public void Dispose() { }

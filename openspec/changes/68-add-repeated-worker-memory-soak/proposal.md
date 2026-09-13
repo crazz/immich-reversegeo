@@ -4,10 +4,10 @@ Worker isolation is only credible if repeated jobs using the real production wor
 
 ## What Changes
 
-- Add an explicitly selected `Performance` soak that reuses the block-67 production process fixture and exact production launcher, executable, protocol, and Standard/Web-only composition.
+- Add an explicitly selected `Performance` soak that reuses the block-67 fixture apphost hosting the real production InternalWorkerHost/job pipeline, the production ChildWorkerLauncher descriptor entry, protocol and finalizer, and a long-lived production Standard/Web-only composition inside the test host. Closed command descriptors and local external dependencies remain fixture-owned; no synthetic protocol generator or new process owner is introduced.
 - Run configurable warmup and measured iterations with a seeded, recorded mix led by ProcessAssets and including nonzero CoordinateLookup and CacheMutation coverage, using deterministic no-network database/cache/geodata fixtures.
 - Require a fresh worker PID and complete terminal, exit, stream, disposal, process-tree, handle, temp, and candidate cleanup before each next job; optionally repeat cooperative-cancellation and controlled-failure cycles under the same rules.
-- Keep one Web control process alive and combine block-55/56 heavy-initialization sentinels with block-66 worker observations and control-plane memory-trend reporting.
+- Keep one test-host process containing the production Web control composition alive and combine block-55/56 heavy-initialization sentinels with block-66 worker observations and memory-trend reporting. Identify parent test-host and child fixture-apphost overhead explicitly; profiles must match these scopes and cannot imply production-image RSS.
 - Keep structural leaks as the portable failure contract. Numeric host-RSS or Linux cgroup-v2 limits apply only from an explicitly selected external platform profile; no universal memory number or slope is asserted.
 - Categorize the harness as `Performance`, preserve default and Integration exclusions, provide an explicit runsettings/command, and retain redacted run evidence beneath `_out/performance/worker-memory-soak/`.
 - Produce only an optional evidence handoff for block 69; do not add or modify block-69 CI wiring.
