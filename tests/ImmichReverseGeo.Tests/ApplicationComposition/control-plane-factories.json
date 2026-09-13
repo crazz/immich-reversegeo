@@ -15,7 +15,8 @@
     "Lifetime": "Singleton",
     "Dependencies": [
       "ImmichReverseGeo.Web.ChildWorkerLaunching.ChildWorkerLauncher",
-      "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory"
+      "ImmichReverseGeo.Web.ChildWorkerLaunching.IChildProcessFactory",
+      "Microsoft.Extensions.Logging.ILoggerFactory"
     ]
   },
   {

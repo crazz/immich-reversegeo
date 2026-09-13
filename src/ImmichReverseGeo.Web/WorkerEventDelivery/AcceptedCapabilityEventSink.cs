@@ -18,7 +18,8 @@ internal sealed class AcceptedCapabilityEventSink : IWorkerJobEventSink, IAccept
     private long _lastSequence;
     private bool _projected;
 
-    internal AcceptedCapabilityEventSink(WorkerJobContext context, Func<WorkerJobOutputMessage, bool> apply)
+    internal AcceptedCapabilityEventSink(WorkerJobContext context, Func<WorkerJobOutputMessage, bool> apply,
+        ReadModelNotificationCadence.OwnerObservation? notificationOwnerObservation = null)
     {
         ArgumentNullException.ThrowIfNull(context);
         ArgumentNullException.ThrowIfNull(apply);
@@ -29,7 +30,10 @@ internal sealed class AcceptedCapabilityEventSink : IWorkerJobEventSink, IAccept
 
         _context = context;
         _apply = apply;
+        NotificationOwnerObservation = notificationOwnerObservation;
     }
+
+    public ReadModelNotificationCadence.OwnerObservation? NotificationOwnerObservation { get; }
 
     public void BindDeliveryScope(WorkerEventDeliveryScope scope)
     {

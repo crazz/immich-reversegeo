@@ -240,7 +240,8 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
             attempt = RunAttemptAsync(
                 generation,
                 submission,
-                _attemptCancellation.Token);
+                _attemptCancellation.Token,
+                _cadence?.CaptureOwner(_notificationOwner));
             _currentAttempt = attempt;
         }
 
@@ -332,7 +333,8 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
     private async Task RunAttemptAsync(
         long generation,
         CoordinateLookupSubmission submission,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        ReadModelNotificationCadence.OwnerObservation? notificationObservation)
     {
         IWorkerJobAdmissionLease? lease = null;
         ICoordinateLookupWorkerSession? session = null;
@@ -414,7 +416,8 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                 return;
             }
 
-            var sink = new AcceptedCapabilityEventSink(lease.Context, message => ApplyEvent(generation, lease.Context, message));
+            var sink = new AcceptedCapabilityEventSink(lease.Context, message => ApplyEvent(generation, lease.Context, message),
+                notificationObservation);
             CoordinateLookupWorkerStartResult start = await _workerClient.StartAsync(
                 lease,
                 request,
@@ -484,6 +487,7 @@ internal sealed class CoordinateLookupPageController : IAsyncDisposable
                 await DisposeSafelyAsync(session).ConfigureAwait(false);
             }
 
+            _cadence?.CompleteOwner(notificationObservation);
             if (lease is not null)
             {
                 await DisposeSafelyAsync(lease).ConfigureAwait(false);

@@ -113,7 +113,8 @@ public sealed class SessionDeadlineTests
 
         await advance.WaitAsync(TestTimeout);
         await stop.WaitAsync(TestTimeout);
-        Assert.AreEqual(1, clock.TimerDisposeCalls);
+        Assert.AreEqual(1, clock.OneShotTimerDisposeCalls);
+        Assert.AreEqual(2, clock.TimerDisposeCalls, "The grace and memory timers are each joined once.");
         AssertResourcesDisposedOnce(fixture);
     }
 

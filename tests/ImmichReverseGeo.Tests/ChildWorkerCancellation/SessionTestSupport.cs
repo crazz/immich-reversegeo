@@ -143,6 +143,17 @@ internal sealed class CancellationTestClock : TimeProvider
     }
 
     internal int TimerDisposeCalls => Volatile.Read(ref _timerDisposeCalls);
+    internal int OneShotTimerDisposeCalls { get; private set; }
+    internal int OneShotTimerCount
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _timers.Count(timer => timer.IsOneShot);
+            }
+        }
+    }
     internal Task TimerCallbackInvoked => _timerCallbackInvoked.Task;
 
     internal bool BlockTimerCallbackAfterInvocation
@@ -182,7 +193,8 @@ internal sealed class CancellationTestClock : TimeProvider
                 this,
                 callback,
                 state,
-                dueTime == Timeout.InfiniteTimeSpan ? null : _now + dueTime);
+                dueTime == Timeout.InfiniteTimeSpan ? null : _now + dueTime,
+                period);
             _timers.Add(timer);
             _timerGeneration++;
             created = _nextTimerCreated;
@@ -203,6 +215,25 @@ internal sealed class CancellationTestClock : TimeProvider
             return _timerGeneration > afterGeneration
                 ? Task.CompletedTask
                 : _nextTimerCreated.Task.WaitAsync(cancellationToken);
+        }
+    }
+
+    internal async Task WaitForOneShotTimerCreatedAsync(int afterCount, CancellationToken cancellationToken = default)
+    {
+        while (true)
+        {
+            Task next;
+            lock (_gate)
+            {
+                if (_timers.Count(timer => timer.IsOneShot) > afterCount)
+                {
+                    return;
+                }
+
+                next = _nextTimerCreated.Task;
+            }
+
+            await next.WaitAsync(cancellationToken).ConfigureAwait(false);
         }
     }
 
@@ -234,19 +265,20 @@ internal sealed class CancellationTestClock : TimeProvider
         CancellationTestClock owner,
         TimerCallback callback,
         object? state,
-        DateTimeOffset? dueAt) : ITimer
+        DateTimeOffset? dueAt,
+        TimeSpan period) : ITimer
     {
-        private readonly TaskCompletionSource _callbackSettled =
-            new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private TaskCompletionSource? _activeCallback;
         private int _disposed;
-        private int _fired;
         private DateTimeOffset? _dueAt = dueAt;
+        private TimeSpan _period = period;
 
         internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
+        internal bool IsOneShot => _period == Timeout.InfiniteTimeSpan;
 
         internal bool IsDue(DateTimeOffset now)
             => !IsDisposed
-                && Volatile.Read(ref _fired) == 0
+                && _activeCallback is null
                 && _dueAt is not null
                 && _dueAt <= now;
 
@@ -262,38 +294,55 @@ internal sealed class CancellationTestClock : TimeProvider
                 _dueAt = dueTime == Timeout.InfiniteTimeSpan
                     ? null
                     : owner._now + dueTime;
-                Volatile.Write(ref _fired, 0);
+                _period = period;
                 return true;
             }
         }
 
         public void Dispose()
         {
-            Interlocked.Increment(ref owner._timerDisposeCalls);
-            if (Interlocked.Exchange(ref _disposed, 1) == 0
-                && Volatile.Read(ref _fired) == 0)
+            lock (owner._gate)
             {
-                _callbackSettled.TrySetResult();
+                Interlocked.Increment(ref owner._timerDisposeCalls);
+                if (IsOneShot)
+                {
+                    owner.OneShotTimerDisposeCalls++;
+                }
+
+                Volatile.Write(ref _disposed, 1);
             }
         }
 
         public ValueTask DisposeAsync()
         {
-            Dispose();
-            return new ValueTask(_callbackSettled.Task);
+            lock (owner._gate)
+            {
+                Dispose();
+                return new ValueTask(_activeCallback?.Task ?? Task.CompletedTask);
+            }
         }
 
         internal void Fire()
         {
-            if (IsDisposed || Interlocked.Exchange(ref _fired, 1) != 0)
+            TaskCompletionSource active;
+            bool oneShot;
+            lock (owner._gate)
             {
-                return;
+                if (!IsDue(owner._now))
+                {
+                    return;
+                }
+
+                oneShot = IsOneShot;
+                _dueAt = _period > TimeSpan.Zero ? owner._now + _period : null;
+                active = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _activeCallback = active;
             }
 
             try
             {
                 callback(state);
-                if (owner.BlockTimerCallbackAfterInvocation)
+                if (oneShot && owner.BlockTimerCallbackAfterInvocation)
                 {
                     owner._timerCallbackInvoked.TrySetResult();
                     owner._timerCallbackRelease.Wait();
@@ -301,7 +350,11 @@ internal sealed class CancellationTestClock : TimeProvider
             }
             finally
             {
-                _callbackSettled.TrySetResult();
+                lock (owner._gate)
+                {
+                    _activeCallback = null;
+                    active.TrySetResult();
+                }
             }
         }
     }
@@ -344,6 +397,7 @@ internal sealed class SessionTestProcess : IChildProcess
 
     public Task<int> WaitForExitAsync() => _exit.Task;
 
+    public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
     public ChildProcessExitState GetExitState()
         => Volatile.Read(ref _exitState) == 0
             ? ChildProcessExitState.Alive

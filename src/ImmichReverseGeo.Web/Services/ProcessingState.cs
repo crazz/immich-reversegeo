@@ -34,6 +34,19 @@ public class ProcessingState : IDisposable, IAsyncDisposable
 
     internal NotificationCadenceObservation? NotificationObservation => _notificationCadence?.Observation;
 
+    internal ReadModelNotificationCadence.OwnerObservation? CaptureNotificationOwner()
+    {
+        lock (_notificationGate)
+        {
+            return _notificationCadence?.CaptureOwner(_notificationOwner);
+        }
+    }
+
+    internal void CompleteNotificationOwner(ReadModelNotificationCadence.OwnerObservation? observation)
+    {
+        _notificationCadence?.CompleteOwner(observation);
+    }
+
     private volatile bool _isRunning;
     private long _totalUnprocessed;
     private readonly object _stateLock = new();

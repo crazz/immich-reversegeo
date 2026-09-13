@@ -1,4 +1,6 @@
 using System.Collections.Concurrent;
+using ImmichReverseGeo.Tests.LifecycleTelemetry;
+using Role = ImmichReverseGeo.Core.ApplicationRole.ApplicationRole;
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
@@ -23,6 +25,7 @@ public sealed class RunOnceLifecycleTests
     [TestMethod]
     public async Task RealExecutorAndPostgresqlGate_NoWorkRunsOnceInExactOrderAndSelfStopRemainsCompleted()
     {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
         var ledger = new ConcurrentQueue<string>();
         var session = new RecordingRunLockSession
@@ -69,7 +72,7 @@ public sealed class RunOnceLifecycleTests
         var initializer = new CompletedInitializer();
         IHost host = BuildHost(outcomes, initializer, _ => executor, _ => reporter);
 
-        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes).WaitAsync(Bound);
+        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry).WaitAsync(Bound);
 
         Assert.AreEqual(WorkerProcessExitCodes.Completed, exitCode);
         Assert.AreEqual("completed", outcomes.Fact.Diagnostic.Token);
@@ -91,18 +94,20 @@ public sealed class RunOnceLifecycleTests
         Assert.IsInstanceOfType<RunFinished>(events[2]);
         Assert.IsTrue(events.All(x => ReferenceEquals(started.Request, x.Request)));
         AssertOrdered(ledger, "RunStarted", "lock-open", "lock-acquire", "count", "EligibilityDetermined", "RunFinished", "lock-release");
+        capture.AssertCompleted("completed", "completed");
     }
 
     [TestMethod]
     public async Task HostStoppingBeforeExecutorEntryProducesNoRequestOrTerminal()
     {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
         var initializer = new GatedInitializer();
         var executor = new RecordingExecutor(ProcessingRunOutcome.Completed);
         var reporter = new LedgerReporter(new ConcurrentQueue<string>());
         IHost host = BuildHost(outcomes, initializer, _ => executor, _ => reporter);
         IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-        Task<int> run = RunOnceApplication.RunHostAsync(host, outcomes);
+        Task<int> run = RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry);
 
         try
         {
@@ -119,6 +124,7 @@ public sealed class RunOnceLifecycleTests
         Assert.AreEqual(0, executor.Calls);
         Assert.AreEqual(0, reporter.Events.Count);
         Assert.AreEqual("cancelled", outcomes.Fact.Diagnostic.Token);
+        capture.AssertCompleted("host-shutdown", "cancelled", ready: false);
     }
 
     [TestMethod]
@@ -148,6 +154,7 @@ public sealed class RunOnceLifecycleTests
     [TestMethod]
     public async Task BusyTerminalPlusExternalStopAndRealScopeProviderCleanupFailuresEndsInfrastructureWithoutRetry()
     {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
         var lockSession = new RecordingRunLockSession
         {
@@ -176,7 +183,7 @@ public sealed class RunOnceLifecycleTests
         var reporter = new GatedTerminalReporter();
         IHost host = BuildHost(outcomes, initializer, _ => scopedExecutor, _ => reporter);
         IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-        Task<int> run = RunOnceApplication.RunHostAsync(host, outcomes);
+        Task<int> run = RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry);
 
         try
         {
@@ -203,18 +210,20 @@ public sealed class RunOnceLifecycleTests
         Assert.AreEqual("Another Immich ReverseGeo worker is already processing this database.", terminal.Result.FailureMessage);
         Assert.AreEqual(1, reporter.Events.Count(x => x is RunStarted));
         Assert.AreEqual(1, reporter.Events.Count(x => x is RunFinished));
+        capture.AssertCompleted("host-shutdown", "failed");
     }
 
     [TestMethod]
     public async Task ExternalStopDuringGatedScopeFinalizationOverridesCompletedWithoutChangingTerminal()
     {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
         var inner = new RecordingExecutor(ProcessingRunOutcome.Completed);
         var executor = new GatedDisposalExecutor(inner);
         var reporter = new LedgerReporter(new ConcurrentQueue<string>());
         IHost host = BuildHost(outcomes, new CompletedInitializer(), _ => executor, _ => reporter);
         IHostApplicationLifetime lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-        Task<int> run = RunOnceApplication.RunHostAsync(host, outcomes);
+        Task<int> run = RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry);
 
         try
         {
@@ -233,11 +242,13 @@ public sealed class RunOnceLifecycleTests
         RunFinished terminal = reporter.Events.OfType<RunFinished>().Single();
         Assert.AreEqual(ProcessingRunOutcome.Completed, terminal.Result.Outcome);
         Assert.AreEqual("cancelled", outcomes.Fact.Diagnostic.Token);
+        capture.AssertCompleted("completed", "cancelled");
     }
 
     [TestMethod]
     public async Task PartialHostStartFailureStillStopsStartedServiceAndDisposesProvider()
     {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
         var started = new RecordingHostedService();
         var failing = new FailingStartHostedService();
@@ -248,7 +259,7 @@ public sealed class RunOnceLifecycleTests
         builder.Services.AddSingleton<IHostedService>(_ => failing);
         IHost host = builder.Build();
 
-        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes).WaitAsync(Bound);
+        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry).WaitAsync(Bound);
 
         Assert.AreEqual(WorkerProcessExitCodes.InfrastructureFailure, exitCode);
         Assert.AreEqual(1, started.StartCalls);
@@ -256,6 +267,7 @@ public sealed class RunOnceLifecycleTests
         Assert.AreEqual(1, started.DisposeCalls);
         Assert.AreEqual(1, failing.StartCalls);
         Assert.AreEqual(1, failing.DisposeCalls);
+        capture.AssertCompleted("startup-failure", "failed", ready: false);
     }
 
     [TestMethod]
@@ -265,12 +277,13 @@ public sealed class RunOnceLifecycleTests
         ProcessingRunOutcome outcome,
         int expectedExit)
     {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
         var executor = new RecordingExecutor(outcome);
         var reporter = new LedgerReporter(new ConcurrentQueue<string>());
         IHost host = BuildHost(outcomes, new CompletedInitializer(), _ => executor, _ => reporter);
 
-        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes).WaitAsync(Bound);
+        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry).WaitAsync(Bound);
 
         Assert.AreEqual(expectedExit, exitCode);
         Assert.AreEqual(1, executor.Calls);
@@ -279,21 +292,50 @@ public sealed class RunOnceLifecycleTests
         Assert.AreEqual(ProcessingRunTrigger.RunOnce, executor.Request.Trigger);
         Assert.AreEqual(1, reporter.Events.Count(x => x is RunStarted));
         Assert.AreEqual(1, reporter.Events.Count(x => x is RunFinished));
+        capture.AssertCompleted(outcome == ProcessingRunOutcome.Completed ? "completed" : "fatal-failure", outcome == ProcessingRunOutcome.Completed ? "completed" : "failed");
     }
 
     [TestMethod]
     public async Task InitializerFailureIsInfrastructureAndCreatesNoRequest()
     {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
         var outcomes = new WorkerProcessExitOutcomeAccumulator();
         var executor = new RecordingExecutor(ProcessingRunOutcome.Completed);
         var reporter = new LedgerReporter(new ConcurrentQueue<string>());
         IHost host = BuildHost(outcomes, new FailingInitializer(), _ => executor, _ => reporter);
 
-        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes).WaitAsync(Bound);
+        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry).WaitAsync(Bound);
 
         Assert.AreEqual(WorkerProcessExitCodes.InfrastructureFailure, exitCode);
         Assert.AreEqual(0, executor.Calls);
         Assert.AreEqual(0, reporter.Events.Count);
+        capture.AssertCompleted("startup-failure", "failed", ready: false);
+    }
+
+    [TestMethod]
+    [TestCategory("Change66")]
+    [DataRow(true, false)]
+    [DataRow(false, true)]
+    [DataRow(true, true)]
+    public async Task CompletedRunWithLateCleanupFailureKeepsInitialStopAndFinalFailure(bool scopeFails, bool providerFails)
+    {
+        using var capture = new RoleLogCapture(Role.RunOnce, DeploymentMode.RunOnce);
+        var outcomes = new WorkerProcessExitOutcomeAccumulator();
+        var executor = new RecordingExecutor(ProcessingRunOutcome.Completed);
+        var scoped = new ThrowingScopedExecutor(executor);
+        var provider = new ThrowingProviderInitializer();
+        IHost host = BuildHost(outcomes,
+            providerFails ? provider : new CompletedInitializer(),
+            _ => scopeFails ? scoped : executor,
+            _ => new LedgerReporter(new ConcurrentQueue<string>()));
+
+        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes, capture.Telemetry).WaitAsync(Bound);
+
+        Assert.AreEqual(WorkerProcessExitCodes.InfrastructureFailure, exitCode);
+        Assert.AreEqual(1, executor.Calls);
+        Assert.AreEqual(scopeFails ? 1 : 0, scoped.DisposeCalls);
+        Assert.AreEqual(providerFails ? 1 : 0, provider.DisposeCalls);
+        capture.AssertCompleted("completed", "failed");
     }
 
     private static IHost BuildHost(

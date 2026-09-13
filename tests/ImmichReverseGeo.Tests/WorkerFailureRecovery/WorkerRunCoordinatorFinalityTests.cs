@@ -190,7 +190,7 @@ public sealed class WorkerRunCoordinatorFinalityTests
             clock,
             evidenceGate);
         Assert.IsTrue(coordinator.TryClaimChildExecution(request, finalizer));
-        long readyTimerGeneration = clock.TimerGeneration;
+        int readyTimerCount = clock.OneShotTimerCount;
         SessionFixture fixture = await CreateSessionAsync(
             request,
             reporter,
@@ -205,7 +205,7 @@ public sealed class WorkerRunCoordinatorFinalityTests
             finalizer));
         Task forwarding = ForwardFinalizerAsync(finalizer, invocation);
 
-        await clock.WaitForTimerCreatedAsync(readyTimerGeneration)
+        await clock.WaitForOneShotTimerCreatedAsync(readyTimerCount)
             .WaitAsync(TestTimeout);
         long containmentTimerGeneration = clock.TimerGeneration;
         clock.Advance(TimeSpan.FromSeconds(1));
@@ -1136,6 +1136,7 @@ public sealed class WorkerRunCoordinatorFinalityTests
         public Stream StandardOutput => Inner.StandardOutput;
         public Stream StandardError => Inner.StandardError;
         public Task<int> WaitForExitAsync() => Inner.WaitForExitAsync();
+        public ChildWorkingSetObservation ReadWorkingSet() => Inner.ReadWorkingSet();
         public ChildProcessExitState GetExitState() => Inner.GetExitState();
         public ChildProcessKillOutcome KillProcessTree() => Inner.KillProcessTree();
         public ValueTask DisposeAsync() => Inner.DisposeAsync();

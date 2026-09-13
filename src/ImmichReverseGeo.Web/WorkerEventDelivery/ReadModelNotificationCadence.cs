@@ -14,6 +14,7 @@ internal sealed class ReadModelNotificationCadence : IDisposable, IAsyncDisposab
     private readonly Func<object, long, ValueTask> _dispatch;
     private ITimer? _timer;
     private object? _owner;
+    private OwnerObservation? _ownerObservation;
     private long _revision;
     private long _finalRevision = -1;
     private long? _lastOrdinaryDispatch;
@@ -67,12 +68,33 @@ internal sealed class ReadModelNotificationCadence : IDisposable, IAsyncDisposab
                 return;
             }
 
+            _ownerObservation?.Freeze();
+            _ownerObservation = new OwnerObservation();
             _owner = owner;
             _revision = 0;
             _finalRevision = -1;
             _dirty = null;
             _pending = null;
             CancelTimerUnderGate();
+        }
+    }
+
+    internal OwnerObservation? CaptureOwner(object owner)
+    {
+        lock (_gate)
+        {
+            return ReferenceEquals(_owner, owner) ? _ownerObservation : null;
+        }
+    }
+
+    internal void CompleteOwner(OwnerObservation? observation)
+    {
+        lock (_gate)
+        {
+            if (ReferenceEquals(observation, _ownerObservation))
+            {
+                observation?.Freeze();
+            }
         }
     }
 
@@ -122,6 +144,7 @@ internal sealed class ReadModelNotificationCadence : IDisposable, IAsyncDisposab
             }
 
             _disposed = true;
+            _ownerObservation?.Freeze();
             _owner = null;
             _dirty = null;
             _pending = null;
@@ -231,6 +254,7 @@ internal sealed class ReadModelNotificationCadence : IDisposable, IAsyncDisposab
                 {
                     _lastOrdinaryDispatch = _time.GetTimestamp();
                     _ordinary++;
+                    _ownerObservation?.CountOrdinaryDispatch();
                 }
             }
 
@@ -270,6 +294,26 @@ internal sealed class ReadModelNotificationCadence : IDisposable, IAsyncDisposab
     }
 
     private sealed record Dispatch(object Owner, long Revision, bool Final);
+
+    // Updated and frozen only by this cadence owner under its existing gate.
+    // A retained handle never redirects to a subsequent job's observation.
+    internal sealed class OwnerObservation
+    {
+        private readonly TaskCompletionSource<long> _final = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private long _ordinary;
+        internal long OrdinaryDispatched => Interlocked.Read(ref _ordinary);
+        internal Task<long> FinalOrdinaryDispatched => _final.Task;
+
+        internal void CountOrdinaryDispatch()
+        {
+            if (!_final.Task.IsCompleted && _ordinary < long.MaxValue)
+            {
+                _ordinary++;
+            }
+        }
+
+        internal void Freeze() => _final.TrySetResult(_ordinary);
+    }
 }
 
 internal sealed record NotificationCadenceObservation(

@@ -6,6 +6,7 @@ using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.WorkerEventDelivery;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
 using AcceptedDelivery = ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -69,6 +70,8 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     private const string TerminalPreventingObservationTimestampFailureDiagnostic =
         "The terminal-preventing observation timestamp was unavailable.";
     private readonly IChildProcess _process;
+    private readonly ChildWorkingSetSampler _workingSetSampler;
+    private ChildWorkingSetSummary _workingSetObservation = ChildWorkingSetSummary.NoSample;
     private readonly Stream _standardInputStream;
     private readonly Stream _standardOutputStream;
     private readonly Stream _standardErrorStream;
@@ -116,7 +119,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         ChildWorkerLauncherOptions options,
         Task observerActivation,
         ChildWorkerObserverArmingAcknowledgements observerArming,
-        InternalWorkerProtocolVersion protocolVersion)
+        InternalWorkerProtocolVersion protocolVersion,
+        WorkerJobTelemetry? telemetry,
+        long? processTimestamp)
     {
         _process = process ?? throw new ArgumentNullException(nameof(process));
         ArgumentNullException.ThrowIfNull(dispatch);
@@ -157,16 +162,27 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
 
         ChildProcessResources resources = CaptureProcessResources(process);
         ProcessId = resources.ProcessId;
+        Telemetry = telemetry;
+        telemetry?.ProcessOwned(ProcessId, processTimestamp);
         _standardInputStream = resources.StandardInput;
         _standardOutputStream = resources.StandardOutput;
         _standardErrorStream = resources.StandardError;
         JobId = dispatch.Context.JobId;
         JobKind = dispatch.Context.JobKind;
+        _workingSetSampler = new ChildWorkingSetSampler(process, _timeProvider);
 
         bool deliverySetupFailed = false;
         var acceptedSink = eventSink is ProcessAssetsWorkerJobEventSink processingSink
             ? processingSink.AcceptedDeliverySink
             : eventSink as IAcceptedWorkerEventSink;
+        try
+        {
+            telemetry?.BindNotificationObservation(acceptedSink?.NotificationOwnerObservation);
+        }
+        catch
+        {
+            // Optional observation cannot interrupt ownership after process start.
+        }
         var deliveryPolicy = options.EventDeliveryPolicy
             ?? (WorkerEventDeliveryPolicy.ProductionEnabled ? new WorkerEventDeliveryPolicy() : null);
         if (acceptedSink is not null && deliveryPolicy is not null)
@@ -362,7 +378,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         IWorkerJobEventSink eventSink,
         ChildWorkerLauncherOptions options,
         ChildWorkerObserverArmingAcknowledgements observerArming,
-        InternalWorkerProtocolVersion protocolVersion)
+        InternalWorkerProtocolVersion protocolVersion,
+        WorkerJobTelemetry? telemetry = null,
+        long? processTimestamp = null)
     {
         ArgumentNullException.ThrowIfNull(observerArming);
         var observerActivation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -373,7 +391,9 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             options,
             observerActivation.Task,
             observerArming,
-            protocolVersion);
+            protocolVersion,
+            telemetry,
+            processTimestamp);
 
         observerActivation.SetResult();
         await observerArming.All.ConfigureAwait(false);
@@ -381,9 +401,12 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
     }
 
     internal int ProcessId { get; }
+    internal WorkerJobTelemetry? Telemetry { get; }
     internal Guid JobId { get; }
     internal Guid RunId => JobId;
     internal WorkerJobKind JobKind { get; }
+    // Read only after Settlement, which joins the sampler before releasing the process.
+    internal ChildWorkingSetSummary WorkingSetObservation => _workingSetObservation;
     internal bool IsCancellable => _isCancellable;
     internal InternalWorkerProtocolVersion ProtocolVersion => _protocolVersion;
     internal WorkerEventDeliveryObservation? EventDeliveryObservation => _eventDelivery?.Observation;
@@ -574,9 +597,11 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                         validator,
                         out WorkerJobOutputMessage? jobEvent,
                         out WorkerProtocolEvent? @event,
-                        out WorkerProtocolFailure? failure))
+                        out WorkerProtocolFailure? failure,
+                        out long? parsedSequence,
+                        out WorkerProtocolLogPhase? parsedPhase))
                 {
-                    RecordProtocolFailure(failure!);
+                    RecordProtocolFailure(failure!, parsedSequence, parsedPhase);
                     reader.StopParsing();
                     continue;
                 }
@@ -613,8 +638,15 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
                     }
                 }
 
+                if (_eventDelivery is null && isTerminal
+                    && jobEvent.Payload is WorkerJobTerminalPayload terminal)
+                {
+                    Telemetry?.TerminalAccepted(terminal.Outcome, jobEvent.Sequence);
+                }
+
                 if (jobEvent.Type == WorkerJobProtocolV2.ReadyType && TryReserveReady())
                 {
+                    Telemetry?.ReadyAccepted();
                     await ExecuteOnceAsync().ConfigureAwait(false);
                 }
             }
@@ -791,6 +823,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         try
         {
             await sink.AcceptDeliveryAsync(delivery, cancellationToken).ConfigureAwait(false);
+            if (delivery.Input.Message.Payload is WorkerJobTerminalPayload terminal)
+            {
+                Telemetry?.TerminalAccepted(terminal.Outcome, delivery.Input.Message.Sequence);
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -923,12 +959,25 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         }
     }
 
-    private void RecordProtocolFailure(WorkerProtocolFailure failure)
+    private void RecordProtocolFailure(WorkerProtocolFailure failure,
+        long? sequence = null, WorkerProtocolLogPhase? parsedPhase = null)
     {
+        bool retained;
+        WorkerProtocolLogPhase phase;
         lock (_observationGate)
         {
+            retained = _firstProtocolObservation is null;
             _firstProtocolObservation ??=
                 new ChildWorkerProtocolObservation.ProtocolFailure(failure);
+            phase = _jobTerminal is not null ? WorkerProtocolLogPhase.Drain
+                : parsedPhase ?? (failure.Detail is WorkerProtocolFailureDetail.TerminalConsistency
+                    or WorkerProtocolFailureDetail.MissingTerminal ? WorkerProtocolLogPhase.Terminal
+                    : _startupAuthority == 1 ? WorkerProtocolLogPhase.Events : WorkerProtocolLogPhase.Ready);
+        }
+
+        if (retained)
+        {
+            Telemetry?.ProtocolFailed(failure.Code, phase, sequence);
         }
 
         TryCommitPreReady(new ChildWorkerStartupObservation.ProtocolFailure(failure));
@@ -970,11 +1019,15 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
         WorkerProtocolEventStreamValidator validator,
         out WorkerJobOutputMessage? jobEvent,
         out WorkerProtocolEvent? projectedEvent,
-        out WorkerProtocolFailure? failure)
+        out WorkerProtocolFailure? failure,
+        out long? parsedSequence,
+        out WorkerProtocolLogPhase? parsedPhase)
     {
         jobEvent = null;
         projectedEvent = null;
         failure = null;
+        parsedSequence = null;
+        parsedPhase = null;
         if (_protocolVersion == InternalWorkerProtocolVersion.V1)
         {
             WorkerProtocolParseResult parsed = WorkerProtocolCodec.Parse(frame);
@@ -985,6 +1038,10 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             }
 
             WorkerProtocolEvent @event = parsed.Event!;
+            parsedSequence = @event.Sequence;
+            parsedPhase = @event.Type == WorkerProtocolV1.ReadyType ? WorkerProtocolLogPhase.Ready
+                : WorkerProtocolV1.IsTerminal(@event.Type) ? WorkerProtocolLogPhase.Terminal
+                : WorkerProtocolLogPhase.Events;
             if ((@event.Type == WorkerProtocolV1.ReadyType && @event.RunId is not null)
                 || (@event.Type != WorkerProtocolV1.ReadyType && @event.RunId != RunId))
             {
@@ -1023,8 +1080,12 @@ internal sealed partial class ChildWorkerSession : IAsyncDisposable
             return false;
         }
 
+        parsedSequence = jobParsed.Message!.Sequence;
+        parsedPhase = jobParsed.Message.Type == WorkerJobProtocolV2.ReadyType ? WorkerProtocolLogPhase.Ready
+            : jobParsed.Message.Type == WorkerJobProtocolV2.TerminalType ? WorkerProtocolLogPhase.Terminal
+            : WorkerProtocolLogPhase.Events;
         WorkerJobOutputValidationResult jobValidated =
-            _jobOutputValidator!.Validate(jobParsed.Message!);
+            _jobOutputValidator!.Validate(jobParsed.Message);
         if (!jobValidated.IsSuccess)
         {
             failure = jobValidated.Failure;

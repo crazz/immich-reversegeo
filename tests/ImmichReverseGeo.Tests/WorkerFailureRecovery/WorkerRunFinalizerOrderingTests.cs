@@ -4,9 +4,12 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Tests.ChildWorkerCancellation;
+using ImmichReverseGeo.Tests.LifecycleTelemetry;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerFailureRecovery;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -19,6 +22,37 @@ namespace ImmichReverseGeo.Tests.WorkerFailureRecovery;
 public sealed class WorkerRunFinalizerOrderingTests
 {
     private static readonly TimeSpan Watchdog = TimeSpan.FromSeconds(15);
+
+    [TestMethod]
+    [TestCategory("Change66")]
+    [DataRow(false, "infrastructure-failed")]
+    [DataRow(true, "protocol-failed")]
+    public async Task CleanupFailure_LogsFinalClassifierFactsWithoutRewritingTheCommittedResult(
+        bool protocolFailed, string expected)
+    {
+        await using var harness = await Harness.CreateAsync(failCleanup: true);
+        harness.Emit(WorkerProtocolV1TestData.Ready());
+        harness.Emit(WorkerProtocolV1TestData.Started());
+        await harness.Sink.Started.Task.WaitAsync(Watchdog);
+        if (protocolFailed)
+        {
+            harness.Process.Inner.StandardOutputSource.Enqueue(System.Text.Encoding.UTF8.GetBytes("secret-token-invalid-frame\n"));
+        }
+
+        harness.Process.Inner.Exit(0);
+        harness.Process.ErrorGate.Release.TrySetResult();
+        var result = await harness.Finalizer.Completion.WaitAsync(Watchdog);
+        var final = harness.Logs.Entries.Single(entry => entry.Event.Id == 6641);
+        Assert.AreEqual(expected, final["process_classification"]);
+        Assert.IsNull(final["terminal_outcome"]);
+        Assert.AreEqual(0, harness.Logs.Entries.Count(entry => entry.Event.Id == 6640));
+        Assert.AreSame(harness.Reporter.GetFinalizationReceipt(harness.Request)!.Result, result);
+        Assert.AreEqual(ProcessingRunOutcome.Failed, result.Outcome);
+        Assert.IsTrue(harness.Finalizer.Decision!.Anomalies.HasFlag(WorkerRunAnomaly.CleanupFailure));
+        Assert.AreEqual(1, harness.Process.Inner.DisposeCalls);
+        Assert.IsFalse(final.Rendered.Contains("secret-token", StringComparison.Ordinal));
+        Assert.IsNull(final.Exception);
+    }
 
     [TestMethod]
     public async Task MissingTerminal_WaitsForBothPumps_AndCommitsBeforeResourceDisposal()
@@ -120,11 +154,13 @@ public sealed class WorkerRunFinalizerOrderingTests
         internal ChildWorkerSession Session { get; private set; } = null!;
         internal ObservedSink Sink { get; private set; } = null!;
         internal GatedProcess Process { get; } = new();
+        internal RecordingLifecycleLogs Logs { get; } = new();
         private ChildWorkerEvidenceFinalityGate EvidenceGate { get; } = new();
 
-        internal static async Task<Harness> CreateAsync(bool splitExit = false)
+        internal static async Task<Harness> CreateAsync(bool splitExit = false, bool failCleanup = false)
         {
             var harness = new Harness();
+            harness.Process.FailCleanup = failCleanup;
             if (splitExit)
             {
                 harness.Process.ExitSignal = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -136,9 +172,12 @@ public sealed class WorkerRunFinalizerOrderingTests
             var bridge = new WorkerStateBridge(harness.Request, harness.Reporter);
             harness.Sink = new ObservedSink(bridge);
             harness.Finalizer = new WorkerRunFinalizer(harness.Request, harness.Reporter, clock, harness.EvidenceGate);
-            harness.Session = await ChildWorkerSession.CreateAsync(harness.Process, harness.Request, harness.Sink,
+            var dispatch = new ProcessAssetsWorkerJobDispatch(harness.Request);
+            var telemetry = new WorkerJobTelemetry(harness.Logs.CreateLogger(LifecycleEventCatalog.Category), clock, dispatch.Context);
+            harness.Session = await ChildWorkerSession.CreateAsync(harness.Process, dispatch,
+                new ProcessAssetsWorkerJobEventSink(harness.Request, harness.Sink),
                 new ChildWorkerLauncherOptions { TimeProvider = clock, ReadyTimeout = Timeout.InfiniteTimeSpan, EvidenceFinalityGate = harness.EvidenceGate },
-                new ChildWorkerObserverArmingAcknowledgements());
+                new ChildWorkerObserverArmingAcknowledgements(), InternalWorkerProtocolVersion.V1, telemetry, clock.GetTimestamp());
             _ = harness.Finalizer.Start(harness.Session, bridge,
                 observation => harness.Session.RequestTermination(new ChildWorkerTerminationRequest(
                     observation.ObservedAt, ChildWorkerTerminationIntent.FaultContainment, observation.Reason)), () => false);
@@ -153,7 +192,15 @@ public sealed class WorkerRunFinalizerOrderingTests
             Process.Inner.Exit(0);
             Process.ErrorGate.Release.TrySetResult();
             EvidenceGate.Release();
-            await Session.DisposeAsync().AsTask().WaitAsync(Watchdog);
+            try
+            {
+                await Session.DisposeAsync().AsTask().WaitAsync(Watchdog);
+            }
+            catch (IOException) when (Process.FailCleanup)
+            {
+                // The finalizer already observed the deliberately failing disposal.
+            }
+            Logs.Dispose();
         }
     }
 
@@ -187,15 +234,24 @@ public sealed class WorkerRunFinalizerOrderingTests
         internal SessionTestProcess Inner { get; } = new(new SessionInputStream(), ChildProcessKillOutcome.Requested, true);
         internal GatedReadStream ErrorGate { get; }
         internal TaskCompletionSource<int>? ExitSignal { get; set; }
+        internal bool FailCleanup { get; set; }
         internal GatedProcess() => ErrorGate = new GatedReadStream(Inner.StandardError);
         public int ProcessId => Inner.ProcessId;
         public Stream StandardInput => Inner.StandardInput;
         public Stream StandardOutput => Inner.StandardOutput;
         public Stream StandardError => ErrorGate;
         public Task<int> WaitForExitAsync() => ExitSignal?.Task ?? Inner.WaitForExitAsync();
+        public ChildWorkingSetObservation ReadWorkingSet() => Inner.ReadWorkingSet();
         public ChildProcessExitState GetExitState() => ExitSignal?.Task.IsCompleted == true ? ChildProcessExitState.Exited : Inner.GetExitState();
         public ChildProcessKillOutcome KillProcessTree() => Inner.KillProcessTree();
-        public ValueTask DisposeAsync() => Inner.DisposeAsync();
+        public async ValueTask DisposeAsync()
+        {
+            await Inner.DisposeAsync();
+            if (FailCleanup)
+            {
+                throw new IOException("secret-token-cleanup");
+            }
+        }
     }
 
     private sealed class GatedReadStream(Stream inner) : Stream

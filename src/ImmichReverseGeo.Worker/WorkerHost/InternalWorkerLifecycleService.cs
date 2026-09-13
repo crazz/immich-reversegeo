@@ -6,6 +6,7 @@ using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -20,6 +21,9 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
     private readonly ILogger<InternalWorkerLifecycleService> _logger;
     private readonly WorkerProcessExitOutcomeAccumulator _outcomes;
     private readonly InternalWorkerProtocolVersion _protocolVersion;
+    private RoleProcessTelemetry? _roleTelemetry;
+
+    internal void ObserveRole(RoleProcessTelemetry? telemetry) => _roleTelemetry = telemetry;
 
     public InternalWorkerLifecycleService(
         IServiceScopeFactory scopeFactory,
@@ -68,6 +72,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
         }
         finally
         {
+            _roleTelemetry?.Stopping(_outcomes.Fact, firstFatal is not null);
             try
             {
                 if (scopeDisposal is not null)
@@ -147,6 +152,7 @@ internal sealed class InternalWorkerLifecycleService : BackgroundService
             phase = PreRequestPhase.Readiness;
             var readiness = services.GetRequiredService<IWorkerReadinessPublisher>();
             await readiness.PublishAsync(stoppingToken);
+            _roleTelemetry?.Ready();
 
             phase = PreRequestPhase.Acquisition;
             var acquirer = services.GetRequiredService<IInitialProcessingRunAcquirer>();

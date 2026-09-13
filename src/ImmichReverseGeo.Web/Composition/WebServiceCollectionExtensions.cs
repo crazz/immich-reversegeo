@@ -145,7 +145,9 @@ internal static class WebServiceCollectionExtensions
         }
         services.AddSingleton<SystemChildProcessFactory>();
         services.AddSingleton<IChildProcessFactory>(sp => sp.GetRequiredService<SystemChildProcessFactory>());
-        services.AddSingleton(sp => new ChildWorkerLauncher(sp.GetRequiredService<IChildProcessFactory>()));
+        services.AddSingleton(sp => new ChildWorkerLauncher(sp.GetRequiredService<IChildProcessFactory>(),
+            sp.GetRequiredService<Microsoft.Extensions.Logging.ILoggerFactory>()
+                .CreateLogger(ImmichReverseGeo.Web.LifecycleTelemetry.LifecycleEventCatalog.Category)));
         services.AddSingleton<IChildWorkerLauncher>(sp => sp.GetRequiredService<ChildWorkerLauncher>());
         services.AddSingleton<WorkerCommandAmbientRuntimeObservationSource>();
         services.AddSingleton<IWorkerCommandRuntimeObservationSource>(sp => sp.GetRequiredService<WorkerCommandAmbientRuntimeObservationSource>());

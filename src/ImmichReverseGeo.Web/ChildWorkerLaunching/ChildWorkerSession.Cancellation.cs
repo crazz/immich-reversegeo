@@ -5,6 +5,7 @@ using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
 
 namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
 
@@ -29,6 +30,7 @@ internal sealed partial class ChildWorkerSession
     private Task? _inputCloseTask;
     private Task? _resourceDisposalTask;
     private bool _processExitConfirmed;
+    private long? _physicalExitTimestamp;
     private bool _escalationDecisionInProgress;
     private int _inputClosed;
 
@@ -79,6 +81,8 @@ internal sealed partial class ChildWorkerSession
 
         Task<ChildWorkerCancellationResult> result;
         var closeInputForContainment = false;
+        var firstRequest = false;
+        var cancellationPhase = WorkerCancellationPhase.Starting;
         lock (_cancellationGate)
         {
             if (_stopTask is not null)
@@ -94,6 +98,12 @@ internal sealed partial class ChildWorkerSession
             }
             else
             {
+                firstRequest = true;
+                cancellationPhase = _processExitConfirmed || Volatile.Read(ref _jobTerminal) is not null
+                    ? WorkerCancellationPhase.Finalizing
+                    : Volatile.Read(ref _acceptedRunStarted) ? WorkerCancellationPhase.Running
+                    : Volatile.Read(ref _startupAuthority) == 1 ? WorkerCancellationPhase.Ready
+                    : WorkerCancellationPhase.Starting;
                 _cancellationState = new CancellationState(
                     request.Deadline.FirstStopAtUtc,
                     request.Deadline.FirstStopAtUtc
@@ -129,6 +139,11 @@ internal sealed partial class ChildWorkerSession
             }
         }
 
+        if (firstRequest)
+        {
+            Telemetry?.ObserveCancellation(request, cancellationPhase, result, GetPhysicalExitTimestamp);
+        }
+
         if (closeInputForContainment)
         {
             // A write/flush fault does not prove that the worker rejected execute.
@@ -138,6 +153,14 @@ internal sealed partial class ChildWorkerSession
         }
 
         return result;
+    }
+
+    private long? GetPhysicalExitTimestamp()
+    {
+        lock (_cancellationGate)
+        {
+            return _physicalExitTimestamp;
+        }
     }
 
     internal Task<ChildWorkerCancellationResult> WaitForStopAsync(
@@ -563,6 +586,7 @@ internal sealed partial class ChildWorkerSession
         }
 
         ChildProcessKillOutcome outcome;
+        Telemetry?.EscalationAttempted();
         try
         {
             outcome = _process.KillProcessTree();
@@ -617,6 +641,7 @@ internal sealed partial class ChildWorkerSession
                 return;
             }
 
+            _physicalExitTimestamp = LifecycleElapsed.Timestamp(_timeProvider);
             _processExitConfirmed = true;
             publishConfirmedExit = !_escalationDecisionInProgress;
         }
@@ -698,6 +723,7 @@ internal sealed partial class ChildWorkerSession
 
         try
         {
+            _workingSetObservation = await _workingSetSampler.CompleteAsync().ConfigureAwait(false);
             await DisposeStreamAsync(_standardOutputStream).ConfigureAwait(false);
             await DisposeStreamAsync(_standardErrorStream).ConfigureAwait(false);
             await _process.DisposeAsync().ConfigureAwait(false);

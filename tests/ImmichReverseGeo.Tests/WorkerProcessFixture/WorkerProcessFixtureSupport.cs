@@ -7,6 +7,8 @@ using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProtocol;
 using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace ImmichReverseGeo.Tests.WorkerProcessFixture;
 
@@ -46,6 +48,8 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     internal ChildProcessKillOutcome? TreeKillOutcomeOverride { get; init; }
     internal Task<ChildProcessKillOutcome> TreeKillObserved => _treeKillObserved.Task;
     internal ChildWorkerLauncherOptions LauncherOptions { get; init; } = ChildWorkerLauncherOptions.Default;
+    internal ILogger LifecycleLogger { get; init; } = NullLogger.Instance;
+    internal ChildWorkingSetUnavailable? WorkingSetUnavailableOverride { get; init; }
 
     internal WorkerProcessFixtureLease(FixtureCleanupPhase? injectedFailure = null)
     {
@@ -69,6 +73,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
     internal bool IsRegistered => Registry.ContainsKey(_registration);
     internal bool HasExited => _exitTask?.IsCompletedSuccessfully == true;
     internal Stream StandardInput => _process!.StandardInput;
+    internal ChildWorkingSetObservation ReadOwnedWorkingSet() => _process!.ReadWorkingSet();
 
     internal ValueTask BreakStandardOutputReaderForTestAsync() =>
         _process!.StandardOutput.DisposeAsync();
@@ -143,7 +148,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         _expectedJobId = Request.RunId;
         _expectedJobKind = WorkerJobKind.ProcessAssets;
         var descriptor = Descriptor(Arguments(scenario, capture, options), protocolVersion);
-        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
+        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this), LifecycleLogger);
         var result = await launcher.LaunchDescriptorAsync(descriptor, Request, sink,
             LauncherOptions, CancellationToken.None, protocolVersion).AsTask().WaitAsync(Watchdog);
         Session = Assert.IsInstanceOfType<ChildWorkerLaunchResult.Started>(result).Session;
@@ -173,7 +178,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         _expectedJobId = dispatch.Context.JobId;
         _expectedJobKind = dispatch.Context.JobKind;
         var descriptor = Descriptor(Arguments(scenario, capture, options), protocolVersion);
-        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
+        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this), LifecycleLogger);
         var result = await launcher.LaunchDescriptorAsync(
             descriptor,
             dispatch,
@@ -200,7 +205,7 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         var descriptor = Descriptor(
             Arguments(scenario, capture, options),
             InternalWorkerProtocolVersion.V2);
-        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this));
+        var launcher = new ChildWorkerLauncher(new RegisteredFactory(this), LifecycleLogger);
         var result = await launcher.LaunchDescriptorAsync(
             descriptor,
             dispatch,
@@ -629,6 +634,8 @@ internal sealed class WorkerProcessFixtureLease : IAsyncDisposable
         public Stream StandardOutput => _inner.StandardOutput;
         public Stream StandardError => _inner.StandardError;
         public Task<int> WaitForExitAsync() => ExitTask;
+        public ChildWorkingSetObservation ReadWorkingSet() => _owner.WorkingSetUnavailableOverride is { } reason
+            ? ChildWorkingSetObservation.Unavailable(reason) : _inner.ReadWorkingSet();
         public ChildProcessExitState GetExitState() => _inner.GetExitState();
         public ChildProcessKillOutcome KillProcessTree()
         {

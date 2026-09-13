@@ -268,6 +268,7 @@ public sealed class WorkerEventDeliveryBurstTests
                 "--barrier-every", every.ToString(System.Globalization.CultureInfo.InvariantCulture));
 
         public void BindDeliveryScope(WorkerEventDeliveryScope scope) => BridgeCase.Bridge.BindDeliveryScope(scope);
+        public ReadModelNotificationCadence.OwnerObservation? NotificationOwnerObservation => BridgeCase.Bridge.NotificationOwnerObservation;
 
         public ValueTask AcceptAsync(WorkerProtocolEvent @event, CancellationToken cancellationToken) =>
             throw new InvalidOperationException("This fixture requires the actual accepted-delivery session path.");

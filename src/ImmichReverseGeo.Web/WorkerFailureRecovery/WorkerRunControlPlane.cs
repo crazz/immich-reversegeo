@@ -8,6 +8,8 @@ using ImmichReverseGeo.Web.ChildWorkerLaunching;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
 using ImmichReverseGeo.Web.WorkerEventStateBridge;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
+using AcceptedDelivery = ImmichReverseGeo.Web.WorkerEventDelivery.WorkerEventDelivery;
 using WorkerStateBridge = ImmichReverseGeo.Web.WorkerEventStateBridge.WorkerEventStateBridge;
 
 namespace ImmichReverseGeo.Web.WorkerFailureRecovery;
@@ -102,28 +104,54 @@ internal sealed class WorkerRunControlPlane
         return await finalizer.Completion.ConfigureAwait(false);
     }
 
-    private sealed class TrackingSink(WorkerStateBridge bridge, WorkerRunFinalizer finalizer) : IWorkerProtocolEventSink
+    private sealed class TrackingSink(WorkerStateBridge bridge, WorkerRunFinalizer finalizer) : IWorkerProtocolEventSink, IAcceptedWorkerEventSink
     {
+        public ReadModelNotificationCadence.OwnerObservation? NotificationOwnerObservation => bridge.NotificationOwnerObservation;
+        public void BindDeliveryScope(WorkerEventDeliveryScope scope) => bridge.BindDeliveryScope(scope);
+
+        public async ValueTask AcceptDeliveryAsync(AcceptedDelivery delivery, CancellationToken cancellationToken)
+        {
+            try
+            {
+                await bridge.AcceptDeliveryAsync(delivery, cancellationToken).ConfigureAwait(false);
+                TrackAccepted(delivery.Input.CompatibilityEvent!);
+            }
+            finally
+            {
+                TrackReceipt();
+            }
+        }
+
         public async ValueTask AcceptAsync(WorkerProtocolEvent @event, CancellationToken cancellationToken)
         {
             try
             {
                 await bridge.AcceptAsync(@event, cancellationToken).ConfigureAwait(false);
-                if (@event.Type == WorkerProtocolV1.ReadyType)
-                {
-                    finalizer.State.AdvanceTransport(WorkerRunTransportPhase.Ready);
-                }
-                if (WorkerProtocolV1.IsTerminal(@event.Type))
-                {
-                    finalizer.State.AdvanceCommit(WorkerRunCommitPhase.TerminalValidated);
-                }
+                TrackAccepted(@event);
             }
             finally
             {
-                if (bridge.Reporter.GetFinalizationReceipt(bridge.Request) is not null)
-                {
-                    finalizer.State.AdvanceCommit(WorkerRunCommitPhase.Committed);
-                }
+                TrackReceipt();
+            }
+        }
+
+        private void TrackAccepted(WorkerProtocolEvent @event)
+        {
+            if (@event.Type == WorkerProtocolV1.ReadyType)
+            {
+                finalizer.State.AdvanceTransport(WorkerRunTransportPhase.Ready);
+            }
+            if (WorkerProtocolV1.IsTerminal(@event.Type))
+            {
+                finalizer.State.AdvanceCommit(WorkerRunCommitPhase.TerminalValidated);
+            }
+        }
+
+        private void TrackReceipt()
+        {
+            if (bridge.Reporter.GetFinalizationReceipt(bridge.Request) is not null)
+            {
+                finalizer.State.AdvanceCommit(WorkerRunCommitPhase.Committed);
             }
         }
     }

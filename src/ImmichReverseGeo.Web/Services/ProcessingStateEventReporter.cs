@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Web.Services;
 
@@ -18,6 +19,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
     private readonly object _projectionGate = new();
     private readonly Dictionary<Guid, IDisposable> _activities = [];
     private ProcessingRunRequest? _armedRequest;
+    private ReadModelNotificationCadence.OwnerObservation? _notificationOwnerObservation;
     private ProcessingRunRequest? _lastReleasedRequest;
     private ProcessingRunRequest? _predispatchFinalizationClaim;
     private bool _terminal;
@@ -62,6 +64,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
             }
 
             _armedRequest = request;
+            _notificationOwnerObservation = _state.CaptureNotificationOwner();
             _lastReleasedRequest = null;
             _predispatchFinalizationClaim = null;
             _terminal = false;
@@ -82,6 +85,15 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
         lock (_projectionGate)
         {
             return ReferenceEquals(_armedRequest, request) && !_terminal;
+        }
+    }
+
+    internal ReadModelNotificationCadence.OwnerObservation? GetNotificationOwnerObservation(ProcessingRunRequest request)
+    {
+        lock (_projectionGate)
+        {
+            return ReferenceEquals(_armedRequest, request) || ReferenceEquals(_lastReleasedRequest, request)
+                ? _notificationOwnerObservation : null;
         }
     }
 
@@ -673,6 +685,7 @@ public sealed class ProcessingStateEventReporter : ProcessingEventReporter
 
     private void ReleaseArm()
     {
+        _state.CompleteNotificationOwner(_notificationOwnerObservation);
         var releasedRequest = _armedRequest;
         _terminal = true;
         _lastReleasedRequest = releasedRequest;

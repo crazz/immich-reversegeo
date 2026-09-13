@@ -50,7 +50,8 @@ public sealed class SessionStopTests
         await fixture.Session.DisposeAsync();
         AssertResourcesDisposedOnce(fixture);
         Assert.AreEqual(0, fixture.Clock.ActiveTimerCount);
-        Assert.AreEqual(1, fixture.Clock.TimerDisposeCalls);
+        Assert.AreEqual(1, fixture.Clock.OneShotTimerDisposeCalls);
+        Assert.AreEqual(2, fixture.Clock.TimerDisposeCalls);
     }
 
     [TestMethod]

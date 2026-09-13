@@ -41,7 +41,10 @@ internal sealed class WorkerEventStateBridge : IWorkerProtocolEventSink, IAccept
         ArgumentNullException.ThrowIfNull(reporter);
         Request = request;
         _reporter = reporter;
+        NotificationOwnerObservation = reporter.GetNotificationOwnerObservation(request);
     }
+
+    public ReadModelNotificationCadence.OwnerObservation? NotificationOwnerObservation { get; }
 
     internal ProcessingRunRequest Request { get; }
     internal ProcessingStateEventReporter Reporter => _reporter;

@@ -4,6 +4,9 @@ using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Web.WorkerCommandInvocation;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
 
 namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
@@ -12,6 +15,7 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
 {
     private readonly IChildProcessFactory _processFactory;
     private readonly Func<ChildWorkerObserverArmingAcknowledgements> _createObserverArming;
+    private readonly ILogger _lifecycleLogger;
 
     internal ChildWorkerLauncher(IChildProcessFactory processFactory)
         : this(processFactory, static () => new ChildWorkerObserverArmingAcknowledgements())
@@ -20,10 +24,17 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
 
     internal ChildWorkerLauncher(
         IChildProcessFactory processFactory,
-        Func<ChildWorkerObserverArmingAcknowledgements> createObserverArming)
+        Func<ChildWorkerObserverArmingAcknowledgements> createObserverArming,
+        ILogger? lifecycleLogger = null)
     {
         _processFactory = processFactory ?? throw new ArgumentNullException(nameof(processFactory));
         _createObserverArming = createObserverArming ?? throw new ArgumentNullException(nameof(createObserverArming));
+        _lifecycleLogger = lifecycleLogger ?? NullLogger.Instance;
+    }
+
+    internal ChildWorkerLauncher(IChildProcessFactory processFactory, ILogger lifecycleLogger)
+        : this(processFactory, static () => new ChildWorkerObserverArmingAcknowledgements(), lifecycleLogger)
+    {
     }
 
     public async ValueTask<ChildWorkerLaunchResult> LaunchAsync(
@@ -130,6 +141,7 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
 
         options.Validate();
         cancellationToken.ThrowIfCancellationRequested();
+        var telemetry = new WorkerJobTelemetry(_lifecycleLogger, options.TimeProvider, dispatch.Context);
 
         ChildWorkerObserverArmingAcknowledgements observerArming;
         try
@@ -140,6 +152,7 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
         }
         catch
         {
+            telemetry.Finalized(WorkerLogClassification.StartupFailed, null, false, ChildWorkingSetSummary.NoSample);
             return new ChildWorkerLaunchResult.StartFailed(
                 ChildWorkerStartFailureCategory.ProcessStartFailed);
         }
@@ -153,23 +166,28 @@ internal sealed class ChildWorkerLauncher : IChildWorkerLauncher
         }
         catch
         {
+            telemetry.Finalized(WorkerLogClassification.StartupFailed, null, false, ChildWorkingSetSummary.NoSample);
             return new ChildWorkerLaunchResult.StartFailed(
                 ChildWorkerStartFailureCategory.ProcessStartFailed);
         }
 
         if (process is null)
         {
+            telemetry.Finalized(WorkerLogClassification.StartupFailed, null, false, ChildWorkingSetSummary.NoSample);
             return new ChildWorkerLaunchResult.StartFailed(
                 ChildWorkerStartFailureCategory.ProcessStartFailed);
         }
 
+        long? processTimestamp = LifecycleElapsed.Timestamp(options.TimeProvider);
         ChildWorkerSession session = await ChildWorkerSession.CreateAsync(
             process,
             dispatch,
             eventSink,
             options,
             observerArming,
-            protocolVersion).ConfigureAwait(false);
+            protocolVersion,
+            telemetry,
+            processTimestamp).ConfigureAwait(false);
         return new ChildWorkerLaunchResult.Started(session);
     }
 }

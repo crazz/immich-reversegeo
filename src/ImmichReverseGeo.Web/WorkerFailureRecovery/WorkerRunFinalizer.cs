@@ -115,6 +115,12 @@ internal sealed class WorkerRunFinalizer
             };
             var decision = WorkerRunEvidenceClassifier.Classify(evidence);
             var receipt = Commit(decision);
+            if (receipt.Origin == ProcessingRunFinalizationOrigin.WorkerTerminal
+                && raw.JobTerminal?.Payload is WorkerJobTerminalPayload terminal)
+            {
+                // A durable receipt also covers an indeterminate projection response.
+                session.Telemetry?.TerminalAccepted(terminal.Outcome, raw.JobTerminal.Sequence);
+            }
             ObserveStatus(sink => sink.ObserveFinality(_request, receipt.Result.Outcome, decision.Category));
             // The receipt proves a final UI winner even if its observer response was indeterminate.
             _evidenceGate?.Release();
@@ -156,6 +162,14 @@ internal sealed class WorkerRunFinalizer
                 {
                     // The diagnostic receipt is already claimed; a UI subscriber cannot trigger a replay.
                 }
+            }
+            if (session.Telemetry is { } telemetry)
+            {
+                // Reuse final facts without granting terminal authority to the UI
+                // receipt synthesized above. The committed outcome stays unchanged.
+                var logDecision = WorkerRunEvidenceClassifier.Classify(Evidence with { Receipt = evidence.Receipt });
+                telemetry.Finalized(raw, logDecision.Category, finalAnomalies, Evidence.Cancellation,
+                    Evidence.TerminalInputCloseFailure is not null, session.WorkingSetObservation);
             }
             _completion.TrySetResult(receipt.Result);
         }

@@ -5,8 +5,11 @@ The worker-based deployment has several independent lifecycle owners, but no sin
 ## What Changes
 
 - Define exact stable EventIds, names, fields, closed values, and levels for mode selection; role-process startup, readiness, stopping, and stop; correlated child launch and PID observation; cancellation request, grace, and escalation; protocol violation; terminal and process-exit classification; and coalescer saturation.
+- Keep the initial role stop reason distinct from its final post-cleanup outcome; later retained cleanup failures remain visible without replaying stopping.
 - Preserve one canonical JobId end to end—equal to RunId for ProcessAssets—plus exact job kind and bounded origin, while explicitly distinguishing controller and worker PIDs.
 - Reuse `EventId(5901, "ProcessingWorkDetectorCompleted")` unchanged instead of producing duplicate detector telemetry.
+- Reconcile final log classification with the landed classifier precedence, including intersecting failures and invalid no-terminal exits.
+- Add only a bounded owner-scoped observation to the existing cadence owner for the per-job notification count; retain its lifetime totals and behavior.
 - Measure lifecycle durations with injected `TimeProvider` monotonic timestamps and define parent-owned, best-effort child working-set sampling with explicit unavailable semantics.
 - Keep lifecycle telemetry structured-log-only, bounded, non-per-item, and redacted from coordinates, payloads, command lines/private selectors, environment/configuration, credentials/secrets, raw protocol data, and raw stderr.
 - Add deterministic structured-event-sink tests and focused extensions to the existing process fixture; block 67's failure matrix remains separate.

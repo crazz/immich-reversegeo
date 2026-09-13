@@ -1288,6 +1288,8 @@ Every scheduled check uses the full current-eligibility `EXISTS` observation. No
 
 **OpenSpec** — [66-add-role-process-lifecycle-telemetry](openspec/changes/66-add-role-process-lifecycle-telemetry/)
 
+**Apply-time reconciliation** — Final classification logs follow the landed classifier's precedence for intersecting failures and terminal anomalies; an agreeing terminal/exit pair does not erase an independent retained failure. Event 6650 copies the exact final delivery counters and the primary read model's ordinary cadence count for that job owner. The existing cadence owner may expose an additive, frozen per-owner observation while retaining its lifetime totals and behavior; telemetry does not subtract lifetime totals or aggregate unrelated read models.
+
 ### 67. `test: add process-level failure matrix`
 
 **Purpose** — Prove at the real OS-process boundary that supervised workers fail visibly, preserve authoritative protocol/job outcomes, release every resource, and permit only explicit safe retry.

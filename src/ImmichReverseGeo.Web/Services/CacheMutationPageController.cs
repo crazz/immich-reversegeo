@@ -235,7 +235,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
                 null,
                 false,
                 false);
-            attempt = RunAttemptAsync(generation, dispatch);
+            attempt = RunAttemptAsync(generation, dispatch, _cadence?.CaptureOwner(_notificationOwner));
             _currentAttempt = attempt;
         }
 
@@ -322,7 +322,8 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
 
     private async Task RunAttemptAsync(
         long generation,
-        CacheMutationWorkerJobDispatch dispatch)
+        CacheMutationWorkerJobDispatch dispatch,
+        ReadModelNotificationCadence.OwnerObservation? notificationObservation)
     {
         IWorkerJobAdmissionLease? lease = null;
         ICacheMutationWorkerSession? session = null;
@@ -374,7 +375,8 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
             CacheMutationWorkerStartResult start = await _workerClient.StartAsync(
                 lease,
                 dispatch.Request,
-                new AcceptedCapabilityEventSink(lease.Context, message => ApplyEvent(generation, lease.Context, message)),
+                new AcceptedCapabilityEventSink(lease.Context, message => ApplyEvent(generation, lease.Context, message),
+                    notificationObservation),
                 CancellationToken.None).ConfigureAwait(false);
             if (start is CacheMutationWorkerStartResult.Unavailable unavailableStart)
             {
@@ -430,6 +432,7 @@ internal sealed class CacheMutationPageController : IAsyncDisposable
                 await DisposeSafelyAsync(session).ConfigureAwait(false);
             }
 
+            _cadence?.CompleteOwner(notificationObservation);
             if (lease is not null)
             {
                 await DisposeSafelyAsync(lease).ConfigureAwait(false);

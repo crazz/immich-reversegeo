@@ -120,7 +120,8 @@ public sealed class ShutdownSessionTests
             Assert.AreEqual(1, process.StandardOutputSource.DisposeCalls);
             Assert.AreEqual(1, process.StandardErrorSource.DisposeCalls);
             Assert.AreEqual(0, clock.ActiveTimerCount);
-            Assert.AreEqual(1, clock.TimerDisposeCalls, "Infinite readiness allocates no timer; the shared grace timer is disposed once.");
+            Assert.AreEqual(1, clock.OneShotTimerDisposeCalls, "Infinite readiness allocates no timer; the shared grace timer is disposed once.");
+            Assert.AreEqual(2, clock.TimerDisposeCalls, "The memory timer is also disposed once.");
             Assert.IsNull(context.Coordinator.ActiveRequest);
             Assert.IsTrue(context.State.IsRunning, "Shutdown preserves the armed nonterminal projection for block 30 finalization.");
             Assert.IsNull(context.State.LastRunCompleted);
@@ -241,6 +242,7 @@ public sealed class ShutdownSessionTests
 
         public Task<int> WaitForExitAsync() => _exit.Task;
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState()
             => Volatile.Read(ref _exitState) == 0
                 ? ChildProcessExitState.Alive

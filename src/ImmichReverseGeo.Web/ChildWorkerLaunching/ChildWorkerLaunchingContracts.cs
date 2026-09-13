@@ -278,6 +278,7 @@ internal interface IChildProcess : IAsyncDisposable
     Stream StandardOutput { get; }
     Stream StandardError { get; }
     Task<int> WaitForExitAsync();
+    ChildWorkingSetObservation ReadWorkingSet();
     ChildProcessExitState GetExitState();
     ChildProcessKillOutcome KillProcessTree();
 }

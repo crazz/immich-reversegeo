@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.Composition;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -105,6 +106,8 @@ internal static class InternalWorkerHost
         ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
         ArgumentNullException.ThrowIfNull(outcomes);
 
+        using var telemetry = RoleProcessTelemetry.CreateProduction(new RoleLogContext(
+            ImmichReverseGeo.Core.ApplicationRole.ApplicationRole.InternalWorker, null, Environment.ProcessId));
         try
         {
             var builder = CreateRawBuilder();
@@ -117,15 +120,19 @@ internal static class InternalWorkerHost
                 dataDirectory,
                 configDirectory);
             Configure(builder, context, outcomes, protocolVersion);
-            return await RunHostAsync(Build(builder), outcomes);
+            return await RunHostAsync(Build(builder), outcomes, telemetry);
         }
         catch (OutOfMemoryException)
         {
+            telemetry.Failed();
+            telemetry.Stopped(RoleStopReason.FatalFailure);
             throw;
         }
         catch
         {
             outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
+            telemetry.Failed();
+            telemetry.Stopped(outcomes.Fact);
             return outcomes.Fact.ExitCode;
         }
     }
@@ -140,7 +147,8 @@ internal static class InternalWorkerHost
 
     internal static async Task<int> RunHostAsync(
         IHost host,
-        WorkerProcessExitOutcomeAccumulator outcomes)
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        RoleProcessTelemetry? telemetry = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(outcomes);
@@ -149,6 +157,7 @@ internal static class InternalWorkerHost
         InternalWorkerLifecycleService? lifecycle = null;
         OutOfMemoryException? firstFatalOutOfMemory = null;
         var servicesAvailable = true;
+        System.Threading.CancellationTokenRegistration stoppingRegistration = default;
 
         try
         {
@@ -160,6 +169,23 @@ internal static class InternalWorkerHost
 
             logger = host.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(InternalWorkerHost));
             lifecycle = host.Services.GetService<InternalWorkerLifecycleService>();
+            lifecycle?.ObserveRole(telemetry);
+            if (telemetry is not null)
+            {
+                try
+                {
+                    var lifetime = host.Services.GetService<IHostApplicationLifetime>();
+                    if (lifetime is not null)
+                    {
+                        stoppingRegistration = lifetime.ApplicationStopping.Register(
+                            () => telemetry.Stopping(RoleStopReason.HostShutdown));
+                    }
+                }
+                catch
+                {
+                    // Optional observation must not replace a host-start failure.
+                }
+            }
         }
         catch (OutOfMemoryException exception)
         {
@@ -193,6 +219,8 @@ internal static class InternalWorkerHost
             }
         }
 
+        telemetry?.Stopping(outcomes.Fact, firstFatalOutOfMemory is not null);
+        stoppingRegistration.Dispose();
         try
         {
             if (host is IAsyncDisposable asyncDisposable)
@@ -214,6 +242,7 @@ internal static class InternalWorkerHost
             LogSafely(logger, "worker-host-dispose-failed");
         }
 
+        telemetry?.Stopped(outcomes.Fact, firstFatalOutOfMemory is not null);
         if (firstFatalOutOfMemory is not null)
         {
             ExceptionDispatchInfo.Capture(firstFatalOutOfMemory).Throw();

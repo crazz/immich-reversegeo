@@ -10,6 +10,7 @@ using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Web.Composition;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
 using ImmichReverseGeo.Web.Services;
 using ImmichReverseGeo.Web.WorkerHost;
 using Microsoft.Extensions.DependencyInjection;
@@ -69,6 +70,8 @@ internal static class RunOnceApplication
         TextWriter standardError,
         WorkerProcessExitOutcomeAccumulator outcomes)
     {
+        using var telemetry = RoleProcessTelemetry.CreateProduction(new RoleLogContext(
+            ImmichReverseGeo.Core.ApplicationRole.ApplicationRole.RunOnce, deploymentMode, Environment.ProcessId));
         IHost? host = null;
         try
         {
@@ -82,6 +85,8 @@ internal static class RunOnceApplication
         }
         catch (OutOfMemoryException)
         {
+            telemetry.Failed();
+            telemetry.Stopped(RoleStopReason.FatalFailure);
             throw;
         }
         catch
@@ -89,14 +94,20 @@ internal static class RunOnceApplication
             outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
         }
 
-        return host is null
-            ? outcomes.Fact.ExitCode
-            : await RunHostAsync(host, outcomes).ConfigureAwait(false);
+        if (host is null)
+        {
+            telemetry.Failed();
+            telemetry.Stopped(outcomes.Fact);
+            return outcomes.Fact.ExitCode;
+        }
+
+        return await RunHostAsync(host, outcomes, telemetry).ConfigureAwait(false);
     }
 
     internal static async Task<int> RunHostAsync(
         IHost host,
-        WorkerProcessExitOutcomeAccumulator outcomes)
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        RoleProcessTelemetry? telemetry = null)
     {
         ArgumentNullException.ThrowIfNull(host);
         ArgumentNullException.ThrowIfNull(outcomes);
@@ -118,7 +129,11 @@ internal static class RunOnceApplication
             }
 
             lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-            stoppingRegistration = lifetime.ApplicationStopping.Register(stopOrigin.ObserveStopping);
+            stoppingRegistration = lifetime.ApplicationStopping.Register(() =>
+            {
+                stopOrigin.ObserveStopping();
+                telemetry?.Stopping(RoleStopReason.HostShutdown);
+            });
 
             hostStartAttempted = true;
             await host.StartAsync(CancellationToken.None).ConfigureAwait(false);
@@ -126,6 +141,7 @@ internal static class RunOnceApplication
             var initializer = host.Services.GetRequiredService<IWorkerStartupInitializer>();
             await initializer.InitialiseAsync(lifetime.ApplicationStopping).ConfigureAwait(false);
             lifetime.ApplicationStopping.ThrowIfCancellationRequested();
+            telemetry?.Ready();
 
             var scope = host.Services.CreateAsyncScope();
             scopeDisposal = scope;
@@ -157,6 +173,7 @@ internal static class RunOnceApplication
         }
         finally
         {
+            telemetry?.Stopping(outcomes.Fact, firstFatal is not null);
             try
             {
                 if (scopeDisposal is not null)
@@ -232,6 +249,7 @@ internal static class RunOnceApplication
 
         if (firstFatal is not null)
         {
+            telemetry?.Stopped(outcomes.Fact, fatal: true);
             ExceptionDispatchInfo.Capture(firstFatal).Throw();
         }
 
@@ -240,6 +258,7 @@ internal static class RunOnceApplication
             outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
         }
 
+        telemetry?.Stopped(outcomes.Fact);
         return outcomes.Fact.ExitCode;
     }
 

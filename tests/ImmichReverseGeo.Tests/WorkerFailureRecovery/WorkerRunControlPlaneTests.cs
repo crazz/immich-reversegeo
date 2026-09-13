@@ -100,7 +100,9 @@ public class WorkerRunControlPlaneTests
         var dispatch = Assert.IsInstanceOfType<ProcessAssetsWorkerJobDispatch>(launcher.Dispatch);
         Assert.AreSame(fixture.Executor.LastRequest, dispatch.Request.ProcessingRequest);
         Assert.AreEqual(fixture.Executor.LastRequest!.RunId, dispatch.Context.JobId);
-        Assert.IsInstanceOfType<ProcessAssetsWorkerJobEventSink>(launcher.EventSink);
+        var processingSink = Assert.IsInstanceOfType<ProcessAssetsWorkerJobEventSink>(launcher.EventSink);
+        Assert.IsNotNull(processingSink.AcceptedDeliverySink,
+            "The actual production control plane must preserve the bridge's accepted-delivery capability through TrackingSink.");
     }
 
     [TestMethod]

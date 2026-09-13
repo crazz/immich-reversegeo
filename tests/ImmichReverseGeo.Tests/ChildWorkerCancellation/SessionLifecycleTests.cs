@@ -30,7 +30,8 @@ public sealed class SessionLifecycleTests
 
         AssertResourcesDisposedOnce(fixture);
         Assert.AreEqual(0, fixture.Process.KillCalls);
-        Assert.AreEqual(0L, fixture.Clock.TimerGeneration);
+        Assert.AreEqual(0, fixture.Clock.OneShotTimerCount, "Natural exit requires no stop deadline.");
+        Assert.AreEqual(1L, fixture.Clock.TimerGeneration, "The session owns one memory timer.");
         Assert.AreEqual(0, fixture.Clock.ActiveTimerCount);
     }
 

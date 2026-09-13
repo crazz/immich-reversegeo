@@ -111,6 +111,43 @@ internal sealed class SystemChildProcessFactory : IChildProcessFactory
 
         public Task<int> WaitForExitAsync() => _exit.Task;
 
+        public ChildWorkingSetObservation ReadWorkingSet()
+        {
+            // Use the same monitor as Process.Exited, GetExitState and disposal.
+            // No sampler/session callback is invoked while this monitor is held.
+            lock (_process)
+            {
+                if (_disposed || _exit.Task.IsCompletedSuccessfully)
+                {
+                    return ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.ProcessExited);
+                }
+
+                try
+                {
+                    _process.Refresh();
+                    if (_process.HasExited)
+                    {
+                        return ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.ProcessExited);
+                    }
+
+                    return ChildWorkingSetObservation.Available(_process.WorkingSet64);
+                }
+                catch (Exception failure)
+                {
+                    var reason = failure switch
+                    {
+                        NotSupportedException => ChildWorkingSetUnavailable.NotSupported,
+                        UnauthorizedAccessException or System.Security.SecurityException => ChildWorkingSetUnavailable.AccessDenied,
+                        System.ComponentModel.Win32Exception native when (OperatingSystem.IsWindows()
+                            ? native.NativeErrorCode == 5 : native.NativeErrorCode is 1 or 13) => ChildWorkingSetUnavailable.AccessDenied,
+                        _ => GetExitState() == ChildProcessExitState.Exited
+                            ? ChildWorkingSetUnavailable.ProcessExited : ChildWorkingSetUnavailable.SampleFailed
+                    };
+                    return ChildWorkingSetObservation.Unavailable(reason);
+                }
+            }
+        }
+
         public ChildProcessExitState GetExitState()
         {
             lock (_process)

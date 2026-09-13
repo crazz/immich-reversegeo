@@ -79,13 +79,17 @@ public sealed class CoordinateLookupPageControllerTests
     public async Task AcceptedDelivery_RejectsOldGenerationWithoutMutatingOrReleasingCurrentJob()
     {
         var clock = new CancellationTestClock();
+        var notifications = Channel.CreateUnbounded<bool>();
         var admission = new RecordingAdmissionGate();
         var worker = new RecordingWorkerClient();
         await using var controller = new CoordinateLookupPageController(admission, worker, new SettingsProvider(),
-            () => FirstJobId, () => { }, time: clock, policy: new WorkerEventDeliveryPolicy());
+            () => FirstJobId, () => notifications.Writer.TryWrite(true), time: clock, policy: new WorkerEventDeliveryPolicy());
         Task firstRun = controller.SubmitAsync(Submission());
         var firstSession = await worker.WaitForSessionAsync();
         var firstLease = admission.Lease!;
+        var firstObservation = Assert.IsInstanceOfType<IAcceptedWorkerEventSink>(worker.EventSink!)
+            .NotificationOwnerObservation;
+        Assert.IsNotNull(firstObservation);
         var delivery = new CapabilityDeliveryHarness(firstLease, worker.EventSink!, clock, 3);
         Task? secondRun = null;
         FakeWorkerSession? secondSession = null;
@@ -98,9 +102,14 @@ public sealed class CoordinateLookupPageControllerTests
             await delivery.Acknowledged.WaitAsync(Bound);
             firstSession.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
             await firstRun.WaitAsync(Bound);
+            Assert.AreEqual(0L, await firstObservation.FinalOrdinaryDispatched.WaitAsync(Bound));
             secondRun = controller.SubmitAsync(Submission());
             secondSession = await worker.WaitForSessionAsync();
             var secondLease = admission.Lease!;
+            var secondObservation = Assert.IsInstanceOfType<IAcceptedWorkerEventSink>(worker.EventSink!)
+                .NotificationOwnerObservation;
+            Assert.IsNotNull(secondObservation);
+            Assert.AreNotSame(firstObservation, secondObservation);
             var current = controller.State;
             await delivery.SendAsync(Progress(FirstJobId, "stale generation"), 4);
             stale = await Assert.ThrowsExactlyAsync<StaleWorkerEventDeliveryException>(() => delivery.Queue.Completion.WaitAsync(Bound));
@@ -114,6 +123,18 @@ public sealed class CoordinateLookupPageControllerTests
             await next.SendAsync(Progress(FirstJobId, "current generation"), 3);
             await next.Acknowledged.WaitAsync(Bound);
             Assert.AreEqual("current generation", controller.State.Status);
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            while (secondObservation.OrdinaryDispatched == 0)
+            {
+                await notifications.Reader.ReadAsync().AsTask().WaitAsync(Bound);
+            }
+
+            secondSession.Complete(new CoordinateLookupWorkerOutcome.Cancelled());
+            await secondRun.WaitAsync(Bound);
+            Assert.AreEqual(1L, await secondObservation.FinalOrdinaryDispatched.WaitAsync(Bound));
+            Assert.AreEqual(0L, await firstObservation.FinalOrdinaryDispatched);
+            Assert.AreEqual(1L, controller.NotificationObservation!.OrdinaryDispatched);
+            Assert.AreEqual(0L, firstObservation.OrdinaryDispatched, "A retained old handle never redirects to the newer job.");
         }
         finally
         {

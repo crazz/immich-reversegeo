@@ -136,6 +136,7 @@ public sealed class ChildWorkerEscalationEvidenceTests
 
         public Task<int> WaitForExitAsync() => _exit.Task;
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState()
             => Volatile.Read(ref _exitState) == 0
                 ? ChildProcessExitState.Alive

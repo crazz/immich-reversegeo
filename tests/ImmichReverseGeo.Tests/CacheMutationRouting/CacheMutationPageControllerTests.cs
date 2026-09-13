@@ -80,13 +80,18 @@ public sealed class CacheMutationPageControllerTests
     public async Task AcceptedDelivery_RejectsOldGenerationWithoutMutatingOrReleasingCurrentJob()
     {
         var clock = new CancellationTestClock();
+        var notifications = Channel.CreateUnbounded<bool>();
         var admission = new RecordingAdmissionGate();
         var worker = new RecordingWorkerClient();
         await using var controller = new CacheMutationPageController(admission, worker, () => JobId,
-            () => Task.CompletedTask, () => Task.CompletedTask, time: clock, policy: new WorkerEventDeliveryPolicy());
+            () => { notifications.Writer.TryWrite(true); return Task.CompletedTask; },
+            () => Task.CompletedTask, time: clock, policy: new WorkerEventDeliveryPolicy());
         Task firstRun = controller.RefreshAsync(CacheMutationSource.Overture, "CHE");
         var firstSession = await worker.WaitForSessionAsync();
         var firstLease = admission.Lease!;
+        var firstObservation = Assert.IsInstanceOfType<IAcceptedWorkerEventSink>(worker.EventSink!)
+            .NotificationOwnerObservation;
+        Assert.IsNotNull(firstObservation);
         var delivery = new CapabilityDeliveryHarness(firstLease, worker.EventSink!, clock, 3);
         var ready = WorkerJobProtocolMapper.Ready(1, Result().StartedAtUtc, new WorkerJobReadyPayload([WorkerJobKind.CacheMutation]));
         Task? secondRun = null;
@@ -100,9 +105,14 @@ public sealed class CacheMutationPageControllerTests
             await delivery.Acknowledged.WaitAsync(Bound);
             firstSession.Complete(new CacheMutationWorkerOutcome.Cancelled());
             await firstRun.WaitAsync(Bound);
+            Assert.AreEqual(0L, await firstObservation.FinalOrdinaryDispatched.WaitAsync(Bound));
             secondRun = controller.RefreshAsync(CacheMutationSource.Overture, "CHE");
             secondSession = await worker.WaitForSessionAsync();
             var secondLease = admission.Lease!;
+            var secondObservation = Assert.IsInstanceOfType<IAcceptedWorkerEventSink>(worker.EventSink!)
+                .NotificationOwnerObservation;
+            Assert.IsNotNull(secondObservation);
+            Assert.AreNotSame(firstObservation, secondObservation);
             var current = controller.State;
             await delivery.SendAsync(Progress(JobId, WorkerJobKind.CacheMutation, message: "stale generation"), 4);
             stale = await Assert.ThrowsExactlyAsync<StaleWorkerEventDeliveryException>(() => delivery.Queue.Completion.WaitAsync(Bound));
@@ -116,6 +126,18 @@ public sealed class CacheMutationPageControllerTests
             await next.SendAsync(Progress(JobId, WorkerJobKind.CacheMutation, message: "current generation"), 3);
             await next.Acknowledged.WaitAsync(Bound);
             Assert.AreEqual("current generation", controller.State.Status);
+            clock.Advance(TimeSpan.FromMilliseconds(100));
+            while (secondObservation.OrdinaryDispatched == 0)
+            {
+                await notifications.Reader.ReadAsync().AsTask().WaitAsync(Bound);
+            }
+
+            secondSession.Complete(new CacheMutationWorkerOutcome.Cancelled());
+            await secondRun.WaitAsync(Bound);
+            Assert.AreEqual(1L, await secondObservation.FinalOrdinaryDispatched.WaitAsync(Bound));
+            Assert.AreEqual(0L, await firstObservation.FinalOrdinaryDispatched);
+            Assert.AreEqual(1L, controller.NotificationObservation!.OrdinaryDispatched);
+            Assert.AreEqual(0L, firstObservation.OrdinaryDispatched, "A retained old handle never redirects to the newer job.");
         }
         finally
         {

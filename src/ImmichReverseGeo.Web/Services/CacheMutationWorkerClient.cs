@@ -149,13 +149,42 @@ internal sealed class CacheMutationWorkerClient(
             Task containment = MonitorFaultContainmentAsync();
             ChildWorkerCompletionObservation completion =
                 await _session.EvidenceFinality.ConfigureAwait(false);
+            WorkerJobNoTerminalDecision? noTerminal = null;
             CacheMutationWorkerOutcome outcome = completion.JobTerminal?.Payload is
                 WorkerJobTerminalPayload terminal
                 ? FromTerminal(terminal)
-                : FromNoTerminal(completion);
+                : FromNoTerminal(completion, out noTerminal);
+            bool cleanupFailed = false;
+            try
+            {
+                await _session.Settlement.ConfigureAwait(false);
+                await containment.ConfigureAwait(false);
+            }
+            catch
+            {
+                cleanupFailed = true;
+                try
+                {
+                    await containment.ConfigureAwait(false);
+                }
+                catch
+                {
+                    // Join containment without replacing the first cleanup fault.
+                }
 
-            await _session.Settlement.ConfigureAwait(false);
-            await containment.ConfigureAwait(false);
+                throw;
+            }
+            finally
+            {
+                WorkerJobNoTerminalDecision? finalDecision = cleanupFailed && noTerminal is not null
+                    ? ClassifyNoTerminal(completion, cleanupFailed: true)
+                    : noTerminal;
+                _session.Telemetry?.Finalized(completion, finalDecision?.Category ?? WorkerRunFailureCategory.Terminal,
+                    (finalDecision?.Anomalies ?? WorkerRunAnomaly.None)
+                        | (cleanupFailed ? WorkerRunAnomaly.CleanupFailure : WorkerRunAnomaly.None),
+                    _session.CancellationFacts, _session.TerminalInputCloseFailure.IsCompletedSuccessfully,
+                    _session.WorkingSetObservation);
+            }
             return outcome;
         }
 
@@ -187,23 +216,27 @@ internal sealed class CacheMutationWorkerClient(
         }
 
         private CacheMutationWorkerOutcome FromNoTerminal(
-            ChildWorkerCompletionObservation completion)
+            ChildWorkerCompletionObservation completion, out WorkerJobNoTerminalDecision decision)
         {
-            WorkerJobNoTerminalDecision decision =
-                WorkerJobNoTerminalEvidenceClassifier.Classify(new WorkerJobNoTerminalEvidence
-                {
-                    Context = _context,
-                    IntendedProtocolVersion = InternalWorkerProtocolVersion.V2,
-                    LastPhase = WorkerRunTransportPhase.EvidenceFinal,
-                    Completion = completion,
-                    Cancellation = _session.CancellationFacts
-                });
+            decision = ClassifyNoTerminal(completion);
             return decision.Outcome == WorkerJobNoTerminalOutcome.Cancelled
                 ? new CacheMutationWorkerOutcome.Cancelled()
                 : new CacheMutationWorkerOutcome.Failed(
                     $"cache-{decision.Category.ToString().ToLowerInvariant()}",
                     "The cache worker stopped before it produced a valid final result.");
         }
+
+        private WorkerJobNoTerminalDecision ClassifyNoTerminal(
+            ChildWorkerCompletionObservation completion, bool cleanupFailed = false) =>
+            WorkerJobNoTerminalEvidenceClassifier.Classify(new WorkerJobNoTerminalEvidence
+            {
+                Context = _context,
+                IntendedProtocolVersion = InternalWorkerProtocolVersion.V2,
+                LastPhase = WorkerRunTransportPhase.EvidenceFinal,
+                Completion = completion,
+                Cancellation = _session.CancellationFacts,
+                CleanupFailed = cleanupFailed
+            });
 
         private static CacheMutationWorkerOutcome FromTerminal(
             WorkerJobTerminalPayload terminal) =>

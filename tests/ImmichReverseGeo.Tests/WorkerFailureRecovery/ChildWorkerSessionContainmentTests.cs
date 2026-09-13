@@ -16,13 +16,13 @@ public sealed class ChildWorkerSessionContainmentTests
     public async Task ReadyTimeout_PublishesFaultTimestampWithoutStartingContainment()
     {
         var clock = new CancellationTestClock(SessionTestSupport.Start);
-        long timerGeneration = clock.TimerGeneration;
+        int timerCount = clock.OneShotTimerCount;
         SessionTestSupport.SessionFixture fixture = await CreateAsync(
             clock: clock,
             readyTimeout: TimeSpan.FromSeconds(3));
 
         await clock
-            .WaitForTimerCreatedAsync(timerGeneration)
+            .WaitForOneShotTimerCreatedAsync(timerCount)
             .WaitAsync(TestTimeout);
         clock.Advance(TimeSpan.FromSeconds(3));
 
@@ -42,7 +42,8 @@ public sealed class ChildWorkerSessionContainmentTests
         fixture.Process.Exit(1);
         await fixture.Session.Settlement.WaitAsync(TestTimeout);
         AssertResourcesDisposedOnce(fixture);
-        Assert.AreEqual(1, clock.TimerDisposeCalls);
+        Assert.AreEqual(1, clock.OneShotTimerDisposeCalls);
+        Assert.AreEqual(2, clock.TimerDisposeCalls, "Readiness and memory timers are each disposed once.");
     }
 
     [TestMethod]
@@ -176,7 +177,8 @@ public sealed class ChildWorkerSessionContainmentTests
         Assert.IsFalse(result.Facts.GraceExpired);
         Assert.AreEqual(0, fixture.Process.KillCalls);
         AssertResourcesDisposedOnce(fixture);
-        Assert.AreEqual(1, fixture.Clock.TimerDisposeCalls);
+        Assert.AreEqual(1, fixture.Clock.OneShotTimerDisposeCalls);
+        Assert.AreEqual(2, fixture.Clock.TimerDisposeCalls, "Containment reuses the stop timer; memory has its own timer.");
     }
 
     [TestMethod]
@@ -641,6 +643,7 @@ public sealed class ChildWorkerSessionContainmentTests
 
         public Task<int> WaitForExitAsync() => _exit.Task;
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState()
             => Volatile.Read(ref _exitState) == 0
                 ? ChildProcessExitState.Alive

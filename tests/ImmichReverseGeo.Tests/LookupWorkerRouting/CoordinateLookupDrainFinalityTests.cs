@@ -495,6 +495,7 @@ public sealed class CoordinateLookupDrainFinalityTests
 
         public Task<int> WaitForExitAsync() => _exit.Task;
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState() =>
             _exit.Task.IsCompletedSuccessfully
                 ? ChildProcessExitState.Exited

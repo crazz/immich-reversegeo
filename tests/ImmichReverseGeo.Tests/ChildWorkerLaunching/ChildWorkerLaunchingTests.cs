@@ -1024,14 +1024,20 @@ public sealed partial class ChildWorkerLaunchingTests
         private readonly List<ManualTimer> _timers = [];
         private readonly TaskCompletionSource _firstCreated = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource _firstDisposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _oneShotCreated = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _oneShotDisposed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private DateTimeOffset _now = DateTimeOffset.UnixEpoch;
 
         internal int CreateCalls { get; private set; }
         internal int DisposeCalls { get; private set; }
+        internal int OneShotCreateCalls { get; private set; }
+        internal int OneShotDisposeCalls { get; private set; }
         internal TimeSpan? LastDueTime { get; private set; }
         internal TimeSpan? LastPeriod { get; private set; }
         internal Task TimerCreated => _firstCreated.Task;
         internal Task FirstDisposed => _firstDisposed.Task;
+        internal Task OneShotTimerCreated => _oneShotCreated.Task;
+        internal Task OneShotFirstDisposed => _oneShotDisposed.Task;
         public override DateTimeOffset GetUtcNow() => _now;
         public override long GetTimestamp() => _now.UtcTicks;
         public override TimeZoneInfo LocalTimeZone => TimeZoneInfo.Utc;
@@ -1041,9 +1047,15 @@ public sealed partial class ChildWorkerLaunchingTests
             lock (_gate)
             {
                 CreateCalls++;
-                LastDueTime = dueTime;
-                LastPeriod = period;
-                var timer = new ManualTimer(this, callback, state, _now + dueTime);
+                if (period == Timeout.InfiniteTimeSpan)
+                {
+                    OneShotCreateCalls++;
+                    LastDueTime = dueTime;
+                    LastPeriod = period;
+                    _oneShotCreated.TrySetResult();
+                }
+
+                var timer = new ManualTimer(this, callback, state, _now + dueTime, period);
                 _timers.Add(timer);
                 _firstCreated.TrySetResult();
                 return timer;
@@ -1065,11 +1077,16 @@ public sealed partial class ChildWorkerLaunchingTests
             }
         }
 
-        private void RecordDisposal()
+        private void RecordDisposal(bool oneShot)
         {
             lock (_gate)
             {
                 DisposeCalls++;
+                if (oneShot)
+                {
+                    OneShotDisposeCalls++;
+                    _oneShotDisposed.TrySetResult();
+                }
             }
 
             _firstDisposed.TrySetResult();
@@ -1079,27 +1096,30 @@ public sealed partial class ChildWorkerLaunchingTests
             ManualTimeProvider owner,
             TimerCallback callback,
             object? state,
-            DateTimeOffset dueAt) : ITimer
+            DateTimeOffset dueAt,
+            TimeSpan period) : ITimer
         {
             private int _disposed;
+            private TimeSpan _period = period;
             internal DateTimeOffset DueAt { get; private set; } = dueAt;
             internal bool IsDisposed => Volatile.Read(ref _disposed) != 0;
 
             public bool Change(TimeSpan dueTime, TimeSpan period)
             {
                 DueAt = owner.GetUtcNow() + dueTime;
+                _period = period;
                 return !IsDisposed;
             }
 
             public void Dispose()
             {
-                owner.RecordDisposal();
+                owner.RecordDisposal(_period == Timeout.InfiniteTimeSpan);
                 Interlocked.Exchange(ref _disposed, 1);
             }
 
             public ValueTask DisposeAsync()
             {
-                owner.RecordDisposal();
+                owner.RecordDisposal(_period == Timeout.InfiniteTimeSpan);
                 Interlocked.Exchange(ref _disposed, 1);
                 return ValueTask.CompletedTask;
             }
@@ -1108,6 +1128,7 @@ public sealed partial class ChildWorkerLaunchingTests
             {
                 if (!IsDisposed)
                 {
+                    DueAt = _period > TimeSpan.Zero ? owner.GetUtcNow() + _period : DateTimeOffset.MaxValue;
                     callback(state);
                 }
             }
@@ -1213,6 +1234,7 @@ public sealed partial class ChildWorkerLaunchingTests
             return _exit.Task;
         }
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState()
             => _exit.Task.IsCompletedSuccessfully ? ChildProcessExitState.Exited : ChildProcessExitState.Alive;
 
@@ -1541,6 +1563,7 @@ public sealed partial class ChildWorkerLaunchingTests
             return Task.FromResult(0);
         }
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState() => ChildProcessExitState.Exited;
         public ChildProcessKillOutcome KillProcessTree() => ChildProcessKillOutcome.AlreadyExited;
 
@@ -1611,6 +1634,7 @@ public sealed partial class ChildWorkerLaunchingTests
             return _exit.Task;
         }
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState()
             => _exit.Task.IsCompletedSuccessfully ? ChildProcessExitState.Exited : ChildProcessExitState.Alive;
 
@@ -1797,6 +1821,7 @@ public sealed partial class ChildWorkerLaunchingTests
             return _exit.Task;
         }
 
+        public ChildWorkingSetObservation ReadWorkingSet() => ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.NotSupported);
         public ChildProcessExitState GetExitState()
         {
             if (Volatile.Read(ref _physicalExitConfirmed) != 0 || _exit.Task.IsCompletedSuccessfully)

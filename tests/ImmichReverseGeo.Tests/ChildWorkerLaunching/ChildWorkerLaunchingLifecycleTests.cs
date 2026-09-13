@@ -217,7 +217,7 @@ public sealed partial class ChildWorkerLaunchingTests
         var time = new ManualTimeProvider();
         var options = new ChildWorkerLauncherOptions { TimeProvider = time };
         var (process, _, session) = await LaunchByteSessionAsync(942, options: options);
-        await time.TimerCreated;
+        await time.OneShotTimerCreated;
 
         Assert.AreEqual(TimeSpan.FromSeconds(30), time.LastDueTime, "ready-deadline: exact-thirty-second-due");
         Assert.AreEqual(Timeout.InfiniteTimeSpan, time.LastPeriod, "ready-deadline: exact-infinite-period");
@@ -225,11 +225,11 @@ public sealed partial class ChildWorkerLaunchingTests
         Assert.IsFalse(session.Startup.IsCompleted, "ready-deadline: 29.999-seconds-still-pending");
         time.Advance(TimeSpan.FromMilliseconds(1));
         var startup = await session.Startup;
-        await time.FirstDisposed;
+        await time.OneShotFirstDisposed;
 
         Assert.IsInstanceOfType<ChildWorkerStartupObservation.ReadyTimedOut>(startup, "ready-deadline: exact-boundary-timeout");
-        Assert.AreEqual(1, time.CreateCalls, "ready-deadline: one-timer");
-        Assert.AreEqual(1, time.DisposeCalls, "ready-deadline: timer-disposed-once");
+        Assert.AreEqual(1, time.OneShotCreateCalls, "ready-deadline: one-timer");
+        Assert.AreEqual(1, time.OneShotDisposeCalls, "ready-deadline: timer-disposed-once");
         Assert.AreEqual(0, process.StandardInput.WriteCalls, "ready-deadline: zero-execute-writes");
         process.StandardOutput.Complete();
         process.StandardError.Complete();
@@ -242,11 +242,11 @@ public sealed partial class ChildWorkerLaunchingTests
     {
         var time = new ManualTimeProvider();
         var (process, _, session) = await LaunchByteSessionAsync(943, options: new ChildWorkerLauncherOptions { TimeProvider = time });
-        await time.TimerCreated;
+        await time.OneShotTimerCreated;
 
         time.Advance(TimeSpan.FromTicks(TimeSpan.FromSeconds(30).Ticks + 1));
         var startup = await session.Startup;
-        await time.FirstDisposed;
+        await time.OneShotFirstDisposed;
 
         Assert.IsInstanceOfType<ChildWorkerStartupObservation.ReadyTimedOut>(startup, "after-deadline: timeout");
         Assert.AreEqual(0, process.StandardInput.WriteCalls, "after-deadline: zero-write");
@@ -264,14 +264,14 @@ public sealed partial class ChildWorkerLaunchingTests
     {
         var time = new ManualTimeProvider();
         var (process, sink, session) = await LaunchByteSessionAsync(944, options: new ChildWorkerLauncherOptions { TimeProvider = time });
-        await time.TimerCreated;
+        await time.OneShotTimerCreated;
 
         if (label == "ready-commits-first")
         {
             process.StandardOutput.Write(Encoding.UTF8.GetBytes(ReadyFrame()));
             var startup = await session.Startup;
             Assert.IsInstanceOfType<ChildWorkerStartupObservation.ReadyAccepted>(startup, $"{label}: exact-startup");
-            await time.FirstDisposed;
+            await time.OneShotFirstDisposed;
             time.Advance(TimeSpan.FromSeconds(30));
             Assert.AreEqual(1, process.StandardInput.WriteCalls, $"{label}: exactly-one-write");
             Assert.AreEqual(1, process.StandardInput.FlushCalls, $"{label}: exactly-one-flush");
@@ -301,7 +301,7 @@ public sealed partial class ChildWorkerLaunchingTests
         var time = new ManualTimeProvider();
         var sink = new RecordingSink { BlockCall = 1 };
         var (process, _, session) = await LaunchByteSessionAsync(945, sink: sink, options: new ChildWorkerLauncherOptions { TimeProvider = time });
-        await time.TimerCreated;
+        await time.OneShotTimerCreated;
 
         process.StandardOutput.Write(Encoding.UTF8.GetBytes(ReadyFrame()));
         await sink.BlockedCallEntered;
@@ -476,9 +476,9 @@ public sealed partial class ChildWorkerLaunchingTests
             await session.Startup;
         }
 
-        await time.FirstDisposed;
-        Assert.AreEqual(label == "disposal" ? 2 : 1, time.CreateCalls, $"{label}: one-ready-timer-plus-stop-timer-only-for-live-disposal");
-        Assert.AreEqual(1, time.DisposeCalls, $"{label}: one-timer-disposed");
+        await time.OneShotFirstDisposed;
+        Assert.AreEqual(label == "disposal" ? 2 : 1, time.OneShotCreateCalls, $"{label}: one-ready-timer-plus-stop-timer-only-for-live-disposal");
+        Assert.AreEqual(1, time.OneShotDisposeCalls, $"{label}: one-timer-disposed");
 
         process.StandardOutput.Complete();
         process.StandardError.Complete();
@@ -492,7 +492,7 @@ public sealed partial class ChildWorkerLaunchingTests
             await disposal;
         }
 
-        Assert.AreEqual(label == "disposal" ? 2 : 1, time.DisposeCalls, $"{label}: each-owned-timer-disposed-exactly-once");
+        Assert.AreEqual(label == "disposal" ? 2 : 1, time.OneShotDisposeCalls, $"{label}: each-owned-timer-disposed-exactly-once");
     }
 
     [TestMethod]
@@ -663,7 +663,7 @@ public sealed partial class ChildWorkerLaunchingTests
         Assert.AreEqual(1, sink.AcceptCalls, "in-flight-disposal: only-entered-callback-started");
         Assert.AreEqual(0, process.StandardInput.WriteCalls, "in-flight-disposal: no-execute-write");
         Assert.AreEqual(0, process.StandardInput.FlushCalls, "in-flight-disposal: no-execute-flush");
-        Assert.AreEqual(1, time.CreateCalls, "in-flight-disposal: one-stop-deadline-is-independent-of-infinite-readiness");
+        Assert.AreEqual(1, time.OneShotCreateCalls, "in-flight-disposal: one-stop-deadline-is-independent-of-infinite-readiness");
 
         sink.ReleaseBlockedCall();
         process.StandardOutput.Complete();

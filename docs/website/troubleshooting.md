@@ -73,6 +73,10 @@ The Dashboard may retain `Failed` after the worker has released its resources. T
 
 If a cleanup or communication warning appears after a completed result, the recorded result stays unchanged. The warning does not undo saved changes. Do not paste raw worker output, database credentials, or connection strings into a support report.
 
+Container logs include lifecycle entries for processing, Lookup, and cache workers. Use the same `job_id` to follow a worker from launch through its final `WorkerJobProcessClassified` entry. That final entry follows process exit and output cleanup, so a terminal result alone does not mean cleanup has finished. A role's stopping entry records why shutdown began; its stopped entry can still report a later cleanup failure.
+
+The reported working-set maximum is a periodic sample of that child process only. It is not total container memory or a guaranteed operating-system peak. An unavailable sample means the app could not measure it, not that the worker used zero memory.
+
 ## The service fails to start after an update
 
 Immich ReverseGeo verifies the files needed to start its processing worker when the service starts. Pull or rebuild the complete application image, then recreate the service. Do not copy only the application DLL into an existing container or volume. Check the container logs for the startup message before trying to process assets.

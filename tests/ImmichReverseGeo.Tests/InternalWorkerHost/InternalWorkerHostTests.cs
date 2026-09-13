@@ -1,4 +1,6 @@
 using ImmichReverseGeo.Web.Composition;
+using ImmichReverseGeo.Tests.LifecycleTelemetry;
+using Role = ImmichReverseGeo.Core.ApplicationRole.ApplicationRole;
 using ImmichReverseGeo.Web.WorkerHost;
 using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
 using ImmichReverseGeo.Web.WorkerHost.WorkerStdinRequestLoop;
@@ -752,6 +754,7 @@ public sealed class InternalWorkerHostTests
     [TestMethod]
     public async Task ConfiguredProductionHost_FlushesReadyBeforeAcceptanceAndUsesRegisteredReporterOnce()
     {
+        using var capture = new RoleLogCapture(Role.InternalWorker, null);
         var fixtureRoot = CreateFixtureRoot();
         var request = CreateRequest();
         var lease = new AcceptedLease(request);
@@ -763,6 +766,7 @@ public sealed class InternalWorkerHostTests
         {
             Assert.AreSame(request, receivedRequest, "worker-production-executor-request-reference");
             Assert.AreEqual(1, outputFactory.Output.FlushCount, "worker-production-ready-flushed-before-execution");
+            Assert.HasCount(1, capture.Logs.Entries.Where(entry => entry.Event.Id == 6603));
             var startedAtUtc = clock.GetUtcNow();
             var session = await receivedReporter.OpenRunAsync(receivedRequest, startedAtUtc, cancellationToken);
             var result = new ImmichReverseGeo.Core.Models.ProcessingRunResult(
@@ -792,13 +796,13 @@ public sealed class InternalWorkerHostTests
             ReplaceSingleton<IWorkerPreRequestFinality>(builder.Services, new RecordingPreRequestFinality([]));
             ReplaceSingleton<IWorkerAcceptedRunFinality>(builder.Services, finality);
             ReplaceSingleton<ImmichReverseGeo.Web.Services.IProcessingRunExecutor>(builder.Services, executor);
-            using var host = builder.Build();
-
-            await host.StartAsync();
-            await host.WaitForShutdownAsync().WaitAsync(TimeSpan.FromSeconds(5));
-
+            var host = builder.Build();
             var registeredReporter = host.Services.GetRequiredService<ImmichReverseGeo.Core.Processing.IProcessingEventReporter>();
             Assert.AreSame(registeredReporter, host.Services.GetRequiredService<WorkerNdjsonProcessingEventReporter>(), "worker-production-registered-reporter-alias-identity");
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+            int exitCode = await WorkerHostFactory.RunHostAsync(host, outcomes, capture.Telemetry).WaitAsync(TimeSpan.FromSeconds(5));
+            Assert.AreEqual(130, exitCode);
+            capture.AssertCompleted("host-shutdown", "cancelled");
             Assert.AreEqual(1, acquirer.CallCount, "worker-production-one-acquisition");
             Assert.AreEqual(1, executor.CallCount, "worker-production-one-execution");
             Assert.AreSame(request, executor.Request, "worker-production-executor-exact-request");
@@ -1166,6 +1170,7 @@ public sealed class InternalWorkerHostTests
     [TestCategory("Change23")]
     public async Task ShutdownBeforeAcceptance_ReturnsCancelledWithoutTerminal()
     {
+        using var capture = new RoleLogCapture(Role.InternalWorker, null);
         var fixtureRoot = CreateFixtureRoot();
         var readiness = new BlockingReadiness([]);
         var finality = new RecordingPreRequestFinality([]);
@@ -1179,12 +1184,14 @@ public sealed class InternalWorkerHostTests
                 new StaticAcquirer(InitialProcessingRunAcquisition.EndOfInput()),
                 finality);
             var lifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
-            var run = WorkerHostFactory.RunHostAsync(host);
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+            var run = WorkerHostFactory.RunHostAsync(host, outcomes, capture.Telemetry);
             await readiness.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
             lifetime.StopApplication();
 
             var exitCode = await run.WaitAsync(TimeSpan.FromSeconds(5));
             Assert.AreEqual(130, exitCode, "worker-shutdown-before-request-code");
+            capture.AssertCompleted("host-shutdown", "cancelled", ready: false);
             Assert.AreEqual(0, finality.Outcomes.Count, "worker-shutdown-before-request-no-terminal");
         }
         finally
@@ -1957,6 +1964,48 @@ public sealed class InternalWorkerHostTests
         internal void Complete()
         {
             _completed.TrySetResult();
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change66")]
+    public async Task RoleTelemetry_CompletedWorkerRetainsInitialReasonAfterRootProviderCleanupFailure()
+    {
+        using var capture = new RoleLogCapture(Role.InternalWorker, null);
+        var fixtureRoot = CreateFixtureRoot();
+        var initializer = new TelemetryCleanupInitializer();
+        try
+        {
+            var lease = new AcceptedLease(CreateRequest());
+            var executor = new RecordingExecutor((request, _, _) => Task.FromResult(
+                CreateResult(request, ImmichReverseGeo.Core.Models.ProcessingRunOutcome.Completed)));
+            var builder = CreateAcceptedBuilder(fixtureRoot, lease, executor, new RecordingAcceptedFinality());
+            builder.Services.RemoveAll<IWorkerStartupInitializer>();
+            builder.Services.AddSingleton<IWorkerStartupInitializer>(_ => initializer);
+            var host = builder.Build();
+            var outcomes = host.Services.GetRequiredService<ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator>();
+
+            int exitCode = await WorkerHostFactory.RunHostAsync(host, outcomes, capture.Telemetry).WaitAsync(TimeSpan.FromSeconds(5));
+
+            Assert.AreEqual(5, exitCode);
+            Assert.AreEqual(1, executor.CallCount);
+            Assert.AreEqual(1, initializer.DisposeCalls);
+            capture.AssertCompleted("completed", "failed");
+        }
+        finally
+        {
+            DeleteFixtureRoot(fixtureRoot);
+        }
+    }
+
+    private sealed class TelemetryCleanupInitializer : IWorkerStartupInitializer, IAsyncDisposable
+    {
+        internal int DisposeCalls { get; private set; }
+        public Task InitialiseAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+        public ValueTask DisposeAsync()
+        {
+            DisposeCalls++;
+            return ValueTask.FromException(new IOException("secret cleanup provider token"));
         }
     }
 
@@ -3488,6 +3537,7 @@ public sealed class InternalWorkerHostTests
     [TestCategory("Change23")]
     public async Task Runner_StartAndDisposeOutOfMemory_PreservesFirstFatalReferenceAfterCleanup()
     {
+        using var capture = new RoleLogCapture(Role.InternalWorker, null);
         var outcomes = new ImmichReverseGeo.Core.WorkerProcessExitOutcomes.WorkerProcessExitOutcomeAccumulator();
         using var services = new ServiceCollection().AddSingleton(outcomes).BuildServiceProvider();
         var firstFatal = new OutOfMemoryException("controlled-start-oom");
@@ -3495,11 +3545,12 @@ public sealed class InternalWorkerHostTests
         var host = new FaultingHost(services, firstFatal, laterFatal);
 
         var thrown = await Assert.ThrowsExactlyAsync<OutOfMemoryException>(
-            () => WorkerHostFactory.RunHostAsync(host, outcomes));
+            () => WorkerHostFactory.RunHostAsync(host, outcomes, capture.Telemetry));
 
         Assert.AreSame(firstFatal, thrown, "worker-first-fatal-reference");
         Assert.AreEqual(1, host.DisposeAsyncCount, "worker-first-fatal-disposal-once");
         Assert.IsFalse(outcomes.HasFact, "worker-first-fatal-unmapped");
+        capture.AssertCompleted("startup-failure", "failed", ready: false);
     }
 
     [TestMethod]

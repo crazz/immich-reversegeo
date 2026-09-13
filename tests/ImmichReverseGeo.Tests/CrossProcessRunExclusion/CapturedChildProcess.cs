@@ -33,6 +33,7 @@ internal sealed class CapturedChildProcess : IChildProcess
 
     public Task<int> WaitForExitAsync() => _inner.WaitForExitAsync();
 
+    public ChildWorkingSetObservation ReadWorkingSet() => _inner.ReadWorkingSet();
     public ChildProcessExitState GetExitState() => _inner.GetExitState();
 
     public ChildProcessKillOutcome KillProcessTree() => _inner.KillProcessTree();
