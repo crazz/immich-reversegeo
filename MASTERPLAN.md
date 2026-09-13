@@ -1286,7 +1286,7 @@ Every scheduled check uses the full current-eligibility `EXISTS` observation. No
 
 **Dependencies and sequencing** — Re-read and bind to applied blocks 18–32, 40–45, 47–51, 59, and 65 before implementation; stop rather than mint parallel role/mode/job/origin/PID/classifier/coalescer/timing owners. This change instruments their landed seams without changing protocol bytes, exit precedence, cancellation/kill policy, detector behavior, UI state, coalescing behavior, retry, or scheduling. It follows 65 and supplies stable observations for 67–69 without editing or pre-implementing them.
 
-**OpenSpec** — [66-add-role-process-lifecycle-telemetry](openspec/changes/66-add-role-process-lifecycle-telemetry/)
+**OpenSpec** — [66-add-role-process-lifecycle-telemetry](openspec/changes/archive/2026-09-13-66-add-role-process-lifecycle-telemetry/)
 
 **Apply-time reconciliation** — Final classification logs follow the landed classifier's precedence for intersecting failures and terminal anomalies; an agreeing terminal/exit pair does not erase an independent retained failure. Event 6650 copies the exact final delivery counters and the primary read model's ordinary cadence count for that job owner. The existing cadence owner may expose an additive, frozen per-owner observation while retaining its lifetime totals and behavior; telemetry does not subtract lifetime totals or aggregate unrelated read models.
 
