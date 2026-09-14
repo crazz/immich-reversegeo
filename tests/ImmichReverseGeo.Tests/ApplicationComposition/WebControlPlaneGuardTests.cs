@@ -172,6 +172,11 @@ public sealed class WebControlPlaneGuardTests
     [TestMethod]
     public void StaticGuards_RejectPoisonedSourceProjectRestoreAndCompiledInputsWithTheirPath()
     {
+        Assert.AreEqual("source Probe.razor -> heavy import or activation", ForbiddenSource("@using ImmichReverseGeo.Spatial", "Probe.razor"));
+        Assert.AreEqual("project Probe.csproj -> ImmichReverseGeo.Spatial", ForbiddenProject(
+            XDocument.Parse("<Project><ItemGroup><ProjectReference Include='../ImmichReverseGeo.Spatial/ImmichReverseGeo.Spatial.csproj'/></ItemGroup></Project>"), "Probe.csproj"));
+        Assert.AreEqual("restore Probe.assets -> ImmichReverseGeo.Spatial", ForbiddenNames(["ImmichReverseGeo.Spatial"], "restore Probe.assets"));
+        Assert.AreEqual("compiled Probe.dll -> ImmichReverseGeo.Spatial", ForbiddenNames([typeof(ImmichReverseGeo.Spatial.AdministrativeGeometryCache).Assembly.GetName().Name!], "compiled Probe.dll"));
         Assert.AreEqual("source Probe.razor -> heavy import or activation", ForbiddenSource("@using ImmichReverseGeo.Gadm.Services", "Probe.razor"));
         Assert.AreEqual("project Probe.csproj -> ImmichReverseGeo.Overture", ForbiddenProject(
             XDocument.Parse("<Project><ItemGroup><ProjectReference Include='../ImmichReverseGeo.Overture/ImmichReverseGeo.Overture.csproj'/></ItemGroup></Project>"), "Probe.csproj"));

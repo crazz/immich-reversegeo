@@ -4,6 +4,7 @@ ARG TARGETARCH
 
 COPY Directory.Build.props ./
 COPY global.json ./
+COPY src/ImmichReverseGeo.Spatial/ImmichReverseGeo.Spatial.csproj src/ImmichReverseGeo.Spatial/
 COPY src/ImmichReverseGeo.Core/ImmichReverseGeo.Core.csproj src/ImmichReverseGeo.Core/
 COPY src/ImmichReverseGeo.Overture/ImmichReverseGeo.Overture.csproj src/ImmichReverseGeo.Overture/
 COPY src/ImmichReverseGeo.Gadm/ImmichReverseGeo.Gadm.csproj src/ImmichReverseGeo.Gadm/

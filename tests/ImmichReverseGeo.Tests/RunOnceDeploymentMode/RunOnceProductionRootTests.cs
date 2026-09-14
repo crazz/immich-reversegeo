@@ -1,3 +1,6 @@
+using ImmichReverseGeo.Spatial;
+using NetTopologySuite.Geometries;
+using NetTopologySuite.IO;
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
 using ImmichReverseGeo.Tests.ProcessingRunLocking;
@@ -293,6 +296,29 @@ public sealed class RunOnceProductionRootTests
         Assert.IsFalse(outcomes.HasFact);
         Assert.AreEqual(1, CountOccurrences(stdout.ToString(), "Run started."));
         Assert.AreEqual(0, CountOccurrences(stderr.ToString(), "Run failed:"));
+    }
+
+    [TestMethod]
+    public async Task ProductionRoot_DisposesRetainedSpatialStateBeforeReturningFinalOutcome()
+    {
+        using var root = new TemporaryRunOnceRoot();
+        Directory.CreateDirectory(root.DataDirectory);
+        var observedFile = Path.Combine(root.DataDirectory, "spatial-generation");
+        await File.WriteAllTextAsync(observedFile, "synthetic");
+        var outcomes = new WorkerProcessExitOutcomeAccumulator();
+        var fixture = new ExecutorFixture().EnableCount(0);
+        var host = BuildProductionHost(root, outcomes, new StringWriter(), new StringWriter(), fixture, new RecordingRunLockSession());
+        var cache = host.Services.GetRequiredService<AdministrativeGeometryCache>();
+        var generation = cache.ObserveGeneration(GeometrySource.Gadm, "USA", observedFile);
+        var bytes = new WKBWriter().Write(new WKTReader().Read("POLYGON ((0 0, 10 0, 9 10, 0 10, 0 0))"));
+        Assert.IsTrue(cache.Covers(generation, "area", bytes.Length, () => bytes, new Point(1, 1)));
+        Assert.IsTrue(cache.GetStatistics().AccountedBytes > 0, "The production DI owner must hold a real prepared entry.");
+
+        var exitCode = await RunOnceApplication.RunHostAsync(host, outcomes).WaitAsync(Bound);
+
+        Assert.AreEqual(WorkerProcessExitCodes.Completed, exitCode);
+        Assert.AreEqual(0L, cache.GetStatistics().AccountedBytes, "Final outcome follows spatial-owner cleanup.");
+        Assert.ThrowsExactly<ObjectDisposedException>(() => cache.Covers(generation, "area", bytes.Length, () => bytes, new Point(1, 1)));
     }
 
     private static IHost BuildProductionHost(

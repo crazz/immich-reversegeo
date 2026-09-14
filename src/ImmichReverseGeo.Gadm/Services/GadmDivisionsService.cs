@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Spatial;
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -17,6 +18,7 @@ public class GadmDivisionsService
     private static readonly WKBReader WkbReader = new();
     private static readonly GeometryFactory GeometryFactory = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
 
+    private readonly AdministrativeGeometryCache? _spatialCache;
     private readonly ILogger<GadmDivisionsService> _logger;
     private readonly string _dataDir;
     private readonly Func<string, double, double, CancellationToken, GadmDivisionLookupDiagnostics> _queryOperation;
@@ -29,6 +31,19 @@ public class GadmDivisionsService
         _dataDir = dataDir;
         _geometryContainsOperation = GeometryContains;
         _queryOperation = QueryDivisionAreasFromSqlite;
+    }
+
+    public GadmDivisionsService(ILogger<GadmDivisionsService> logger, string dataDir, AdministrativeGeometryCache spatialCache)
+        : this(logger, dataDir)
+    {
+        _spatialCache = spatialCache ?? throw new ArgumentNullException(nameof(spatialCache));
+    }
+
+    internal GadmDivisionsService(ILogger<GadmDivisionsService> logger, string dataDir,
+        AdministrativeGeometryCache spatialCache, Action<GadmLookupCheckpoint> checkpoint)
+        : this(logger, dataDir, spatialCache)
+    {
+        _checkpoint = checkpoint ?? throw new ArgumentNullException(nameof(checkpoint));
     }
 
     internal GadmDivisionsService(
@@ -201,70 +216,46 @@ public class GadmDivisionsService
         CancellationToken ct)
     {
         ct.ThrowIfCancellationRequested();
+        var country = Path.GetFileNameWithoutExtension(dbPath);
+        var generation = _spatialCache?.ObserveGeneration(GeometrySource.Gadm, country, dbPath);
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false");
         conn.Open();
         ct.ThrowIfCancellationRequested();
+        using var transaction = conn.BeginTransaction(deferred: true);
+        var rows = ReadCandidateMetadata(conn, transaction, lat, lon, ct);
+        if (_spatialCache is not null)
+        {
+            // Retires the acquired generation if replacement raced with opening the
+            // read snapshot. That snapshot can finish but cannot publish stale entries.
+            _spatialCache.ObserveGeneration(GeometrySource.Gadm, country, dbPath);
+        }
 
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = """
-            SELECT
-                id,
-                name,
-                english_type,
-                local_type,
-                admin_level,
-                geom_wkb,
-                bbox_xmin,
-                bbox_ymin,
-                bbox_xmax,
-                bbox_ymax
-            FROM gadm_area
-            WHERE bbox_xmax >= $lon
-              AND bbox_xmin <= $lon
-              AND bbox_ymax >= $lat
-              AND bbox_ymin <= $lat
-            """;
-        cmd.Parameters.AddWithValue("$lon", lon);
-        cmd.Parameters.AddWithValue("$lat", lat);
-
-        ct.ThrowIfCancellationRequested();
-        using var reader = cmd.ExecuteReader();
-        ct.ThrowIfCancellationRequested();
         var point = GeometryFactory.CreatePoint(new Coordinate(lon, lat));
         var candidates = new List<GadmDivisionCandidateDiagnostic>();
         GadmDivisionResult? best = null;
-
-        while (true)
+        foreach (var row in rows)
         {
-            _checkpoint?.Invoke(GadmLookupCheckpoint.BeforeCandidateRowRead);
             ct.ThrowIfCancellationRequested();
-            var hasRow = reader.Read();
-            _checkpoint?.Invoke(GadmLookupCheckpoint.AfterCandidateRowRead);
-            ct.ThrowIfCancellationRequested();
-            if (!hasRow)
+            byte[] LoadGeometry()
             {
-                break;
+                _checkpoint?.Invoke(GadmLookupCheckpoint.BeforeGeometryBlobRead);
+                ct.ThrowIfCancellationRequested();
+                using var blob = conn.CreateCommand();
+                blob.Transaction = transaction;
+                blob.CommandText = "SELECT geom_wkb FROM gadm_area WHERE id = $id";
+                blob.Parameters.AddWithValue("$id", row.Candidate.Id);
+                var bytes = (byte[])blob.ExecuteScalar()!;
+                _checkpoint?.Invoke(GadmLookupCheckpoint.AfterGeometryBlobRead);
+                ct.ThrowIfCancellationRequested();
+                return bytes;
             }
 
+            var geometryContains = row.Candidate.BoundingBoxContainsPoint
+                && (_spatialCache is not null
+                    ? _spatialCache.Covers(generation!, row.Candidate.Id, row.BlobLength, LoadGeometry, point, ct)
+                    : TryGeometryContains(LoadGeometry(), point, _geometryContainsOperation));
             ct.ThrowIfCancellationRequested();
-            var bboxContains = lon >= reader.GetDouble(6)
-                               && lon <= reader.GetDouble(8)
-                               && lat >= reader.GetDouble(7)
-                               && lat <= reader.GetDouble(9);
-            var geometryContains = bboxContains
-                && TryGeometryContains((byte[])reader["geom_wkb"], point, _geometryContainsOperation);
-            ct.ThrowIfCancellationRequested();
-            var bboxArea = Math.Abs((reader.GetDouble(8) - reader.GetDouble(6)) * (reader.GetDouble(9) - reader.GetDouble(7)));
-
-            var candidate = new GadmDivisionResult(
-                reader.GetString(0),
-                reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.GetInt32(4),
-                bboxContains,
-                geometryContains,
-                bboxArea);
+            var candidate = row.Candidate with { GeometryContainsPoint = geometryContains };
 
             var selected = false;
             var decision = "considered: weaker than current GADM best";
@@ -296,6 +287,7 @@ public class GadmDivisionsService
 
         ct.ThrowIfCancellationRequested();
         using var meta = conn.CreateCommand();
+        meta.Transaction = transaction;
         meta.CommandText = "SELECT value FROM _meta WHERE key = 'version'";
         ct.ThrowIfCancellationRequested();
         var version = meta.ExecuteScalar()?.ToString() ?? GadmDivisionsLogic.DatasetVersion;
@@ -306,8 +298,55 @@ public class GadmDivisionsService
         return new GadmDivisionLookupDiagnostics(best, candidates, version);
     }
 
+    private List<CandidateMetadata> ReadCandidateMetadata(
+        SqliteConnection connection, SqliteTransaction transaction, double lat, double lon, CancellationToken ct)
+    {
+        using var cmd = connection.CreateCommand();
+        cmd.Transaction = transaction;
+        cmd.CommandText = """
+            SELECT id, name, english_type, local_type, admin_level, length(geom_wkb),
+                   bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax
+            FROM gadm_area
+            WHERE bbox_xmax >= $lon AND bbox_xmin <= $lon
+              AND bbox_ymax >= $lat AND bbox_ymin <= $lat
+            """;
+        cmd.Parameters.AddWithValue("$lon", lon);
+        cmd.Parameters.AddWithValue("$lat", lat);
+        ct.ThrowIfCancellationRequested();
+        using var reader = cmd.ExecuteReader();
+        ct.ThrowIfCancellationRequested();
+        var rows = new List<CandidateMetadata>();
+        while (true)
+        {
+            _checkpoint?.Invoke(GadmLookupCheckpoint.BeforeCandidateRowRead);
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            _checkpoint?.Invoke(GadmLookupCheckpoint.AfterCandidateRowRead);
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            var bboxContains = lon >= reader.GetDouble(6) && lon <= reader.GetDouble(8)
+                && lat >= reader.GetDouble(7) && lat <= reader.GetDouble(9);
+            var bboxArea = Math.Abs((reader.GetDouble(8) - reader.GetDouble(6)) * (reader.GetDouble(9) - reader.GetDouble(7)));
+            rows.Add(new CandidateMetadata(new GadmDivisionResult(
+                reader.GetString(0), reader.GetString(1),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
+                bboxContains, false, bboxArea), reader.GetInt64(5)));
+        }
+
+        return rows;
+    }
+
+    private sealed record CandidateMetadata(GadmDivisionResult Candidate, long BlobLength);
+
     internal enum GadmLookupCheckpoint
     {
+        BeforeGeometryBlobRead,
+        AfterGeometryBlobRead,
         BeforeCandidateRowRead,
         AfterCandidateRowRead,
         AfterMetadataScalar,

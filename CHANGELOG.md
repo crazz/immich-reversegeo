@@ -6,6 +6,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Added invocation-owned prepared administrative geometry reuse shared by GADM and Overture. Metadata-first SQLite reads avoid materializing geometry blobs on cache hits; bounded admission, active leases and generation retirement preserve source selection and replacement semantics. Web and Core remain free of the Spatial dependency. Settings, cache formats, volumes, airport matching and Immich writes are unchanged. See [architecture](./docs/website/architecture.md#persistent-data-and-temporary-state) and the [opt-in measurement guide](./docs/maintainer/ADMINISTRATIVE_GEOMETRY_MEASUREMENT.md).
+
 - Redesigned the Web UI with shared graphite styles, system fonts, responsive forms and navigation, and distinct primary/destructive/focus states. Dashboard actions now precede counters and full-width status/activity sections; Lookup presents final output before diagnostics. Existing controls, content, handlers, and worker/database behavior are retained.
 
 - Added startup-only deployment modes through `IMMICH_REVERSEGEO_MODE`: only an absent variable defaults to Standard; exact lowercase `standard`, `web-only`, and `run-once` are accepted. Any other present value, including empty, whitespace, padded or case-varied values, fails before startup with exit `2`. Mode is not persisted; changing the container environment requires recreation and a new startup.

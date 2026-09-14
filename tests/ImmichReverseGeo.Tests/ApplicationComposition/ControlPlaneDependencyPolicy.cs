@@ -188,7 +188,7 @@ internal static class ControlPlaneDependencyPolicy
     internal static BoundaryDiagnostic? InspectSource(string source, string owner, BoundaryRole role)
     {
         source = source.Replace("[assembly: InternalsVisibleTo(\"ImmichReverseGeo.Worker\")]", "", StringComparison.Ordinal);
-        return Regex.IsMatch(source, @"ImmichReverseGeo\.(Overture|Gadm|Worker)\b|\b(DuckDB|NetTopologySuite|GeoJSON\w*)\b|\b(Assembly\.Load|NativeLibrary\.Load|DllImport)\b", RegexOptions.CultureInvariant)
+        return Regex.IsMatch(source, @"ImmichReverseGeo\.(Overture|Gadm|Worker|Spatial)\b|\b(DuckDB|NetTopologySuite|GeoJSON\w*)\b|\b(Assembly\.Load|NativeLibrary\.Load|DllImport)\b", RegexOptions.CultureInvariant)
             ? Diagnostic("SourceDependency", role, owner, "heavy namespace or opaque activation", owner, "source -> heavy import or activation") : null;
     }
 
@@ -199,6 +199,7 @@ internal static class ControlPlaneDependencyPolicy
             "ImmichReverseGeo.Worker" => "worker implementation",
             "ImmichReverseGeo.Overture" => "Overture geodata",
             "ImmichReverseGeo.Gadm" => "GADM geodata",
+            "ImmichReverseGeo.Spatial" => "administrative geometry reuse",
             _ when name?.StartsWith("DuckDB", StringComparison.Ordinal) == true => "native/DuckDB",
             _ when name?.StartsWith("NetTopologySuite", StringComparison.Ordinal) == true => "geometry/index/prepared geometry",
             _ when name?.StartsWith("GeoJSON", StringComparison.Ordinal) == true => "geometry reader",
@@ -223,7 +224,7 @@ internal static class ControlPlaneDependencyPolicy
     {
         string? name = type?.Assembly.GetName().Name;
         return name is "ImmichReverseGeo.Web.ControlPlane" or "ImmichReverseGeo.Core"
-            or "ImmichReverseGeo.Worker" or "ImmichReverseGeo.Overture" or "ImmichReverseGeo.Gadm"
+            or "ImmichReverseGeo.Worker" or "ImmichReverseGeo.Overture" or "ImmichReverseGeo.Gadm" or "ImmichReverseGeo.Spatial"
             or "ImmichReverseGeo.Tests";
     }
 

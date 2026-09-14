@@ -11,6 +11,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../ImmichReverseGeo.Spatial/ImmichReverseGeo.Spatial.csproj" />
     <ProjectReference Include="..\\ImmichReverseGeo.Core\\ImmichReverseGeo.Core.csproj" />
   </ItemGroup>
 
