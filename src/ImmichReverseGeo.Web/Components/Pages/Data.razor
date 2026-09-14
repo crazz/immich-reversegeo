@@ -34,7 +34,7 @@
        to prevent endless retries. Clear the list to re-attempt them on the next run.</p>
     <p>@_skippedCount asset(s) permanently skipped.</p>
     <div class="btn-row">
-        <button @onclick="ClearSkipped" class="btn btn-secondary" disabled="@(_skipOperationActive || _skippedCount == 0)">
+        <button @onclick="ClearSkipped" class="btn btn-danger" disabled="@(_skipOperationActive || _skippedCount == 0)">
             Clear Skip List
         </button>
     </div>
