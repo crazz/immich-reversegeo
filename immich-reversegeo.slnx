@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/ImmichReverseGeo.Spatial/ImmichReverseGeo.Spatial.csproj" />
     <Project Path="src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj" />
     <Project Path="src/ImmichReverseGeo.Worker/ImmichReverseGeo.Worker.csproj" />
     <Project Path="src/ImmichReverseGeo.Core/ImmichReverseGeo.Core.csproj" />
@@ -10,6 +11,7 @@
     <Project Path="src/ImmichReverseGeo.Tools.OvertureExport/ImmichReverseGeo.Tools.OvertureExport.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/ImmichReverseGeo.Spatial.Tests/ImmichReverseGeo.Spatial.Tests.csproj" />
     <Project Path="tests/ImmichReverseGeo.Gadm.Tests/ImmichReverseGeo.Gadm.Tests.csproj" />
     <Project Path="tests/ImmichReverseGeo.Legacy.Tests/ImmichReverseGeo.Legacy.Tests.csproj" />
     <Project Path="tests/ImmichReverseGeo.Overture.Tests/ImmichReverseGeo.Overture.Tests.csproj" />

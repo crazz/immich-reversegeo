@@ -53,6 +53,10 @@ Lookup uses the geographic resolution path as a preview: it can prepare caches b
 
 ## Persistent data and temporary state
 
+During a worker job, GADM and Overture administrative lookups reuse geometry that has already been loaded and prepared. Nearby assets can share this work even when their coordinates differ. The two sources share one memory budget; unused entries can be evicted, and a replaced country cache gets fresh geometry. Source preferences, airport matching and the selected location names follow the same rules.
+
+This temporary reuse ends with the worker. A downloaded country cache is therefore different from prepared state in RAM: the next processing pass or Lookup can read the existing disk cache but still needs to prepare geometry again. The reuse budget is one quarter of the detected memory allowance, capped at 1 GiB, with a 128 MiB fallback when no allowance is available. It accounts for geometry and preparation costs; it is not a limit on total container memory. Oversized geometry is evaluated without retaining it, so a smaller memory allowance can reduce the speed benefit.
+
 | Location | Contents | What survives a worker or container restart |
 |---|---|---|
 | `/config` volume | `settings.json` and Web data-protection keys | Saved settings and keys, when the same volume is mounted |

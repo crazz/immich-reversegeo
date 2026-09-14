@@ -63,6 +63,12 @@ Things that affect throughput:
 - max parallelism
 - database latency to the immich PostgreSQL instance
 - first-time per-country cache creation
+- the size and complexity of country boundaries, including optional GADM data
+- available memory for reusing prepared geometry within the current worker
+
+An existing cache file avoids downloading it again. The first query for an area in each worker still loads and prepares its geometry; later assets in that job can reuse it. A separate Lookup or a new processing pass starts a fresh worker. Keep the same image, source settings, assets and CPU/RAM limits when comparing processing times.
+
+Use Logs to distinguish downloads from geographic matching, and check the host's CPU, container RAM and swap during processing. Clearing Overture or GADM caches does not speed up this preparation: it adds another download. If a run approaches its memory limit, reduce parallelism and compare another representative pass before raising it. Very large or unsupported polygons can use the compatible path without prepared reuse.
 
 <div class="step-grid">
   <div class="step-card">
@@ -71,7 +77,7 @@ Things that affect throughput:
   </div>
   <div class="step-card">
     <h3>Then tune settings</h3>
-    <p>Batch size and max parallelism usually make the biggest difference once the needed country data is already present.</p>
+    <p>Compare a representative pass after checking downloads, boundary complexity and memory pressure. Increasing parallelism can increase memory use without improving throughput.</p>
   </div>
 </div>
 

@@ -10,6 +10,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/i
 
 ## Unreleased
 
+- Processing can reuse prepared GADM and Overture boundaries across assets within one worker job, reducing repeated geographic work. Reuse has a shared memory budget and ends with the worker; downloaded caches remain on disk. No Compose, settings or cache migration is needed. See [how reuse affects memory and processing](./architecture.md#persistent-data-and-temporary-state).
+
 - Refreshed the app with a graphite design and layouts that adapt to smaller screens. Dashboard actions are at the top, Lookup shows final values before source details, and long logs wrap for easier reading. Existing controls, settings, and processing behavior are unchanged. See [Using the App](./using-the-app.md).
 
 - Choose Standard for the Web UI with built-in scheduling, Web-only for the UI and manual control, or Run-once for an external scheduler. Set `IMMICH_REVERSEGEO_MODE` to exactly `standard`, `web-only`, or `run-once`. **Only an absent variable defaults to Standard.** Empty, whitespace, padded, case-varied and unknown values stop startup with exit `2`. Mode is read only at startup and is not saved in Settings; recreate the container after changing its environment.

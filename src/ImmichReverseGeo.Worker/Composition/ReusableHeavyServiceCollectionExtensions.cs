@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Spatial;
 using System;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Gadm.Services;
@@ -23,6 +24,7 @@ internal static class ReusableHeavyServiceCollectionExtensions
     {
         ArgumentNullException.ThrowIfNull(services);
 
+        services.AddSingleton<AdministrativeGeometryCache>();
         services.AddSingleton(sp => new OvertureDivisionCacheService(
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<OvertureDivisionCacheService>>(),
             sp.GetRequiredService<StorageOptions>(),
@@ -36,13 +38,15 @@ internal static class ReusableHeavyServiceCollectionExtensions
             sp.GetRequiredService<OverturePlacesService>(),
             sp.GetRequiredService<StorageOptions>().DataDir,
             sp.GetRequiredService<StorageOptions>().BundledDataDir,
-            alpha2 => sp.GetRequiredService<CountryCodeService>().Alpha2ToIso3(alpha2)));
+            alpha2 => sp.GetRequiredService<CountryCodeService>().Alpha2ToIso3(alpha2),
+            sp.GetRequiredService<AdministrativeGeometryCache>()));
         services.AddSingleton(sp => new GadmDivisionCacheService(
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<GadmDivisionCacheService>>(),
             sp.GetRequiredService<StorageOptions>()));
         services.AddSingleton(sp => new GadmDivisionsService(
             sp.GetRequiredService<Microsoft.Extensions.Logging.ILogger<GadmDivisionsService>>(),
-            sp.GetRequiredService<StorageOptions>().DataDir));
+            sp.GetRequiredService<StorageOptions>().DataDir,
+            sp.GetRequiredService<AdministrativeGeometryCache>()));
         services.AddSingleton(sp => new CoordinateLookupSources(
             sp.GetRequiredService<OvertureDivisionsService>(),
             sp.GetRequiredService<OvertureDivisionCacheService>(),
