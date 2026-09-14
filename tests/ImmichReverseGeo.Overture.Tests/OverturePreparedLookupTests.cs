@@ -45,6 +45,11 @@ public sealed class OverturePreparedLookupTests
     [TestMethod]
     public async Task ReplacementDuringReadKeepsOneSnapshotAndCannotPublishRetiredGeometry()
     {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("SQLite on Windows does not share open database handles for deletion; this race exercises Unix replacement semantics.");
+        }
+
         using var fixture = new Fixture();
         using var cache = new AdministrativeGeometryCache(10_000_000);
         var replaced = false;
@@ -71,6 +76,23 @@ public sealed class OverturePreparedLookupTests
         Assert.IsNull(current.Error);
         Assert.AreEqual("replacement", current.Release);
         Assert.IsTrue(current.Candidates.All(x => !x.GeometryContainsPoint), "Same IDs in the new file must use new geometry.");
+    }
+
+    [TestMethod]
+    public async Task ReplacementBetweenQueriesRetiresGeometryOnEveryPlatform()
+    {
+        using var fixture = new Fixture();
+        using var cache = new AdministrativeGeometryCache(10_000_000);
+        var service = fixture.Service(new OvertureDivisionsTestHooks { SpatialCache = cache });
+        var before = await service.FindContainingDivisionAreasAsync(1, 1, "US", "USA");
+        Assert.IsTrue(before.Candidates.Any(x => x.GeometryContainsPoint));
+        var next = fixture.Database + ".replacement";
+        fixture.Create(next, replacement: true);
+        File.Move(next, fixture.Database, overwrite: true);
+        var after = await service.FindContainingDivisionAreasAsync(1, 1, "US", "USA");
+        Assert.IsNull(after.Error);
+        Assert.AreEqual("replacement", after.Release);
+        Assert.IsTrue(after.Candidates.All(x => !x.GeometryContainsPoint), "Closed-file replacement must invalidate the old retained shapes.");
     }
 
     [TestMethod]
