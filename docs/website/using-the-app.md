@@ -16,7 +16,7 @@ Use `Run Now` at the top of the Dashboard to start a manual processing pass imme
 
 The four counters come first, followed by Service Status and the full-width Recent Activity log. Progress appears while a run is active. On smaller screens, navigation stays above the page and controls wrap onto additional rows.
 
-![Dashboard with synthetic processing data](./assets/images/dashboard.png)
+![Dashboard with synthetic processing data](./assets/images/dashboard.jpg)
 
 - it works even if automatic scheduling is turned off
 - it uses your current Settings values for batch size, delay, parallelism, and airport matching
