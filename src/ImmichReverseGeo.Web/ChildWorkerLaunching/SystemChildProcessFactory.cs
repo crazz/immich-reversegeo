@@ -1,0 +1,267 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using ImmichReverseGeo.Web.WorkerCommandInvocation;
+
+namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
+
+internal sealed class SystemChildProcessFactory : IChildProcessFactory
+{
+    public ValueTask<IChildProcess?> StartAsync(ChildProcessStartDescriptor descriptor, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(descriptor);
+        if (!descriptor.RedirectStandardInput || !descriptor.RedirectStandardOutput || !descriptor.RedirectStandardError)
+        {
+            throw new ArgumentException("Child worker streams must be redirected.", nameof(descriptor));
+        }
+
+        var process = new Process { StartInfo = CreateStartInfo(descriptor), EnableRaisingEvents = true };
+        try
+        {
+            if (!process.Start())
+            {
+                process.Dispose();
+                return ValueTask.FromResult<IChildProcess?>(null);
+            }
+
+            return ValueTask.FromResult<IChildProcess?>(new SystemChildProcess(process));
+        }
+        catch
+        {
+            try
+            {
+                process.Dispose();
+            }
+            catch
+            {
+            }
+
+            throw;
+        }
+    }
+
+    internal static void ApplyEnvironmentPolicy(
+        IDictionary<string, string?> environment,
+        ChildProcessEnvironmentPolicy environmentPolicy)
+    {
+        ArgumentNullException.ThrowIfNull(environment);
+        if (ChildProcessEnvironmentPolicyDetails.RemovesReservedProtocolVersion(environmentPolicy))
+        {
+            environment.Remove(ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable);
+        }
+        else if (ChildProcessEnvironmentPolicyDetails.SetsReservedProtocolVersionV2(environmentPolicy))
+        {
+            environment[ChildProcessEnvironmentPolicyDetails.ReservedProtocolVersionVariable] = "2";
+        }
+    }
+
+    internal static ProcessStartInfo CreateStartInfo(ChildProcessStartDescriptor descriptor)
+    {
+        var startInfo = new ProcessStartInfo
+        {
+            FileName = descriptor.ExecutablePath,
+            WorkingDirectory = descriptor.WorkingDirectory,
+            RedirectStandardInput = descriptor.RedirectStandardInput,
+            RedirectStandardOutput = descriptor.RedirectStandardOutput,
+            RedirectStandardError = descriptor.RedirectStandardError,
+            UseShellExecute = descriptor.UseShellExecute,
+            CreateNoWindow = descriptor.CreateNoWindow
+        };
+
+        foreach (var argument in descriptor.Arguments)
+        {
+            startInfo.ArgumentList.Add(argument);
+        }
+
+        ApplyEnvironmentPolicy(startInfo.Environment, descriptor.EnvironmentPolicy);
+        return startInfo;
+    }
+
+    internal sealed class SystemChildProcess : IChildProcess
+    {
+        private readonly Process _process;
+        private readonly TaskCompletionSource<int> _exit = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private bool _disposed;
+
+        internal SystemChildProcess(Process process)
+        {
+            _process = process;
+            StandardInput = _process.StandardInput.BaseStream;
+            StandardOutput = _process.StandardOutput.BaseStream;
+            StandardError = _process.StandardError.BaseStream;
+            // Process raises Exited while holding its own monitor. Reuse that
+            // monitor so HasExited and ExitCode cannot race or invert locks.
+            lock (_process)
+            {
+                _process.Exited += OnExited;
+                ObserveExitUnderLock();
+            }
+        }
+
+        // Borrowed identity for observers; this adapter retains disposal ownership.
+        internal Process NativeProcess => _process;
+
+        public int ProcessId => _process.Id;
+        public Stream StandardInput { get; }
+        public Stream StandardOutput { get; }
+        public Stream StandardError { get; }
+
+        public Task<int> WaitForExitAsync() => _exit.Task;
+
+        public ChildWorkingSetObservation ReadWorkingSet()
+        {
+            // Use the same monitor as Process.Exited, GetExitState and disposal.
+            // No sampler/session callback is invoked while this monitor is held.
+            lock (_process)
+            {
+                if (_disposed || _exit.Task.IsCompletedSuccessfully)
+                {
+                    return ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.ProcessExited);
+                }
+
+                try
+                {
+                    _process.Refresh();
+                    if (_process.HasExited)
+                    {
+                        return ChildWorkingSetObservation.Unavailable(ChildWorkingSetUnavailable.ProcessExited);
+                    }
+
+                    return ChildWorkingSetObservation.Available(_process.WorkingSet64);
+                }
+                catch (Exception failure)
+                {
+                    var reason = failure switch
+                    {
+                        NotSupportedException => ChildWorkingSetUnavailable.NotSupported,
+                        UnauthorizedAccessException or System.Security.SecurityException => ChildWorkingSetUnavailable.AccessDenied,
+                        System.ComponentModel.Win32Exception native when (OperatingSystem.IsWindows()
+                            ? native.NativeErrorCode == 5 : native.NativeErrorCode is 1 or 13) => ChildWorkingSetUnavailable.AccessDenied,
+                        _ => GetExitState() == ChildProcessExitState.Exited
+                            ? ChildWorkingSetUnavailable.ProcessExited : ChildWorkingSetUnavailable.SampleFailed
+                    };
+                    return ChildWorkingSetObservation.Unavailable(reason);
+                }
+            }
+        }
+
+        public ChildProcessExitState GetExitState()
+        {
+            lock (_process)
+            {
+                if (_exit.Task.IsCompletedSuccessfully)
+                {
+                    return ChildProcessExitState.Exited;
+                }
+
+                if (_disposed)
+                {
+                    return ChildProcessExitState.Unavailable;
+                }
+
+                try
+                {
+                    if (!_process.HasExited)
+                    {
+                        return ChildProcessExitState.Alive;
+                    }
+
+                    _exit.TrySetResult(_process.ExitCode);
+                    return ChildProcessExitState.Exited;
+                }
+                catch
+                {
+                    return ChildProcessExitState.Unavailable;
+                }
+            }
+        }
+
+        public ChildProcessKillOutcome KillProcessTree()
+        {
+            lock (_process)
+            {
+                if (GetExitState() == ChildProcessExitState.Exited)
+                {
+                    return ChildProcessKillOutcome.AlreadyExited;
+                }
+
+                try
+                {
+                    _process.Kill(entireProcessTree: true);
+                    return ChildProcessKillOutcome.Requested;
+                }
+                catch (Exception failure)
+                {
+                    // A descendant failure must remain visible even if the root exited.
+                    if (failure is not AggregateException && GetExitState() == ChildProcessExitState.Exited)
+                    {
+                        return ChildProcessKillOutcome.AlreadyExited;
+                    }
+
+                    return NormalizeKillFailure(failure);
+                }
+            }
+        }
+
+        internal static ChildProcessKillOutcome NormalizeKillFailure(Exception failure)
+        {
+            return failure switch
+            {
+                UnauthorizedAccessException or System.Security.SecurityException => ChildProcessKillOutcome.PermissionDenied,
+                System.ComponentModel.Win32Exception native when (OperatingSystem.IsWindows()
+                    ? native.NativeErrorCode == 5
+                    : native.NativeErrorCode is 1 or 13) => ChildProcessKillOutcome.PermissionDenied,
+                NotSupportedException => ChildProcessKillOutcome.Unsupported,
+                _ => ChildProcessKillOutcome.Failed
+            };
+        }
+
+        public ValueTask DisposeAsync()
+        {
+            lock (_process)
+            {
+                if (_disposed)
+                {
+                    return ValueTask.CompletedTask;
+                }
+
+                _disposed = true;
+                _process.Exited -= OnExited;
+                _process.Dispose();
+            }
+
+            return ValueTask.CompletedTask;
+        }
+
+        private void OnExited(object? sender, EventArgs args)
+        {
+            lock (_process)
+            {
+                if (_disposed || _exit.Task.IsCompleted)
+                {
+                    return;
+                }
+
+                ObserveExitUnderLock();
+            }
+        }
+
+        private void ObserveExitUnderLock()
+        {
+            try
+            {
+                if (_process.HasExited)
+                {
+                    _exit.TrySetResult(_process.ExitCode);
+                }
+            }
+            catch (InvalidOperationException exception)
+            {
+                _exit.TrySetException(exception);
+            }
+        }
+    }
+}

@@ -69,14 +69,27 @@ public static class OvertureDataAccess
         throw new InvalidCastException($"Unsupported blob value type '{value.GetType().FullName}'.");
     }
 
-    public static bool TryGeometryContains(byte[] wkb, Point point)
+    public static bool TryGeometryContains(byte[] wkb, Point point) =>
+        TryGeometryContains(wkb, point, static (candidateWkb, candidatePoint) =>
+        {
+            var geometry = WkbReader.Read(candidateWkb);
+            return geometry.Covers(candidatePoint) || geometry.Distance(candidatePoint) <= 0.00015;
+        });
+
+    internal static bool TryGeometryContains(
+        byte[] wkb,
+        Point point,
+        Func<byte[], Point, bool> geometryOperation)
     {
         try
         {
-            var geometry = WkbReader.Read(wkb);
-            return geometry.Covers(point) || geometry.Distance(point) <= 0.00015;
+            return geometryOperation(wkb, point);
         }
-        catch
+        catch (ParseException)
+        {
+            return false;
+        }
+        catch (TopologyException)
         {
             return false;
         }

@@ -1,0 +1,1 @@
+{"protocol":"immich-reversegeo.worker","version":1,"direction":"worker-to-controller","category":"activity","type":"activity-started","sequence":5,"timestampUtc":"2026-08-29T12:00:03.0000000Z","runId":"01234567-89ab-cdef-0123-456789abcdef","payload":{"activityId":"fedcba98-7654-3210-fedc-ba9876543210","label":"cache download"}}

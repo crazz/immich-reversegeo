@@ -1,0 +1,1 @@
+{"protocol":"immich-reversegeo.worker","version":1,"direction":"worker-to-controller","category":"lifecycle","type":"eligibility-determined","sequence":3,"timestampUtc":"2026-08-29T12:00:01.0000000Z","runId":"01234567-89ab-cdef-0123-456789abcdef","payload":{"eligibleCount":3}}

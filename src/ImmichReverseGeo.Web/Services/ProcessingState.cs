@@ -2,6 +2,9 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
+using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
 
 namespace ImmichReverseGeo.Web.Services;
 
@@ -10,8 +13,40 @@ namespace ImmichReverseGeo.Web.Services;
 /// All mutations are thread-safe via Interlocked or lock.
 /// UI subscribes to OnChanged to receive real-time updates.
 /// </summary>
-public class ProcessingState
+public class ProcessingState : IDisposable, IAsyncDisposable
 {
+    private readonly object _notificationGate = new();
+    private readonly ReadModelNotificationCadence? _notificationCadence;
+    private object _notificationOwner = new();
+    private long _notificationRevision;
+    private bool _disposed;
+
+    public ProcessingState()
+    {
+    }
+
+    internal ProcessingState(TimeProvider time, WorkerEventDeliveryPolicy policy)
+    {
+        policy.Validate();
+        _notificationCadence = new(time, policy.NotificationCadence, DispatchNotificationAsync);
+        _notificationCadence.Bind(_notificationOwner);
+    }
+
+    internal NotificationCadenceObservation? NotificationObservation => _notificationCadence?.Observation;
+
+    internal ReadModelNotificationCadence.OwnerObservation? CaptureNotificationOwner()
+    {
+        lock (_notificationGate)
+        {
+            return _notificationCadence?.CaptureOwner(_notificationOwner);
+        }
+    }
+
+    internal void CompleteNotificationOwner(ReadModelNotificationCadence.OwnerObservation? observation)
+    {
+        _notificationCadence?.CompleteOwner(observation);
+    }
+
     private volatile bool _isRunning;
     private long _totalUnprocessed;
     private readonly object _stateLock = new();
@@ -23,9 +58,9 @@ public class ProcessingState
 
     public bool IsRunning => _isRunning;
     public long TotalUnprocessed => Volatile.Read(ref _totalUnprocessed);
-    public long ProcessedThisRun => Volatile.Read(ref _processedThisRun);
-    public long ErrorsThisRun => Volatile.Read(ref _errorsThisRun);
-    public long SkippedThisRun => Volatile.Read(ref _skippedThisRun);
+    public long ProcessedThisRun => Volatile.Read(ref _progress).Processed;
+    public long ErrorsThisRun => Volatile.Read(ref _progress).Errors;
+    public long SkippedThisRun => Volatile.Read(ref _progress).Skipped;
     public DateTime? LastRunStarted
     {
         get { lock (_stateLock) { return _lastRunStarted; } }
@@ -64,6 +99,8 @@ public class ProcessingState
 
     public IDisposable BeginActivity(string activity)
     {
+        var scope = new ActivityScope(this, activity);
+
         lock (_activityLock)
         {
             _activityCounts.TryGetValue(activity, out var currentCount);
@@ -71,8 +108,24 @@ public class ProcessingState
             _currentActivity = activity;
         }
 
-        Notify();
-        return new ActivityScope(this, activity);
+        try
+        {
+            Notify();
+            return scope;
+        }
+        catch
+        {
+            try
+            {
+                scope.Dispose();
+            }
+            catch
+            {
+                // Preserve the original observer failure after the activity is released.
+            }
+
+            throw;
+        }
     }
 
     public event Action? OnChanged;
@@ -83,16 +136,28 @@ public class ProcessingState
     /// </summary>
     public void MarkPending()
     {
+        lock (_notificationGate)
+        {
+            _notificationOwner = new object();
+            _notificationRevision = 0;
+            _notificationCadence?.Bind(_notificationOwner);
+        }
+
         _isRunning = true;
         Notify();
+    }
+
+    internal void ClearPending()
+    {
+        _isRunning = false;
+        Notify();
+        FlushFinalNotification();
     }
 
     public void StartRun(long totalUnprocessed)
     {
         _isRunning = true;
-        Interlocked.Exchange(ref _processedThisRun, 0);
-        Interlocked.Exchange(ref _errorsThisRun, 0);
-        Interlocked.Exchange(ref _skippedThisRun, 0);
+        Interlocked.Exchange(ref _progress, ProgressSnapshot.Empty);
         Volatile.Write(ref _totalUnprocessed, totalUnprocessed);
         lock (_stateLock)
         {
@@ -104,13 +169,13 @@ public class ProcessingState
 
     public void IncrementProcessed()
     {
-        Interlocked.Increment(ref _processedThisRun);
+        UpdateProgress(snapshot => snapshot with { Processed = checked(snapshot.Processed + 1) });
         Notify();
     }
 
     public void IncrementError(string message)
     {
-        Interlocked.Increment(ref _errorsThisRun);
+        UpdateProgress(snapshot => snapshot with { Errors = checked(snapshot.Errors + 1) });
         lock (_stateLock)
         {
             _lastError = message;
@@ -121,11 +186,130 @@ public class ProcessingState
 
     public void IncrementSkipped()
     {
-        Interlocked.Increment(ref _skippedThisRun);
+        UpdateProgress(snapshot => snapshot with { Skipped = checked(snapshot.Skipped + 1) });
+        Notify();
+    }
+
+    internal void ApplyProgress(long updatedCount, long skippedCount, long failedCount)
+    {
+        Interlocked.Exchange(ref _progress, new ProgressSnapshot(updatedCount, skippedCount, failedCount));
+        Notify();
+    }
+
+    internal void ReportErrorDiagnostic(string message)
+    {
+        lock (_stateLock)
+        {
+            _lastError = message;
+        }
+
+        AppendLog($"[ERROR] {message}");
+    }
+
+    internal void RestoreFatalFailureSnapshot(long updatedCount, long skippedCount, long failedCount, string fatalMessage)
+    {
+        var errors = checked(failedCount + 1);
+        Interlocked.Exchange(ref _progress, new ProgressSnapshot(updatedCount, skippedCount, errors));
+        _isRunning = false;
+        lock (_activityLock)
+        {
+            _currentActivity = null;
+            _activityCounts.Clear();
+        }
+
+        lock (_stateLock)
+        {
+            _lastError = fatalMessage;
+            _lastRunCompleted = DateTime.UtcNow;
+        }
+
+        var summary = $"Run complete. Processed={updatedCount} Skipped={skippedCount} Errors={errors}";
+        lock (_recentLog)
+        {
+            var retained = _recentLog.ToList();
+            if (retained.Count > 0 && retained[^1].Contains("Run complete. Processed=", StringComparison.Ordinal))
+            {
+                retained.RemoveAt(retained.Count - 1);
+            }
+
+            if (retained.Count > 0 && retained[^1].EndsWith($"[ERROR] {fatalMessage}", StringComparison.Ordinal))
+            {
+                retained.RemoveAt(retained.Count - 1);
+            }
+
+            retained.Add($"[{DateTime.UtcNow:HH:mm:ss}] [ERROR] {fatalMessage}");
+            retained.Add($"[{DateTime.UtcNow:HH:mm:ss}] {summary}");
+            _recentLog.Clear();
+            foreach (var line in retained.TakeLast(100))
+            {
+                _recentLog.Enqueue(line);
+            }
+        }
+
+        Notify();
+    }
+
+    internal void RestoreTerminalSnapshot(
+        long updatedCount,
+        long skippedCount,
+        long failedCount,
+        ProcessingRunOutcome outcome,
+        string? failureMessage,
+        string? priorLastError,
+        DateTime completedAt,
+        IReadOnlyList<string> priorLog)
+    {
+        ArgumentNullException.ThrowIfNull(priorLog);
+
+        var errors = outcome == ProcessingRunOutcome.Failed
+            ? failedCount == long.MaxValue ? long.MaxValue : failedCount + 1
+            : failedCount;
+        var fatalMessage = outcome == ProcessingRunOutcome.Failed
+            ? $"Fatal: {failureMessage}"
+            : null;
+
+        Interlocked.Exchange(ref _progress, new ProgressSnapshot(updatedCount, skippedCount, errors));
+        _isRunning = false;
+        lock (_activityLock)
+        {
+            _currentActivity = null;
+            _activityCounts.Clear();
+        }
+
+        lock (_stateLock)
+        {
+            _lastError = fatalMessage ?? priorLastError;
+            _lastRunCompleted = completedAt;
+        }
+
+        var messages = priorLog.ToList();
+        var timestamp = DateTime.UtcNow;
+        if (outcome == ProcessingRunOutcome.Cancelled)
+        {
+            messages.Add($"[{timestamp:HH:mm:ss}] Run cancelled.");
+        }
+        else if (fatalMessage is not null)
+        {
+            messages.Add($"[{timestamp:HH:mm:ss}] [ERROR] {fatalMessage}");
+        }
+
+        messages.Add($"[{timestamp:HH:mm:ss}] Run complete. Processed={updatedCount} Skipped={skippedCount} Errors={errors}");
+        lock (_recentLog)
+        {
+            _recentLog.Clear();
+            foreach (var line in messages.TakeLast(100))
+            {
+                _recentLog.Enqueue(line);
+            }
+        }
+
         Notify();
     }
 
     public void CompleteRun()
+        => CompleteRun(DateTime.UtcNow);
+
+    internal void CompleteRun(DateTime completedAt)
     {
         _isRunning = false;
         lock (_activityLock)
@@ -135,7 +319,7 @@ public class ProcessingState
         }
         lock (_stateLock)
         {
-            _lastRunCompleted = DateTime.UtcNow;
+            _lastRunCompleted = completedAt;
         }
         Notify();
     }
@@ -162,8 +346,111 @@ public class ProcessingState
         }
     }
 
-    private long _processedThisRun, _errorsThisRun, _skippedThisRun;
-    private void Notify() => OnChanged?.Invoke();
+    internal ProgressSnapshot ReadProgressSnapshot() => Volatile.Read(ref _progress);
+
+    private void UpdateProgress(Func<ProgressSnapshot, ProgressSnapshot> update)
+    {
+        while (true)
+        {
+            var current = Volatile.Read(ref _progress);
+            var next = update(current);
+            if (ReferenceEquals(Interlocked.CompareExchange(ref _progress, next, current), current))
+            {
+                return;
+            }
+        }
+    }
+
+    private ProgressSnapshot _progress = ProgressSnapshot.Empty;
+    internal sealed record ProgressSnapshot(long Processed, long Skipped, long Errors)
+    {
+        public static ProgressSnapshot Empty { get; } = new(0, 0, 0);
+    }
+
+    private void Notify()
+    {
+        if (_notificationCadence is null)
+        {
+            OnChanged?.Invoke();
+            return;
+        }
+
+        lock (_notificationGate)
+        {
+            if (!_disposed)
+            {
+                _notificationCadence.Signal(_notificationOwner, ++_notificationRevision);
+            }
+        }
+    }
+
+    internal void FlushFinalNotification()
+    {
+        lock (_notificationGate)
+        {
+            if (!_disposed)
+            {
+                _notificationCadence?.Signal(_notificationOwner, _notificationRevision, final: true);
+            }
+        }
+    }
+
+    private ValueTask DispatchNotificationAsync(object owner, long revision)
+    {
+        Action? changed;
+        lock (_notificationGate)
+        {
+            if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+            {
+                return ValueTask.CompletedTask;
+            }
+
+            changed = OnChanged;
+        }
+
+        if (changed is not null)
+        {
+            foreach (Action subscriber in changed.GetInvocationList())
+            {
+                lock (_notificationGate)
+                {
+                    if (_disposed || !ReferenceEquals(owner, _notificationOwner))
+                    {
+                        return ValueTask.CompletedTask;
+                    }
+                }
+
+                try
+                {
+                    subscriber();
+                }
+                catch
+                {
+                    // One disconnected component cannot prevent the others refreshing.
+                }
+            }
+        }
+
+        return ValueTask.CompletedTask;
+    }
+
+    public void Dispose()
+    {
+        lock (_notificationGate)
+        {
+            _disposed = true;
+            _notificationCadence?.Dispose();
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        if (_notificationCadence is not null)
+        {
+            await _notificationCadence.DisposeAsync().ConfigureAwait(false);
+        }
+    }
 
     private void EndActivity(string activity)
     {

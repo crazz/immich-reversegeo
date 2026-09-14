@@ -1,0 +1,9 @@
+{
+  "Id": "overture:division-area:fixture-che",
+  "Name": "Fixture Region",
+  "Release": "2026-09-09.0",
+  "MinLongitude": 7,
+  "MinLatitude": 46,
+  "MaxLongitude": 9,
+  "MaxLatitude": 48
+}

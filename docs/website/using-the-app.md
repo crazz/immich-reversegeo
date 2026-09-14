@@ -8,6 +8,7 @@ This page covers the day-to-day UI for Immich ReverseGeo after setup is complete
 
 For install-time settings such as database values, schedules, and processing limits, see [Configuration](./configuration.md).
 For a source-by-source explanation of the geographic data behind the app, see [Data Sources](./data-sources.md).
+These pages are available in Standard and Web-only. For external scheduling without a UI, see [Deployment Modes](./deployment-modes.md).
 
 ## Dashboard
 
@@ -16,7 +17,25 @@ Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 - it works even if automatic scheduling is turned off
 - it uses your current Settings values for batch size, delay, parallelism, and airport matching
 - the Dashboard shows live progress, recent activity, and the last completed run
-- `Cancel` stops the current run
+- `Stop` requests cancellation of the current run; `Stopping…` remains visible while it finishes and releases resources
+
+Wait for the run to finish before starting another pass. Work that does not observe cancellation, such as a synchronous native operation, can take longer to stop; after a bounded grace period the app can force-stop the worker's process tree. Stopping does not undo location updates already written.
+
+Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. The Dashboard and Logs continue to show the run while that worker is active.
+
+During busy runs, progress and activity displays refresh up to ten times per second. Counters can jump over intermediate values. Completion, cancellation, and failure updates appear as soon as the worker result and cleanup allow. This display pacing also applies to Lookup and cache refreshes; it does not discard worker logs or change which assets are processed.
+
+The Service Status card stays visible while database statistics load or when the database is unavailable. It shows:
+
+- **Deployment mode:** `Standard` or `Web-only`
+- **Internal scheduling:** whether this Web host permits the built-in scheduler; your saved schedule still controls whether Standard actually runs it
+- **ProcessAssets worker:** `Idle`, `Starting`, `Running`, `Cancelling`, or `Failed`
+
+Web-only disables the built-in scheduler without changing your saved schedule, and manual Dashboard runs remain available. Run-once starts no Web UI, so it has no Service Status card.
+
+`Failed` remains visible so an unexpected worker failure does not immediately look idle. Open Logs for the recorded processing details. The next worker start clears the retained failure; restarting the Web host creates a fresh `Idle` status.
+
+See the [worker state table](./deployment-modes.md#worker-status-and-recovery) for each label. After a failure, inspect Logs, correct the cause, verify the previous worker and cleanup have finished, and then explicitly start a new attempt. The app does not replace or replay a failed worker request automatically. Saved location changes and published caches remain saved.
 
 ## Lookup
 
@@ -27,6 +46,14 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 - `Include bundled airport infrastructure lookup` lets you test with or without airport matching for that lookup
 - `Include live Overture Places lookup` adds an extra live place search for debugging, but it is slower and not needed for normal use
 - `Prefer cached GADM administrative areas` switches the administrative area part of the lookup to an experimental on-demand GADM cache for that country; country detection still starts with the bundled Overture country data
+
+Lookup starts a temporary isolated worker in both Standard and Web-only mode. While it is checking availability, starting, or running, the coordinate and source options stay locked. The page shows the current lookup step and any active cache preparation. `Cancel` requests a stop and remains in `Cancelling…` until the worker has exited and its output has finished draining.
+
+If processing, another lookup, cache refresh, or coordinated maintenance owns the local work slot, the page reports that it is busy and starts no second worker. If the worker cannot start or stops without a valid result, Lookup shows a short safe failure message. It does not switch to an in-process resolver. Retry only after the previous operation and cleanup have finished and any reported cause is corrected.
+
+Lookup is always a preview. It may download or read geographic caches, but it does not update an Immich asset or write the displayed city, state, or country to `asset_exif`.
+
+Optional GADM data is restricted to academic and other non-commercial use; check the [license guidance](./data-sources.md#optional-gadm-administrative-data) before selecting it. Compare the Lookup result before enabling it for bulk processing.
 
 ## Data tools
 
@@ -45,7 +72,43 @@ The Data area contains maintenance tools that change downloaded caches or Immich
 | `Re-download GADM cache` | Replaces one downloaded GADM country cache with a fresh copy. |
 | `Delete All GADM Caches` | Removes every downloaded GADM cache so they will be fetched again on demand later. |
 
-The Reset Immich Geo Data page only clears reverse geo values in `asset_exif`. It does not touch any other Immich metadata.
+### Administrative cache inventory
+
+Open **Administrative Areas** to inspect downloaded Overture and GADM caches. The table shows each discovered country cache, its current storage status, version or release when available, file size, download time, and last-modified time. It does not scan administrative-area rows to calculate an area count, so opening the page does not load the geographic data.
+
+Use the source and country filters to narrow the list. `Available` means the expected cache schema can be read. `In progress` means Immich ReverseGeo found temporary work for a cache that has not been published yet. `Invalid`, `Unreadable`, or `Unsafe` identifies a cache that should not be used as ready data. If a source is marked `Truncated`, the directory exceeded the inventory safety limit; the page discards that source's partial list instead of presenting it as complete. Refresh the page after cache work finishes to read storage again.
+
+`Delete All` is available separately for each source only when that source's inventory is complete. If a source is truncated, unreadable, or unsafe, correct the reported cache-directory issue and refresh the page before deleting all caches for that source. A complete source remains available even when the other source is incomplete.
+
+Keep the `/data` volume writable only by Immich ReverseGeo and trusted administrators. The inventory refuses links it observes and discards detected file replacements, but it is not a security boundary against an untrusted process changing a path during the read.
+
+### Deleting administrative caches
+
+Select a delete action, then confirm the named source. Deletion removes only the selected final `.db` file; it does not clear temporary work from a refresh. `Delete All` continues past ordinary filesystem failures and reports separate Deleted, Missing, Invalid, and Failed counts.
+
+Deletion shares the same local exclusion slot as processing, Lookup, and cache refreshes. A `Busy` or `Unavailable` request does not delete or reload anything and is not queued. Retry a busy request after the active operation finishes. Once deletion starts it cannot be cancelled; the controls stay disabled until the result is final and the page has reloaded the current cache list.
+
+This protection applies within one Immich ReverseGeo Web process. If multiple Web containers share `/data`, run one interactive Web container while deleting caches when you need strict exclusion across the shared volume.
+
+### Re-downloading an administrative cache
+
+`Re-download` starts a temporary worker that builds and validates a fresh cache before replacing the current one. The page shows named steps such as downloading, exporting, validating, and publishing when they apply. It also shows one `Cancel` action while the refresh can be cancelled. Cache controls stay disabled until the worker has finished and cleanup is complete.
+
+Cache refreshes share one heavy-work slot with processing and Lookup in each running Immich ReverseGeo Web process. If the page reports `Busy`, wait for the active operation to finish, then select `Re-download` again. If it reports `Unavailable`, resolve the displayed worker availability problem and retry. Refresh requests are not queued or replayed automatically.
+
+If download, export, validation, or publication preparation fails, the existing valid cache remains available. Cancelling before publication also keeps that cache. If cancellation arrives just after a validated replacement was published, the refresh can still end as cancelled while the new valid cache appears after the page reloads its actual status. A cancelled attempt is never reported as successful.
+
+### Resetting Immich location data
+
+The **Reset Immich Geo Data** page only clears `city`, `state`, and `country` in Immich's location records. It does not delete assets, change other metadata, or modify downloaded geographic caches. Make a database backup before resetting a large library.
+
+**Reset All Data** keeps its confirmation step and also clears the complete skip list. **Reset Selected Items** accepts asset GUIDs separated by spaces, commas, semicolons, or lines; duplicates are handled once, malformed values are reported, and at least one valid GUID is required. Its skip-list cleanup includes every valid requested ID, even when an asset already had no location value to clear. **Reset Matching City**, **Reset Matching State**, and **Reset Matching Country** use the exact selected value, consider non-deleted assets, and clean skipped tracking only for records actually cleared. Reset All Data and Reset Selected Items keep their broader existing asset scope. Matching resets need no extra confirmation. The Data-page **Clear Skip List** changes only skipped-asset tracking and also needs no confirmation.
+
+Reset work shares the same local slot as processing, Lookup, cache refresh, and cache deletion. A busy request fails immediately and is not queued. Once a reset starts, its controls stay disabled until the database work and result are final; there is no Cancel action. The page then reloads its location choices or skipped count from storage.
+
+Immich is updated first and the skip list second. A completed result shows the actual count for each store. If Immich commits but the skip-list update fails, the result remains partial and offers **Retry Skip List Cleanup**. That retry does not repeat the Immich update. Permission, read-only, connection, or storage failures are shown separately, and a later reload failure does not replace the completed mutation result.
+
+This coordination applies within one Standard or Web-only Web process. For strict exclusion during a reset, run one interactive Web container and do not run a separate run-once process, private worker, database client, or direct `skipped.db` writer at the same time.
 
 ## Logs
 

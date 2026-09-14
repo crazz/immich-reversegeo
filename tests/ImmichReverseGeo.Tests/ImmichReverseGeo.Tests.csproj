@@ -5,6 +5,18 @@
     <LangVersion>latest</LangVersion>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
+    <WorkerProcessFixtureProject>$(MSBuildThisFileDirectory)..\ImmichReverseGeo.WorkerProcessFixture\ImmichReverseGeo.WorkerProcessFixture.csproj</WorkerProcessFixtureProject>
+    <WorkerProcessFixtureAssemblyName>ImmichReverseGeo.WorkerProcessFixture</WorkerProcessFixtureAssemblyName>
+    <WorkerProcessFixtureTargetFramework>net10.0</WorkerProcessFixtureTargetFramework>
+    <WorkerProcessFixtureStageDirectory>worker-process-fixture</WorkerProcessFixtureStageDirectory>
+    <CrossProcessRunLockTestAppHostProject>$(MSBuildThisFileDirectory)..\ImmichReverseGeo.CrossProcessRunLockTestAppHost\ImmichReverseGeo.CrossProcessRunLockTestAppHost.csproj</CrossProcessRunLockTestAppHostProject>
+    <CrossProcessRunLockTestAppHostAssemblyName>ImmichReverseGeo.CrossProcessRunLockTestAppHost</CrossProcessRunLockTestAppHostAssemblyName>
+    <CrossProcessRunLockTestAppHostTargetFramework>net10.0</CrossProcessRunLockTestAppHostTargetFramework>
+    <CrossProcessRunLockTestAppHostStageDirectory>cross-process-run-lock-apphost</CrossProcessRunLockTestAppHostStageDirectory>
+    <ProductionWorkerAppHostProject>$(MSBuildThisFileDirectory)..\..\src\ImmichReverseGeo.Host\ImmichReverseGeo.Host.csproj</ProductionWorkerAppHostProject>
+    <ProductionWorkerAppHostAssemblyName>ImmichReverseGeo.Web</ProductionWorkerAppHostAssemblyName>
+    <ProductionWorkerAppHostTargetFramework>net10.0</ProductionWorkerAppHostTargetFramework>
+    <ProductionWorkerAppHostStageDirectory>production-worker-apphost</ProductionWorkerAppHostStageDirectory>
   </PropertyGroup>
 
   <ItemGroup>
@@ -16,14 +28,172 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\..\src\ImmichReverseGeo.Core\ImmichReverseGeo.Core.csproj" />
-    <ProjectReference Include="..\..\src\ImmichReverseGeo.Overture\ImmichReverseGeo.Overture.csproj" />
-    <ProjectReference Include="..\..\src\ImmichReverseGeo.Web\ImmichReverseGeo.Web.csproj" />
+    <Compile Include="..\CrossProcessRunExclusion.Shared\PostgresLockOwnerQuery.cs" Link="CrossProcessRunExclusion.Shared\PostgresLockOwnerQuery.cs" />
   </ItemGroup>
 
   <ItemGroup>
-    <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\iso3166.json" Link="data/iso3166.json" CopyToOutputDirectory="PreserveNewest" />
-    <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\defaults\city-resolver-profiles.json" Link="data\city-resolver-profiles.json" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="..\..\src\ImmichReverseGeo.Core\ImmichReverseGeo.Core.csproj" />
+    <ProjectReference Include="..\..\src\ImmichReverseGeo.Overture\ImmichReverseGeo.Overture.csproj" />
+    <ProjectReference Include="..\..\src\ImmichReverseGeo.Web\ImmichReverseGeo.Web.csproj" />
+    <ProjectReference Include="../../src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="../../src/ImmichReverseGeo.Worker/ImmichReverseGeo.Worker.csproj" />
+    <ProjectReference Include="$(WorkerProcessFixtureProject)" ReferenceOutputAssembly="false" />
+    <ProjectReference Include="$(CrossProcessRunLockTestAppHostProject)" ReferenceOutputAssembly="false" />
   </ItemGroup>
+
+  <ItemGroup>
+    <Content Include="..\..\src\ImmichReverseGeo.Core\Countries\iso3166.json" Link="data/iso3166.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="..\..\src\ImmichReverseGeo.Web\bundled-data\defaults\city-resolver-profiles.json" Link="data\city-resolver-profiles.json" CopyToOutputDirectory="PreserveNewest" />
+    <None Update="change12-verification-evidence.json" CopyToOutputDirectory="PreserveNewest" />
+    <Content Include="WorkerProtocol\Compatibility\Fixtures\v1\**\*" CopyToOutputDirectory="PreserveNewest" />
+    <EmbeddedResource Include="processing-run-executor-contracts.json" LogicalName="ImmichReverseGeo.Tests.processing-run-executor-contracts.json" />
+  </ItemGroup>
+
+  <Target Name="StageWorkerProcessFixtureForBuild" AfterTargets="Build">
+    <MSBuild Projects="$(WorkerProcessFixtureProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(WorkerProcessFixtureTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_WorkerProcessFixtureTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_WorkerProcessFixtureRuntimeFile Include="%(_WorkerProcessFixtureTargetPath.RootDir)%(_WorkerProcessFixtureTargetPath.Directory)**\*" />
+      <_WorkerProcessFixtureAppHost Include="@(_WorkerProcessFixtureRuntimeFile)"
+                                            Condition="'%(Filename)%(Extension)' == '$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)'" />
+    </ItemGroup>
+    <Error Condition="'@(_WorkerProcessFixtureAppHost)' == ''"
+           Text="Worker-process fixture apphost was not built: $(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)." />
+    <Copy SourceFiles="@(_WorkerProcessFixtureRuntimeFile)"
+          DestinationFiles="@(_WorkerProcessFixtureRuntimeFile->'$(TargetDir)$(WorkerProcessFixtureStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(TargetDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Worker-process fixture apphost was not staged to $(TargetDir)$(WorkerProcessFixtureStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(TargetDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
+
+  <Target Name="StageWorkerProcessFixtureForPublish" AfterTargets="Publish">
+    <MSBuild Projects="$(WorkerProcessFixtureProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(WorkerProcessFixtureTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_WorkerProcessFixturePublishTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_WorkerProcessFixturePublishRuntimeFile Include="%(_WorkerProcessFixturePublishTargetPath.RootDir)%(_WorkerProcessFixturePublishTargetPath.Directory)**\*" />
+      <_WorkerProcessFixturePublishAppHost Include="@(_WorkerProcessFixturePublishRuntimeFile)"
+                                                   Condition="'%(Filename)%(Extension)' == '$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)'" />
+    </ItemGroup>
+    <Error Condition="'@(_WorkerProcessFixturePublishAppHost)' == ''"
+           Text="Worker-process fixture apphost was not built: $(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)." />
+    <Copy SourceFiles="@(_WorkerProcessFixturePublishRuntimeFile)"
+          DestinationFiles="@(_WorkerProcessFixturePublishRuntimeFile->'$(PublishDir)$(WorkerProcessFixtureStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Worker-process fixture apphost was not staged to $(PublishDir)$(WorkerProcessFixtureStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(PublishDir)$(WorkerProcessFixtureStageDirectory)/$(WorkerProcessFixtureAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
+
+  <Target Name="StageCrossProcessRunLockTestAppHostForBuild" AfterTargets="Build">
+    <MSBuild Projects="$(CrossProcessRunLockTestAppHostProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(CrossProcessRunLockTestAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)" />
+    <MSBuild Projects="$(CrossProcessRunLockTestAppHostProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(CrossProcessRunLockTestAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_CrossProcessRunLockTestAppHostTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_CrossProcessRunLockTestAppHostRuntimeFile Include="%(_CrossProcessRunLockTestAppHostTargetPath.RootDir)%(_CrossProcessRunLockTestAppHostTargetPath.Directory)**\*" />
+      <_CrossProcessRunLockTestAppHostExecutable Include="@(_CrossProcessRunLockTestAppHostRuntimeFile)"
+                                                   Condition="'%(Filename)%(Extension)' == '$(CrossProcessRunLockTestAppHostAssemblyName)$(_NativeExecutableExtension)'" />
+    </ItemGroup>
+    <Error Condition="'@(_CrossProcessRunLockTestAppHostExecutable)' == ''"
+           Text="Cross-process run-lock test apphost was not built: $(CrossProcessRunLockTestAppHostAssemblyName)$(_NativeExecutableExtension)." />
+    <Copy SourceFiles="@(_CrossProcessRunLockTestAppHostRuntimeFile)"
+          DestinationFiles="@(_CrossProcessRunLockTestAppHostRuntimeFile->'$(TargetDir)$(CrossProcessRunLockTestAppHostStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(TargetDir)$(CrossProcessRunLockTestAppHostStageDirectory)/$(CrossProcessRunLockTestAppHostAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Cross-process run-lock test apphost was not staged to $(TargetDir)$(CrossProcessRunLockTestAppHostStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(TargetDir)$(CrossProcessRunLockTestAppHostStageDirectory)/$(CrossProcessRunLockTestAppHostAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
+
+  <Target Name="StageCrossProcessRunLockTestAppHostForPublish" AfterTargets="Publish">
+    <MSBuild Projects="$(CrossProcessRunLockTestAppHostProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(CrossProcessRunLockTestAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)" />
+    <MSBuild Projects="$(CrossProcessRunLockTestAppHostProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(CrossProcessRunLockTestAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_CrossProcessRunLockTestAppHostPublishTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_CrossProcessRunLockTestAppHostPublishRuntimeFile Include="%(_CrossProcessRunLockTestAppHostPublishTargetPath.RootDir)%(_CrossProcessRunLockTestAppHostPublishTargetPath.Directory)**\*" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_CrossProcessRunLockTestAppHostPublishRuntimeFile)"
+          DestinationFiles="@(_CrossProcessRunLockTestAppHostPublishRuntimeFile->'$(PublishDir)$(CrossProcessRunLockTestAppHostStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)$(CrossProcessRunLockTestAppHostStageDirectory)/$(CrossProcessRunLockTestAppHostAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Cross-process run-lock test apphost was not staged to $(PublishDir)$(CrossProcessRunLockTestAppHostStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(PublishDir)$(CrossProcessRunLockTestAppHostStageDirectory)/$(CrossProcessRunLockTestAppHostAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
+
+  <Target Name="StageProductionWorkerAppHostForBuild" AfterTargets="Build">
+    <MSBuild Projects="$(ProductionWorkerAppHostProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ProductionWorkerAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)" />
+    <MSBuild Projects="$(ProductionWorkerAppHostProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ProductionWorkerAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_ProductionWorkerAppHostTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_ProductionWorkerAppHostRuntimeFile Include="%(_ProductionWorkerAppHostTargetPath.RootDir)%(_ProductionWorkerAppHostTargetPath.Directory)**\*" />
+      <_ProductionWorkerAppHostExecutable Include="@(_ProductionWorkerAppHostRuntimeFile)"
+                                            Condition="'%(Filename)%(Extension)' == '$(ProductionWorkerAppHostAssemblyName)$(_NativeExecutableExtension)'" />
+    </ItemGroup>
+    <Error Condition="'@(_ProductionWorkerAppHostExecutable)' == ''"
+           Text="Production worker apphost was not built: $(ProductionWorkerAppHostAssemblyName)$(_NativeExecutableExtension)." />
+    <Copy SourceFiles="@(_ProductionWorkerAppHostRuntimeFile)"
+          DestinationFiles="@(_ProductionWorkerAppHostRuntimeFile->'$(TargetDir)$(ProductionWorkerAppHostStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(TargetDir)$(ProductionWorkerAppHostStageDirectory)/$(ProductionWorkerAppHostAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Production worker apphost was not staged to $(TargetDir)$(ProductionWorkerAppHostStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(TargetDir)$(ProductionWorkerAppHostStageDirectory)/$(ProductionWorkerAppHostAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
+
+  <Target Name="StageProductionWorkerAppHostForPublish" AfterTargets="Publish">
+    <MSBuild Projects="$(ProductionWorkerAppHostProject)"
+             Targets="Build"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ProductionWorkerAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)" />
+    <MSBuild Projects="$(ProductionWorkerAppHostProject)"
+             Targets="GetTargetPath"
+             Properties="Configuration=$(Configuration);TargetFramework=$(ProductionWorkerAppHostTargetFramework);RuntimeIdentifier=$(RuntimeIdentifier);SelfContained=$(SelfContained);UseAppHost=true;BaseOutputPath=$(BaseOutputPath);BaseIntermediateOutputPath=$(BaseIntermediateOutputPath);OutDir=$(OutDir);ArtifactsPath=$(ArtifactsPath);UseArtifactsOutput=$(UseArtifactsOutput)">
+      <Output TaskParameter="TargetOutputs" ItemName="_ProductionWorkerAppHostPublishTargetPath" />
+    </MSBuild>
+    <ItemGroup>
+      <_ProductionWorkerAppHostPublishRuntimeFile Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)**\*" />
+      <_ProductionWorkerStaticAssetsEndpointsManifest Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)$(ProductionWorkerAppHostAssemblyName).staticwebassets.endpoints.json" />
+      <_ProductionWorkerStaticAssetsEndpointsManifest Include="%(_ProductionWorkerAppHostPublishTargetPath.RootDir)%(_ProductionWorkerAppHostPublishTargetPath.Directory)$(ProductionWorkerAppHostAssemblyName).ControlPlane.staticwebassets.endpoints.json" />
+    </ItemGroup>
+    <Error Condition="!Exists('%(_ProductionWorkerStaticAssetsEndpointsManifest.Identity)')"
+           Text="Production Web static-assets endpoints manifest was not generated: %(_ProductionWorkerStaticAssetsEndpointsManifest.Identity)." />
+    <Copy SourceFiles="@(_ProductionWorkerStaticAssetsEndpointsManifest)"
+          DestinationFiles="@(_ProductionWorkerStaticAssetsEndpointsManifest->'$(PublishDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)$(ProductionWorkerAppHostAssemblyName).staticwebassets.endpoints.json')"
+           Text="Production Web static-assets endpoints manifest was not staged to $(PublishDir)." />
+    <Error Condition="!Exists('$(PublishDir)$(ProductionWorkerAppHostAssemblyName).ControlPlane.staticwebassets.endpoints.json')"
+           Text="Web control-plane static-assets endpoints manifest was not staged to $(PublishDir)." />
+    <Copy SourceFiles="@(_ProductionWorkerAppHostPublishRuntimeFile)"
+          DestinationFiles="@(_ProductionWorkerAppHostPublishRuntimeFile->'$(PublishDir)$(ProductionWorkerAppHostStageDirectory)/%(RecursiveDir)%(Filename)%(Extension)')"
+          SkipUnchangedFiles="true" />
+    <Error Condition="!Exists('$(PublishDir)$(ProductionWorkerAppHostStageDirectory)/$(ProductionWorkerAppHostAssemblyName)$(_NativeExecutableExtension)')"
+           Text="Production worker apphost was not staged to $(PublishDir)$(ProductionWorkerAppHostStageDirectory)." />
+    <Exec Command="chmod u+x &quot;$(PublishDir)$(ProductionWorkerAppHostStageDirectory)/$(ProductionWorkerAppHostAssemblyName)$(_NativeExecutableExtension)&quot;"
+          Condition="'$(OS)' != 'Windows_NT'" />
+  </Target>
 
 </Project>

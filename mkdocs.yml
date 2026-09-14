@@ -1,8 +1,8 @@
 site_name: Immich ReverseGeo
 site_description: Reverse geocoding companion for Immich photo assets
-site_url: https://immich-reversegeo.github.io/
-repo_url: https://github.com/immich-reversegeo/immich-reversegeo
-repo_name: immich-reversegeo/immich-reversegeo
+site_url: https://crazz.github.io/immich-reversegeo/
+repo_url: https://github.com/crazz/immich-reversegeo
+repo_name: crazz/immich-reversegeo
 docs_dir: docs/website
 site_dir: _out/website
 use_directory_urls: true
@@ -65,7 +65,9 @@ nav:
   - Setup:
       - Getting Started: getting-started.md
       - Installation: installation.md
+      - Deployment Modes: deployment-modes.md
       - Configuration: configuration.md
+      - Upgrading and Rollback: upgrading.md
   - Guide / App:
       - Using the App: using-the-app.md
       - Data Sources: data-sources.md

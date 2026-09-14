@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 766" role="img" aria-labelledby="title description">
+  <title id="title">Standard and Web-only runtime</title>
+  <desc id="description">The browser connects to a long-lived Web service. The Web service starts one temporary heavy worker at a time in the same container. The worker reads and writes persistent data. Run-once instead runs directly without a Web service or child.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0 L8 4 L0 8Z" fill="#52627b"/></marker>
+  </defs>
+  <rect width="720" height="766" rx="16" fill="#f5f7fc"/>
+  <g font-family="system-ui, sans-serif" text-anchor="middle" fill="#182b49">
+    <text x="360" y="37" font-size="24" font-weight="700">Standard and Web-only</text>
+    <rect x="220" y="62" width="280" height="56" rx="10" fill="#fff" stroke="#a1aec2"/>
+    <text x="360" y="97" font-size="21">Your browser</text>
+    <path d="M360 120 V185" fill="none" stroke="#52627b" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="30" y="158" width="660" height="384" rx="16" fill="none" stroke="#8191ac" stroke-width="2" stroke-dasharray="6 5"/>
+    <rect x="50" y="194" width="620" height="112" rx="12" fill="#e5ebff" stroke="#6079be"/>
+    <text x="360" y="227" font-size="23" font-weight="700">Web service · stays running</text>
+    <text x="360" y="260" font-size="20">Settings · job control · progress · maintenance</text>
+    <text x="360" y="289" font-size="18">Built-in scheduler in Standard only</text>
+    <path d="M360 314 V369" fill="none" stroke="#52627b" stroke-width="2" marker-start="url(#arrow)" marker-end="url(#arrow)"/>
+    <text x="376" y="346" font-size="17" text-anchor="start">Job request / progress and result</text>
+    <rect x="50" y="380" width="620" height="112" rx="12" fill="#fff0da" stroke="#b97b24"/>
+    <text x="360" y="415" font-size="23" font-weight="700">Temporary worker · one heavy job</text>
+    <text x="360" y="450" font-size="20">Processing OR Lookup OR cache refresh</text>
+    <text x="360" y="479" font-size="18">Owns geographic data in memory; exits after cleanup</text>
+    <text x="53" y="182" font-size="16" text-anchor="start">Application container · same image</text>
+    <path d="M270 494 V576 H185 V610" fill="none" stroke="#52627b" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M450 494 V576 H535 V610" fill="none" stroke="#52627b" stroke-width="2" marker-end="url(#arrow)"/>
+    <rect x="30" y="612" width="310" height="110" rx="12" fill="#e5f2eb" stroke="#478063"/>
+    <text x="185" y="645" font-size="22" font-weight="700">Immich PostgreSQL</text>
+    <text x="185" y="676" font-size="19">Read coordinates</text>
+    <text x="185" y="702" font-size="19">Processing saves location names</text>
+    <rect x="380" y="612" width="310" height="110" rx="12" fill="#e5f2eb" stroke="#478063"/>
+    <text x="535" y="645" font-size="22" font-weight="700">Persistent volumes</text>
+    <text x="535" y="676" font-size="19">/config · settings and keys</text>
+    <text x="535" y="702" font-size="19">/data · caches and skipped assets</text>
+    <text x="360" y="749" font-size="17">Lookup previews results without updating Immich assets.</text>
+  </g>
+</svg>

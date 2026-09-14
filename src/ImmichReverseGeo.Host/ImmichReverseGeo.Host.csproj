@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <AssemblyName>ImmichReverseGeo.Web</AssemblyName>
+    <UseAppHost>false</UseAppHost>
+    <!-- The executable hosts components from the Web library, so SDK component discovery cannot infer this. -->
+    <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
+    <RunWorkingDirectory>$(MSBuildProjectDirectory)/../ImmichReverseGeo.Web</RunWorkingDirectory>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj" />
+    <ProjectReference Include="../ImmichReverseGeo.Worker/ImmichReverseGeo.Worker.csproj" />
+    <Content Include="../ImmichReverseGeo.Web/appsettings*.json" Link="%(Filename)%(Extension)" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" />
+  </ItemGroup>
+</Project>

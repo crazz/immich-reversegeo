@@ -4,6 +4,18 @@ icon: material/tune-variant
 
 # Configuration
 
+## Deployment mode selection
+
+Immich ReverseGeo reads the optional `IMMICH_REVERSEGEO_MODE` environment variable once when the container starts. Omit it to select the compatible Standard default. The only accepted values are `standard`, `web-only`, and `run-once`; use lowercase exactly as shown. Empty, padded, case-varied, or unknown values stop startup with exit code 2.
+
+The selected value is not saved in `settings.json`. Change it in your Compose environment and recreate the service with `docker compose up -d immich-reversegeo`; a plain container restart does not replace its environment. Standard runs the Web app, manual controls, and internal schedule. Web-only runs the same Web app and keeps manual processing available, but it does not start the internal scheduler. Existing schedule values remain visible and editable in Settings and become active again when you return to Standard mode. See [Deployment Modes](./deployment-modes.md) for the decision table and exact startup rules.
+
+The Dashboard reads this resolved startup mode and shows it as a read-only value. Reloading or reconnecting to the same running Web host shows its current worker status immediately. A host restart resolves the mode again and begins at `Idle`; worker status and retained failures are not saved to configuration or data storage.
+
+Run-once starts no Web server or internal scheduler. It loads the existing settings, makes one globally excluded processing attempt, writes ordinary progress logs, and exits. It does not retry. Use it as a disposable Compose job under cron or another external scheduler; see [Optional Run-once job](./installation.md#optional-run-once-job).
+
+Web-only does not add an automation endpoint. Dashboard processing, Lookup, and cache download/export/refresh use temporary workers in both Web modes. Cache inventory, coordinated deletion, and database maintenance remain Web control operations. An external scheduler can launch the separate Run-once service.
+
 <div class="section-intro">
 The Settings page is intentionally small. Most users only need to check the database connection, pick a schedule, and tune how aggressively processing should run. Country-specific city matching now lives on its own City Resolver page.
 </div>
@@ -31,7 +43,7 @@ These values are required because the app reads and updates immich data directly
   </div>
   <div class="step-card">
     <h3>Keep them in Docker or your host environment</h3>
-    <p>Set the database values where you launch the app, then restart it if you change them.</p>
+    <p>Set the database values where you launch the app, then recreate the container if you change them.</p>
   </div>
 </div>
 
@@ -50,6 +62,8 @@ The Settings page lets you control:
 
 Most users should stay on the preset schedule options. Manual runs from the dashboard still work even when automatic scheduling is disabled.
 
+Standard supports hourly, every-few-minutes, every-few-hours, daily, weekly, and custom-cron schedules. Each due check asks whether any currently eligible asset exists across the full eligibility range before admitting a worker. It does not count the work or reserve those assets. See [NAS and HDD scheduling](./deployment-modes.md#nas-and-hdd-scheduling) for disk-activity tradeoffs. Web-only ignores the saved schedule while retaining its values.
+
 <div class="feature-grid">
   <div class="card">
     <h3>Schedule</h3>
@@ -57,7 +71,7 @@ Most users should stay on the preset schedule options. Manual runs from the dash
   </div>
   <div class="card">
     <h3>Batch size</h3>
-    <p>Controls how many photos are processed at a time before the next pause or write cycle.</p>
+    <p>Controls how many photos are read in each batch. It does not limit the total number processed by a pass.</p>
   </div>
   <div class="card">
     <h3>Parallelism</h3>
@@ -76,6 +90,8 @@ Most users should stay on the preset schedule options. Manual runs from the dash
 ### GADM administrative areas
 
 When enabled, GADM adds another country-level administrative boundary source for `state` and `city` matching.
+
+GADM is limited to academic and other non-commercial use. Read the [data-source license guidance](./data-sources.md#optional-gadm-administrative-data) before enabling it, and validate a coordinate in Lookup before bulk processing.
 
 Recommended starting point:
 
@@ -198,7 +214,7 @@ A good pull request should include:
 - a short explanation of why the new default is better
 - Lookup evidence showing that the desired place is really in the returned data
 
-See the contributor notes in [`CONTRIBUTING.md`](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/CONTRIBUTING.md#city-resolver-defaults).
+See the contributor notes in [`CONTRIBUTING.md`](https://github.com/crazz/immich-reversegeo/blob/master/CONTRIBUTING.md#city-resolver-defaults).
 
 ## Database connection details
 
@@ -209,9 +225,21 @@ The database section in Settings is read-only and mainly there as a sanity check
 
 ## Data layout
 
-Runtime data goes under `/data`.
+Keep separate persistent volumes for configuration and runtime data:
 
-Config goes under `/config` in production.
+```text
+/config/
+  settings.json             Saved processing settings and resolver overrides
+  dataprotection-keys/       Keys used by the Web interface
+/data/
+  overture-divisions/        Downloaded Overture country caches: {ISO3}.db
+  gadm-divisions/            Optional GADM country caches: {ISO3}.db
+  skipped.db                Assets excluded from later processing attempts
+```
+
+Country and airport datasets bundled with the image are separate from these downloaded caches. Database credentials come from the environment and are not saved in `settings.json`.
+
+All modes should use the same intended config/data volumes. `/data` contains skipped-asset tracking as well as caches, so preserve it during upgrades. See [Upgrading and Rollback](./upgrading.md) for the stopped-volume backup workflow.
 
 ## Operational notes
 

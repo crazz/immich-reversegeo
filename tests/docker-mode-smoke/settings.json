@@ -1,0 +1,16 @@
+{
+  "schedule": {
+    "cron": "* * * * *",
+    "enabled": true
+  },
+  "processing": {
+    "batchSize": 1,
+    "batchDelayMs": 0,
+    "maxDegreeOfParallelism": 1,
+    "useAirportInfrastructure": false,
+    "useGadmAdministrativeAreas": false,
+    "preferGadmAdministrativeAreas": false,
+    "useGadmTerritoryFallbacks": false,
+    "verboseLogging": false
+  }
+}

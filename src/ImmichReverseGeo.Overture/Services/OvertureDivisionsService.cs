@@ -27,6 +27,13 @@ public class OvertureDivisionsService
     private readonly string _bundledDataDir;
     private readonly Func<string, string?> _alpha2ToIso3;
     private readonly object _bundledCountryCacheLock = new();
+    private readonly Func<double, double, string?, CancellationToken, OvertureDivisionLookupDiagnostics?> _cachedDivisionQuery;
+    private readonly Func<double, double, string?, string, CancellationToken, OvertureDivisionLookupDiagnostics> _divisionQuery;
+    private readonly Func<byte[], Point, bool> _geometryContains;
+    private readonly Func<SqliteConnection, string, string, CancellationToken, bool> _hasColumn;
+    private readonly Func<string, bool> _fileExists;
+    private Action? _beforeBundledCountryIndexLoad;
+    private Action<OvertureHasColumnCheckpoint>? _hasColumnCheckpoint;
     private STRtree<BundledCountryArea>? _bundledCountryIndex;
 
     public OvertureDivisionsService(
@@ -41,6 +48,28 @@ public class OvertureDivisionsService
         _dataDir = dataDir;
         _bundledDataDir = bundledDataDir;
         _alpha2ToIso3 = alpha2ToIso3;
+        _geometryContains = OvertureDataAccess.TryGeometryContains;
+        _hasColumn = HasColumn;
+        _fileExists = File.Exists;
+        _cachedDivisionQuery = QueryCachedDivisionAreas;
+        _divisionQuery = QueryDivisionAreas;
+    }
+
+    internal OvertureDivisionsService(
+        ILogger<OvertureDivisionsService> logger,
+        OverturePlacesService overturePlacesService,
+        string dataDir,
+        string bundledDataDir,
+        Func<string, string?> alpha2ToIso3,
+        OvertureDivisionsTestHooks hooks)
+        : this(logger, overturePlacesService, dataDir, bundledDataDir, alpha2ToIso3)
+    {
+        _cachedDivisionQuery = hooks.CachedDivisionQuery ?? _cachedDivisionQuery;
+        _divisionQuery = hooks.DivisionQuery ?? _divisionQuery;
+        _geometryContains = hooks.GeometryContains ?? _geometryContains;
+        _fileExists = hooks.FileExists ?? _fileExists;
+        _beforeBundledCountryIndexLoad = hooks.BeforeBundledCountryIndexLoad;
+        _hasColumnCheckpoint = hooks.HasColumnCheckpoint;
     }
 
     public Task<BundledCountryLookupResult> FindBundledCountryAsync(
@@ -48,22 +77,27 @@ public class OvertureDivisionsService
         double lon,
         CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var bundledPath = Path.Combine(_bundledDataDir, "defaults", "overture-country-divisions.db");
-        if (!File.Exists(bundledPath))
+        if (!_fileExists(bundledPath))
         {
+            ct.ThrowIfCancellationRequested();
             return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch(
                 "Bundled Overture country artifact was not found."));
         }
 
-        var best = FindBundledCountryFromMemory(bundledPath, lat, lon);
+        var best = FindBundledCountryFromMemory(bundledPath, lat, lon, ct);
+        ct.ThrowIfCancellationRequested();
         if (best is null)
         {
+            ct.ThrowIfCancellationRequested();
             return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch(
                 "Bundled Overture spatial coverage found no match."));
         }
 
         if (string.IsNullOrWhiteSpace(best.Country))
         {
+            ct.ThrowIfCancellationRequested();
             return Task.FromResult(BundledCountryLookupResult.IdentityMappingFailure(
                 best.Name,
                 null,
@@ -72,10 +106,12 @@ public class OvertureDivisionsService
         }
 
         var mappedAlpha3 = _alpha2ToIso3(best.Country);
+        ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(best.Alpha3)
             || string.IsNullOrWhiteSpace(mappedAlpha3)
             || !string.Equals(best.Alpha3, mappedAlpha3, StringComparison.OrdinalIgnoreCase))
         {
+            ct.ThrowIfCancellationRequested();
             return Task.FromResult(BundledCountryLookupResult.IdentityMappingFailure(
                 best.Name,
                 best.Country,
@@ -83,6 +119,7 @@ public class OvertureDivisionsService
                 $"Matched bundled identity '{best.Country}' has missing or inconsistent Alpha-3 mapping."));
         }
 
+        ct.ThrowIfCancellationRequested();
         return Task.FromResult(BundledCountryLookupResult.Matched(
             best.Alpha3,
             best.Name,
@@ -90,9 +127,10 @@ public class OvertureDivisionsService
             best.Id));
     }
 
-    private OvertureDivisionResult? FindBundledCountryFromMemory(string bundledPath, double lat, double lon)
+    private OvertureDivisionResult? FindBundledCountryFromMemory(string bundledPath, double lat, double lon, CancellationToken ct)
     {
-        var countryIndex = GetBundledCountryIndex(bundledPath);
+        ct.ThrowIfCancellationRequested();
+        var countryIndex = GetBundledCountryIndex(bundledPath, ct);
         var point = GeometryFactory.CreatePoint(new Coordinate(lon, lat));
         var queryEnvelope = new Envelope(point.EnvelopeInternal);
         queryEnvelope.ExpandBy(0.00015);
@@ -101,6 +139,7 @@ public class OvertureDivisionsService
 
         foreach (var country in countryIndex.Query(queryEnvelope))
         {
+            ct.ThrowIfCancellationRequested();
             var boundingBoxContains = lon >= country.BoundingBoxXMin
                                       && lon <= country.BoundingBoxXMax
                                       && lat >= country.BoundingBoxYMin
@@ -149,7 +188,7 @@ public class OvertureDivisionsService
         return bestUsable ?? bestUnusable;
     }
 
-    private STRtree<BundledCountryArea> GetBundledCountryIndex(string bundledPath)
+    private STRtree<BundledCountryArea> GetBundledCountryIndex(string bundledPath, CancellationToken ct)
     {
         if (_bundledCountryIndex is not null)
         {
@@ -162,20 +201,27 @@ public class OvertureDivisionsService
             {
                 return _bundledCountryIndex;
             }
-
-            _bundledCountryIndex = LoadBundledCountryIndex(bundledPath);
+            ct.ThrowIfCancellationRequested();
+            _beforeBundledCountryIndexLoad?.Invoke();
+            var index = LoadBundledCountryIndex(bundledPath, ct);
+            ct.ThrowIfCancellationRequested();
+            _bundledCountryIndex = index;
             return _bundledCountryIndex;
         }
     }
 
-    private static STRtree<BundledCountryArea> LoadBundledCountryIndex(string bundledPath)
+    private STRtree<BundledCountryArea> LoadBundledCountryIndex(string bundledPath, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var index = new STRtree<BundledCountryArea>();
 
         using var conn = new SqliteConnection($"Data Source={bundledPath};Pooling=false");
         conn.Open();
-        var adminLevelColumn = HasColumn(conn, "division_area", "admin_level") ? "admin_level" : "NULL AS admin_level";
-        var alpha3Column = HasColumn(conn, "division_area", "alpha3") ? "alpha3" : "NULL AS alpha3";
+        ct.ThrowIfCancellationRequested();
+        var adminLevelColumn = _hasColumn(conn, "division_area", "admin_level", ct) ? "admin_level" : "NULL AS admin_level";
+        ct.ThrowIfCancellationRequested();
+        var alpha3Column = _hasColumn(conn, "division_area", "alpha3", ct) ? "alpha3" : "NULL AS alpha3";
+        ct.ThrowIfCancellationRequested();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT
@@ -196,16 +242,30 @@ public class OvertureDivisionsService
             FROM division_area
             """;
 
+        ct.ThrowIfCancellationRequested();
+        ct.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             if (reader.IsDBNull(9))
             {
                 continue;
             }
 
             var geometry = WkbReader.Read(OvertureDataAccess.ReadBlobValue(reader.GetValue(9)));
+            ct.ThrowIfCancellationRequested();
             var preparedGeometry = PreparedGeometryFactory.Prepare(geometry);
+            ct.ThrowIfCancellationRequested();
             var xmin = reader.GetDouble(10);
             var ymin = reader.GetDouble(11);
             var xmax = reader.GetDouble(12);
@@ -231,7 +291,9 @@ public class OvertureDivisionsService
             index.Insert(new Envelope(xmin, xmax, ymin, ymax), country);
         }
 
+        ct.ThrowIfCancellationRequested();
         index.Build();
+        ct.ThrowIfCancellationRequested();
         return index;
     }
 
@@ -243,14 +305,18 @@ public class OvertureDivisionsService
         CityResolverProfile? cityResolverProfile = null,
         CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         var diagnostics = await FindContainingDivisionAreasAsync(lat, lon, alpha2, iso3, ct);
+        ct.ThrowIfCancellationRequested();
         if (diagnostics.Error is not null || diagnostics.Candidates.Count == 0)
         {
+            ct.ThrowIfCancellationRequested();
             return null;
         }
 
         var state = OvertureDivisionsLogic.SelectStateName(diagnostics.Candidates);
         var city = OvertureDivisionsLogic.SelectCityName(diagnostics.Candidates, cityResolverProfile);
+        ct.ThrowIfCancellationRequested();
         return new OvertureAdministrativeResult(state, city);
     }
 
@@ -261,20 +327,32 @@ public class OvertureDivisionsService
         string? iso3 = null,
         CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         try
         {
-            var cached = QueryCachedDivisionAreas(lat, lon, iso3);
+            var cached = _cachedDivisionQuery(lat, lon, iso3, ct);
             if (cached is not null)
             {
+                ct.ThrowIfCancellationRequested();
                 return cached;
             }
 
             var release = await _overturePlacesService.GetLatestReleaseForOvertureAsync(ct);
-            var result = await Task.Run(() => QueryDivisionAreas(lat, lon, alpha2, release), ct);
+            var result = await Task.Run(() => _divisionQuery(lat, lon, alpha2, release, ct), ct);
+            ct.ThrowIfCancellationRequested();
             return result with { Release = release };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
+            ct.ThrowIfCancellationRequested();
             _logger.LogWarning(
                 "Overture division lookup failed at ({Lat:F4}, {Lon:F4}): {Message}",
                 lat,
@@ -284,8 +362,9 @@ public class OvertureDivisionsService
         }
     }
 
-    private OvertureDivisionLookupDiagnostics? QueryCachedDivisionAreas(double lat, double lon, string? iso3)
+    private OvertureDivisionLookupDiagnostics? QueryCachedDivisionAreas(double lat, double lon, string? iso3, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         if (string.IsNullOrWhiteSpace(iso3))
         {
             return null;
@@ -297,18 +376,22 @@ public class OvertureDivisionsService
             return null;
         }
 
-        return QueryDivisionAreasFromSqlite(dbPath, lat, lon, "cached");
+        return QueryDivisionAreasFromSqlite(dbPath, lat, lon, "cached", ct);
     }
 
-    private static OvertureDivisionLookupDiagnostics QueryDivisionAreasFromSqlite(
+    private OvertureDivisionLookupDiagnostics QueryDivisionAreasFromSqlite(
         string dbPath,
         double lat,
         double lon,
-        string selectionLabel)
+        string selectionLabel,
+        CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false");
         conn.Open();
-        var adminLevelColumn = HasColumn(conn, "division_area", "admin_level") ? "admin_level" : "NULL AS admin_level";
+        ct.ThrowIfCancellationRequested();
+        var adminLevelColumn = _hasColumn(conn, "division_area", "admin_level", ct) ? "admin_level" : "NULL AS admin_level";
+        ct.ThrowIfCancellationRequested();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT
@@ -334,13 +417,24 @@ public class OvertureDivisionsService
         cmd.Parameters.AddWithValue("$lon", lon);
         cmd.Parameters.AddWithValue("$lat", lat);
 
+        ct.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
+        ct.ThrowIfCancellationRequested();
         var point = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326).CreatePoint(new Coordinate(lon, lat));
         var candidates = new List<OvertureDivisionCandidateDiagnostic>();
         OvertureDivisionResult? best = null;
 
-        while (reader.Read())
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             var bboxContains = !reader.IsDBNull(9)
                                && !reader.IsDBNull(10)
                                && !reader.IsDBNull(11)
@@ -351,7 +445,11 @@ public class OvertureDivisionsService
                                && lat <= reader.GetDouble(12);
             var geometryContains = bboxContains
                                    && !reader.IsDBNull(8)
-                                   && OvertureDataAccess.TryGeometryContains(OvertureDataAccess.ReadBlobValue(reader.GetValue(8)), point);
+                                   && OvertureDataAccess.TryGeometryContains(
+                                       OvertureDataAccess.ReadBlobValue(reader.GetValue(8)),
+                                       point,
+                                       _geometryContains);
+            ct.ThrowIfCancellationRequested();
             var bboxArea = bboxContains
                 ? Math.Abs((reader.GetDouble(11) - reader.GetDouble(9)) * (reader.GetDouble(12) - reader.GetDouble(10)))
                 : double.MaxValue;
@@ -370,6 +468,7 @@ public class OvertureDivisionsService
                 geometryContains,
                 geometryContains,
                 bboxArea);
+            ct.ThrowIfCancellationRequested();
 
             var selected = false;
             var decision = $"considered: weaker than current {selectionLabel} best";
@@ -408,7 +507,9 @@ public class OvertureDivisionsService
 
         using var meta = conn.CreateCommand();
         meta.CommandText = "SELECT value FROM _meta WHERE key='release'";
+        ct.ThrowIfCancellationRequested();
         var release = meta.ExecuteScalar()?.ToString();
+        ct.ThrowIfCancellationRequested();
         return new OvertureDivisionLookupDiagnostics(best, candidates, release);
     }
 
@@ -416,8 +517,10 @@ public class OvertureDivisionsService
         double lat,
         double lon,
         string? alpha2,
-        string release)
+        string release,
+        CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var releaseUrl = string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
             OvertureDivisionsLogic.DivisionAreaReleaseUrlTemplate,
@@ -425,7 +528,9 @@ public class OvertureDivisionsService
 
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
+        ct.ThrowIfCancellationRequested();
         OvertureDataAccess.LoadAzureAndSpatial(conn);
+        ct.ThrowIfCancellationRequested();
 
         using var query = conn.CreateCommand();
         query.CommandText = OvertureDivisionsLogic.BuildDivisionAreaQuery(lat, lon, alpha2, releaseUrl);
@@ -433,9 +538,20 @@ public class OvertureDivisionsService
         var candidates = new List<OvertureDivisionCandidateDiagnostic>();
         OvertureDivisionResult? best = null;
 
+        ct.ThrowIfCancellationRequested();
         using var reader = query.ExecuteReader();
-        while (reader.Read())
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             var candidate = new OvertureDivisionResult(
                 reader.GetString(0),
                 reader.GetString(1),
@@ -450,6 +566,7 @@ public class OvertureDivisionsService
                 reader.GetBoolean(9),
                 reader.GetBoolean(9),
                 reader.GetDouble(10));
+            ct.ThrowIfCancellationRequested();
 
             var selected = false;
             var decision = "considered: weaker than current best";
@@ -486,6 +603,7 @@ public class OvertureDivisionsService
                 decision));
         }
 
+        ct.ThrowIfCancellationRequested();
         return new OvertureDivisionLookupDiagnostics(best, candidates, release);
     }
 
@@ -507,19 +625,54 @@ public class OvertureDivisionsService
         double BoundingBoxYMax,
         double BoundingBoxArea);
 
-    private static bool HasColumn(SqliteConnection conn, string tableName, string columnName)
+    private bool HasColumn(SqliteConnection conn, string tableName, string columnName, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"PRAGMA table_info({tableName})";
+        _hasColumnCheckpoint?.Invoke(OvertureHasColumnCheckpoint.BeforeExecuteReader);
+        ct.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
-        while (reader.Read())
+        _hasColumnCheckpoint?.Invoke(OvertureHasColumnCheckpoint.AfterExecuteReader);
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            _hasColumnCheckpoint?.Invoke(OvertureHasColumnCheckpoint.BeforeRowRead);
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            _hasColumnCheckpoint?.Invoke(OvertureHasColumnCheckpoint.AfterRowRead);
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
             if (!reader.IsDBNull(1) && string.Equals(reader.GetString(1), columnName, StringComparison.OrdinalIgnoreCase))
             {
+                ct.ThrowIfCancellationRequested();
                 return true;
             }
         }
 
+        ct.ThrowIfCancellationRequested();
         return false;
     }
+}
+
+internal sealed class OvertureDivisionsTestHooks
+{
+    public Func<double, double, string?, CancellationToken, OvertureDivisionLookupDiagnostics?>? CachedDivisionQuery { get; init; }
+    public Func<double, double, string?, string, CancellationToken, OvertureDivisionLookupDiagnostics>? DivisionQuery { get; init; }
+    public Func<byte[], Point, bool>? GeometryContains { get; init; }
+    public Func<string, bool>? FileExists { get; init; }
+    public Action? BeforeBundledCountryIndexLoad { get; init; }
+    public Action<OvertureHasColumnCheckpoint>? HasColumnCheckpoint { get; init; }
+}
+
+internal enum OvertureHasColumnCheckpoint
+{
+    BeforeExecuteReader,
+    AfterExecuteReader,
+    BeforeRowRead,
+    AfterRowRead
 }

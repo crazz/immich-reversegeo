@@ -8,12 +8,14 @@ COPY src/ImmichReverseGeo.Core/ImmichReverseGeo.Core.csproj src/ImmichReverseGeo
 COPY src/ImmichReverseGeo.Overture/ImmichReverseGeo.Overture.csproj src/ImmichReverseGeo.Overture/
 COPY src/ImmichReverseGeo.Gadm/ImmichReverseGeo.Gadm.csproj src/ImmichReverseGeo.Gadm/
 COPY src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj src/ImmichReverseGeo.Web/
+COPY src/ImmichReverseGeo.Worker/ImmichReverseGeo.Worker.csproj src/ImmichReverseGeo.Worker/
+COPY src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj src/ImmichReverseGeo.Host/
 RUN case "$TARGETARCH" in \
         "amd64") export RID="linux-x64" ;; \
         "arm64") export RID="linux-arm64" ;; \
         *) echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1 ;; \
     esac \
-    && dotnet restore src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -r "$RID"
+    && dotnet restore src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj -r "$RID"
 
 COPY src/ src/
 RUN case "$TARGETARCH" in \
@@ -21,7 +23,7 @@ RUN case "$TARGETARCH" in \
         "arm64") export RID="linux-arm64" ;; \
         *) echo "Unsupported TARGETARCH: $TARGETARCH" && exit 1 ;; \
     esac \
-    && dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj \
+    && dotnet publish src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj \
         -c Release -o /app/publish --no-restore -r "$RID" --self-contained false /p:UseAppHost=false
 RUN mkdir -p /volume-seed/config/dataprotection-keys /volume-seed/data \
     && touch /volume-seed/config/.volume-init /volume-seed/data/.volume-init \

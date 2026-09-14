@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Core.Countries;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Gadm.Services;
 using Microsoft.Data.Sqlite;
@@ -83,8 +84,8 @@ public class GadmIntegrationTests
                         continue;
                     }
 
-                    cache.DeleteFile(iso3);
                     SqliteConnection.ClearAllPools();
+                    File.Delete(dbPath);
                 }
                 catch (Exception ex)
                 {

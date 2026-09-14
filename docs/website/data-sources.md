@@ -46,7 +46,7 @@ What it does not do by itself:
 
 - it is not the main state and city source for the final result
 - a territory outside the bundled fixture set can still be missing if the pinned Overture release has no country or dependency boundary for it
-- changing the bundled database requires an application or container restart because the country index stays in memory
+- to change bundled country data, install the complete updated image and recreate the service; an active worker keeps its loaded country index until it exits
 
 If a coordinate still looks wrong, use [Lookup](./using-the-app.md#lookup) first. Confirm the country identity, then inspect the downloaded Overture and optional GADM administrative results before changing settings.
 
@@ -237,10 +237,23 @@ The recommended workflow is:
 
 ## Storage and network behavior
 
+In Standard and Web-only, heavy source work runs in temporary workers while the Web service reads lightweight cache summaries. Run-once owns source work in its one-shot process. See [Deployment Modes](./deployment-modes.md#startup-memory-and-disk-activity) for startup and memory expectations.
+
 - built-in Overture country and airport data ships inside the app image
 - downloaded Overture and GADM country caches are stored under `/data`
 - the first lookup or processing pass for a new country may take longer because the cache must be created locally
 - larger countries can use hundreds of megabytes of local storage per cached country
+- Lookup runs these source operations in a temporary isolated worker in both Standard and Web-only mode; it does not load the source services in the interactive page or write Immich asset metadata
+
+On the Administrative Areas page, `Re-download` uses a temporary worker to build and validate a complete replacement before publishing it. The current valid cache stays available if download, export, validation, or publication preparation fails, or if you cancel before publication. If cancellation arrives after publication, the new valid cache can remain visible when the page reloads the actual cache status, even though that attempt is reported as cancelled.
+
+Processing, Lookup, and cache refreshes share one heavy-work slot in each running Immich ReverseGeo Web process. A `Busy` refresh is not queued; retry after the active operation and its cleanup finish. If the worker is `Unavailable`, resolve the displayed availability problem before retrying.
+
+A source marked unavailable in a completed Lookup result is separate from a worker failure. The completed result can still show fields resolved by other sources. A worker failure has no completed source result and Lookup does not retry the same work inside the Web service.
+
+**GADM license:** GADM data is limited to academic and other non-commercial use. Review the [official GADM license](https://gadm.org/license.html) before enabling GADM.
+
+**Technical errors:** A GADM download or query error is an availability problem; it does not change or replace the license notice above.
 
 ## Notes
 

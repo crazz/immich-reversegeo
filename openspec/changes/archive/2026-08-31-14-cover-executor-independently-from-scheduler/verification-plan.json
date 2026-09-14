@@ -1,0 +1,2970 @@
+{
+  "schemaVersion": "8.0.0",
+  "change": "14-cover-executor-independently-from-scheduler",
+  "baseline": {
+    "branch": "major-redesign",
+    "head": "fd48bd43a717cebeb27e7888e4963d066b144365"
+  },
+  "scope": {
+    "productionBehaviorChangesAllowed": false,
+    "productionSourceEditsAllowed": false,
+    "runtimeFilesystemContractLoadingAllowed": false
+  },
+  "proofBoundaries": {
+    "externalEquivalenceInputs": [
+      "tests/ImmichReverseGeo.Tests/processing-run-executor-contracts.json",
+      "openspec/changes/14-cover-executor-independently-from-scheduler/verification-plan.json",
+      "openspec/changes/14-cover-executor-independently-from-scheduler/specs/processing-run-executor-testing/spec.md",
+      "openspec/changes/14-cover-executor-independently-from-scheduler/tasks.md"
+    ],
+    "externalEquivalenceExcludes": "C# source files, project files, source text, and DynamicData attribute text",
+    "compiledReflectionAndIlOnly": "Active declaring types, method identities, signatures, TestMethod attributes, DataRow/DynamicData bindings, constructor usage, and transitive forbidden dependencies",
+    "runtimeSchemaClosure": "System.Text.Json camel-case exact mapping with UnmappedMemberHandling.Disallow for the embedded authority object graph; sentinels reject unknown top-level and nested behavioral keys.",
+    "runtimeConsumption": "Behavioral contracts reject any fallback row; structural verification consumes every common field and structural default. Runtime and external mutation matrices prove representative mutations fail."
+  },
+  "auditRound2": {
+    "result": "rejected",
+    "targetMiss": "Emitter-derived registries and incomplete typed/transitive proofs were not acceptable authority.",
+    "remediation": "Replaced by one embedded exact typed authority and transitive compiled verification."
+  },
+  "auditRound3": {
+    "result": "rejected",
+    "targetMiss": "S16 was length-only and duplicated; filesystem denial was narrow; hashing was raw-byte; static correlation retained graphs; open-session state was inferred; foreign expectation was OCE-derived; equivalence was shallow; reporter fixtures enabled downstream seams.",
+    "remediation": "Typed authority-driven S16 rows, deny-by-default System.IO policy, semantic canonical hashing/full mappings, fixture-scoped zero-pending correlation, explicit open lifecycle, independently supplied foreign tokens, expanded schema equivalence, and granular fail-fast reporter setups."
+  },
+  "contractAuthority": {
+    "path": "tests/ImmichReverseGeo.Tests/processing-run-executor-contracts.json",
+    "embeddedResource": "ImmichReverseGeo.Tests.processing-run-executor-contracts.json",
+    "semanticSha256": "00acade23e7c341c08f89649cf628954aaeba01101877b548dcc81886d033a47",
+    "canonicalization": "Parse JSON; recursively sort object keys by ordinal code point; preserve array order; JSON encode UTF-8 with one LF; SHA-256 semantic form.",
+    "contractCount": 67,
+    "methodCount": 50,
+    "activeMethodCount": 46,
+    "scenarioCount": 43,
+    "taskCount": 42,
+    "externalGateCount": 4,
+    "behavioralSourceCount": 1,
+    "provenance": {
+      "approvedSources": [
+        "proposal.md",
+        "design.md",
+        "specs/processing-run-executor-testing/spec.md",
+        "tasks.md",
+        "fd48bd43a717cebeb27e7888e4963d066b144365"
+      ],
+      "runtimeObservationAuthority": false,
+      "semanticSha256": "00acade23e7c341c08f89649cf628954aaeba01101877b548dcc81886d033a47"
+    },
+    "proofBindingCount": 7
+  },
+  "mappingAuthority": {
+    "digestSha256": "487ec142ea27cca83c329ef29360e5766b14d73ec8b12f03ca571dfc097ffb5e",
+    "table": {
+      "scenarioIds": [
+        "S01",
+        "S02",
+        "S03",
+        "S04",
+        "S05",
+        "S06",
+        "S07",
+        "S08",
+        "S09",
+        "S10",
+        "S11",
+        "S12",
+        "S13",
+        "S14",
+        "S15",
+        "S16",
+        "S17",
+        "S18",
+        "S19",
+        "S20",
+        "S21",
+        "S22",
+        "S23",
+        "S24",
+        "S25",
+        "S26",
+        "S27",
+        "S28",
+        "S29",
+        "S30",
+        "S31",
+        "S32",
+        "S33",
+        "S34",
+        "S35",
+        "S36",
+        "S37",
+        "S38",
+        "S39",
+        "S40",
+        "S41",
+        "S42",
+        "S43"
+      ],
+      "taskIds": [
+        "1.1",
+        "1.2",
+        "1.3",
+        "2.1",
+        "2.2",
+        "2.3",
+        "2.4",
+        "3.1",
+        "3.2",
+        "3.3",
+        "3.4",
+        "3.5",
+        "4.1",
+        "4.2",
+        "4.3",
+        "5.1",
+        "5.2",
+        "5.3",
+        "5.4",
+        "5.5",
+        "5.6",
+        "6.1",
+        "6.2",
+        "6.3",
+        "6.4",
+        "6.5",
+        "6.6",
+        "6.7",
+        "7.1",
+        "7.2",
+        "7.3",
+        "7.4",
+        "8.1",
+        "8.2",
+        "8.3",
+        "8.4",
+        "8.5",
+        "9.1",
+        "9.2",
+        "9.3",
+        "9.4",
+        "9.5"
+      ],
+      "externalGateIds": [
+        "GATE-9.2",
+        "GATE-9.3",
+        "GATE-9.4",
+        "GATE-9.5"
+      ],
+      "methods": [
+        {
+          "methodId": "DirectFixtureDependencies_ContainNoForbiddenRuntimeTypeOrSleep",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorArchitectureTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "DirectProofMethods_AreTestMethodsAndNeverInvokeAnotherTestMethod",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorManifestTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "DirectProofMethods_ConstructExecutorAndDoNotDiscardExecuteAsyncResultsThroughWrappers",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorManifestTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ActiveCancellationBoundaryMatrix_StopsBeforeTargetDispositionAndRetainsPriorWork",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ActiveCancellationDuringPersistenceBeforeSuccess_LeavesAssetUncommittedAndUncounted",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ActiveParallelCancellation_PreservesPriorCommitClosesEveryActivityAndLeavesInterruptedAssetsUncounted",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_AirportSelectionRows_ApplyContainingPreserveAndFillPolicies",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_BatchFetchForeignOceAndOrdinaryFailure_AreExactFatalPassFailuresWithoutAssetDisposition",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_CancellationAfterCommittedHandledFailure_PublishesAndCountsFailedDisposition",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_CancellationAfterSuccessfulPersistence_PublishesAndCountsCommittedEffect",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_CancellationBetweenBatchesOrDuringDelay_PreventsNextFetchAndRetainsPriorDispositions",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_CountCancellationRows_ObservePreCancelledOrDuringCountTokenWithoutEligibility",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_DelayOccursAfterEveryNonEmptyBatchJoinAndNeverAfterEmptySentinel",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorSnapshotsAndPagingTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_EligibilityDivergence_PreservesCountSnapshotAndTerminatesOnlyAtEmptyBatch",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorSnapshotsAndPagingTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_FixedUtcAndTerminalOrder_CloseActivitiesBeforeOneFinishThenReturnSameResult",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorTerminalInvariantTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ForeignOceAssetFailure_AllowsPeerToCommitAndRunToComplete",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_KeysetPages_UseEveryExactFinalRowCursorThenOneEmptySentinel",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorSnapshotsAndPagingTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_LaterOutOfMemory_PreservesPriorCommitLogsFatalOnceAndAddsNoAssetFailure",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_MatchedLocationFallsBackToCountry_WritesExactCountryCityAndOnlyUpdated",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_MatchedLocationFallsBackToState_WritesExactStateCityAndOnlyUpdated",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_MatchedLocationPreservesCity_WritesExactCityAndOnlyUpdated",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_MixedBranches_ProduceExactCombinedCausalEventsWritesAndAccounting",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_OpenRunStartedReporterFailure_PropagatesOriginalWithoutSessionOrTerminalAttempt",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_OrdinaryPerAssetFailureMatrix_ReportsOneErrorOneFailedAndContinuesPeer",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionFailureTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ParallelReporterFailure_CapturesFirstExactlyAndRefusesEveryLaterSessionCall",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ParallelismClamp_UsesExactLowerAndUpperBoundary",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [
+            "System.Int32",
+            "System.Int32"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ParallelismWithinBounds_ReachesConfiguredMaximumWithoutExceedingIt",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorParallelismTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_PassDelayFailure_LogsExactFatalOnceRetainsCommitAndHasNoFailedDisposition",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_PassLevelFailureMatrix_FinishesFailedOnceWithoutFatalAssetIncrement",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_PersistenceFailureMatrix_RecordsNoFalseEffectOrSuccessDisposition",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ReporterFailureAfterPersistence_RetainsEffectAndNeverCompensatesOrFinishes",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ResolverReporterFailure_PropagatesOriginalWithoutSourceOrFailedConversion",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_SettingsProviderMutationAfterCapturedSnapshot_RetainsExactRunPolicyAcrossEveryPage",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_TerminalInvariantRows_ValidateCancelledAndFailedPartialResults",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorTerminalInvariantTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_TerminalSinkFailure_PropagatesOriginalExactlyOnceWithoutRetryOrSyntheticResult",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_TwoAssetsReverseCompletion_CorrelatesOneDispositionEachAndOneFinalTerminal",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_ZeroEligibility_UsesOneSessionBeforeCountAndReturnsExactCompletedResult",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecutorCharacterizationFixture_UsesFixedUtcGatesAndOnlyApprovedInMemoryDependencies",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorArchitectureTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ProcessingRunExecutor_LifetimeSurface_ExcludesControlPlaneUiAndMutableInvocationState",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "VerificationManifest_ContainsNoPlaceholderOrSourceGrepProof",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorManifestTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "VerificationManifest_DeclaredMatrixCasesResolveExactlyOnceInCompiledTypes",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorManifestTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "VerificationManifest_PartitionsAllScenariosTasksCasesAndExternalGatesExactlyOnce",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorManifestTests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "WithFallbackCity_MakesLoggerOnlyNoCityExecutorBranchUnreachableForEveryHasMatchShape",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+          "parameterTypes": [],
+          "active": true
+        },
+        {
+          "methodId": "ExecuteAsync_RunSnapshots_PinBothConfigurationAndSkippedIdsAcrossAllPages",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorSnapshotsAndPagingTests",
+          "parameterTypes": [],
+          "active": false
+        },
+        {
+          "methodId": "ExecuteAsync_ParallelismBelowMinimumRows_ClampNegativeAndZeroToOne",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorParallelismTests",
+          "parameterTypes": [
+            "System.Int32",
+            "System.Int32"
+          ],
+          "active": false
+        },
+        {
+          "methodId": "ExecuteAsync_ReverseCompletion_PreservesPerAssetCausalEdgesAndCompleteIdentitySets",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorParallelismTests",
+          "parameterTypes": [],
+          "active": false
+        },
+        {
+          "methodId": "ExecuteAsync_AdministrativeFallbackRows_SelectCityThenStateThenCountryExactlyOnce",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+          "parameterTypes": [
+            "System.String"
+          ],
+          "active": false
+        },
+        {
+          "methodId": "ExecuteAsync_NoAdministrativeMatch_PersistsSkippedBeforeExactDisposition",
+          "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+          "parameterTypes": [],
+          "active": true
+        }
+      ],
+      "cases": [
+        {
+          "caseId": "both-snapshot-sources-mutate",
+          "scenarioIds": [
+            "S05",
+            "S07",
+            "S08"
+          ],
+          "taskIds": [
+            "3.2",
+            "3.4",
+            "4.3"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_SettingsProviderMutationAfterCapturedSnapshot_RetainsExactRunPolicyAcrossEveryPage",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "eligibility-lower-with-suppression",
+          "scenarioIds": [
+            "S09",
+            "S43",
+            "S06"
+          ],
+          "taskIds": [
+            "3.5",
+            "9.1",
+            "3.3"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorSnapshotsAndPagingTests",
+            "methodId": "ExecuteAsync_EligibilityDivergence_PreservesCountSnapshotAndTerminatesOnlyAtEmptyBatch",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "EligibilityCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "eligibility-lower-with-suppression"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "eligibility-higher",
+          "scenarioIds": [
+            "S09",
+            "S43"
+          ],
+          "taskIds": [
+            "3.5",
+            "9.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorSnapshotsAndPagingTests",
+            "methodId": "ExecuteAsync_EligibilityDivergence_PreservesCountSnapshotAndTerminatesOnlyAtEmptyBatch",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "EligibilityCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "eligibility-higher"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "positive-immediate-empty",
+          "scenarioIds": [
+            "S09",
+            "S43"
+          ],
+          "taskIds": [
+            "3.5",
+            "9.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorSnapshotsAndPagingTests",
+            "methodId": "ExecuteAsync_EligibilityDivergence_PreservesCountSnapshotAndTerminatesOnlyAtEmptyBatch",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "EligibilityCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "positive-immediate-empty"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "parallelism-negative",
+          "scenarioIds": [
+            "S10"
+          ],
+          "taskIds": [
+            "4.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_ParallelismClamp_UsesExactLowerAndUpperBoundary",
+            "bindingKind": "DataRow",
+            "parameterSignature": "(System.Int32,System.Int32)",
+            "dynamicDataMember": null,
+            "orderedArguments": [
+              {
+                "type": "System.Int32",
+                "value": -7
+              },
+              {
+                "type": "System.Int32",
+                "value": 1
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "parallelism-zero",
+          "scenarioIds": [
+            "S10"
+          ],
+          "taskIds": [
+            "4.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_ParallelismClamp_UsesExactLowerAndUpperBoundary",
+            "bindingKind": "DataRow",
+            "parameterSignature": "(System.Int32,System.Int32)",
+            "dynamicDataMember": null,
+            "orderedArguments": [
+              {
+                "type": "System.Int32",
+                "value": 0
+              },
+              {
+                "type": "System.Int32",
+                "value": 1
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "parallelism-above-maximum",
+          "scenarioIds": [
+            "S12"
+          ],
+          "taskIds": [
+            "4.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_ParallelismClamp_UsesExactLowerAndUpperBoundary",
+            "bindingKind": "DataRow",
+            "parameterSignature": "(System.Int32,System.Int32)",
+            "dynamicDataMember": null,
+            "orderedArguments": [
+              {
+                "type": "System.Int32",
+                "value": 99
+              },
+              {
+                "type": "System.Int32",
+                "value": 32
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "parallelism-within-one",
+          "scenarioIds": [
+            "S11"
+          ],
+          "taskIds": [
+            "4.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorParallelismTests",
+            "methodId": "ExecuteAsync_ParallelismWithinBounds_ReachesConfiguredMaximumWithoutExceedingIt",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "Cases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "parallelism-within-one"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "parallelism-within-four",
+          "scenarioIds": [
+            "S11"
+          ],
+          "taskIds": [
+            "4.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorParallelismTests",
+            "methodId": "ExecuteAsync_ParallelismWithinBounds_ReachesConfiguredMaximumWithoutExceedingIt",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "Cases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "parallelism-within-four"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "parallelism-within-thirty-two",
+          "scenarioIds": [
+            "S11"
+          ],
+          "taskIds": [
+            "4.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorParallelismTests",
+            "methodId": "ExecuteAsync_ParallelismWithinBounds_ReachesConfiguredMaximumWithoutExceedingIt",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "Cases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "parallelism-within-thirty-two"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reverse-two-updates",
+          "scenarioIds": [
+            "S13"
+          ],
+          "taskIds": [
+            "4.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_TwoAssetsReverseCompletion_CorrelatesOneDispositionEachAndOneFinalTerminal",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "country-fallback-update",
+          "scenarioIds": [
+            "S16",
+            "S23",
+            "S14",
+            "S19"
+          ],
+          "taskIds": [
+            "5.1",
+            "5.6",
+            "6.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_MatchedLocationFallsBackToCountry_WritesExactCountryCityAndOnlyUpdated",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "unreachable-no-city-guard",
+          "scenarioIds": [
+            "S16"
+          ],
+          "taskIds": [
+            "5.1",
+            "5.6"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "WithFallbackCity_MakesLoggerOnlyNoCityExecutorBranchUnreachableForEveryHasMatchShape",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "structural-fallback"
+        },
+        {
+          "caseId": "ordinary-admin",
+          "scenarioIds": [
+            "S17"
+          ],
+          "taskIds": [
+            "5.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionFailureTests",
+            "methodId": "ExecuteAsync_OrdinaryPerAssetFailureMatrix_ReportsOneErrorOneFailedAndContinuesPeer",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "Cases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "ordinary-admin"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "ordinary-airport",
+          "scenarioIds": [
+            "S17"
+          ],
+          "taskIds": [
+            "5.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionFailureTests",
+            "methodId": "ExecuteAsync_OrdinaryPerAssetFailureMatrix_ReportsOneErrorOneFailedAndContinuesPeer",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "Cases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "ordinary-airport"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "ordinary-update",
+          "scenarioIds": [
+            "S17",
+            "S24",
+            "S35"
+          ],
+          "taskIds": [
+            "5.2",
+            "6.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+            "methodId": "ExecuteAsync_PersistenceFailureMatrix_RecordsNoFalseEffectOrSuccessDisposition",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "PersistenceFailureCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "ordinary-update"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "ordinary-insert",
+          "scenarioIds": [
+            "S17",
+            "S24",
+            "S35"
+          ],
+          "taskIds": [
+            "5.2",
+            "6.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+            "methodId": "ExecuteAsync_PersistenceFailureMatrix_RecordsNoFalseEffectOrSuccessDisposition",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "PersistenceFailureCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "ordinary-insert"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "airport-containing-overrides",
+          "scenarioIds": [
+            "S20"
+          ],
+          "taskIds": [
+            "5.4",
+            "5.5"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+            "methodId": "ExecuteAsync_AirportSelectionRows_ApplyContainingPreserveAndFillPolicies",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "AirportCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "airport-containing-overrides"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "airport-noncontaining-preserves-admin",
+          "scenarioIds": [
+            "S21"
+          ],
+          "taskIds": [
+            "5.4",
+            "5.5"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+            "methodId": "ExecuteAsync_AirportSelectionRows_ApplyContainingPreserveAndFillPolicies",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "AirportCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "airport-noncontaining-preserves-admin"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "airport-noncontaining-fills-absent",
+          "scenarioIds": [
+            "S22"
+          ],
+          "taskIds": [
+            "5.4",
+            "5.5"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+            "methodId": "ExecuteAsync_AirportSelectionRows_ApplyContainingPreserveAndFillPolicies",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "AirportCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "airport-noncontaining-fills-absent"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "fallback-city",
+          "scenarioIds": [
+            "S23"
+          ],
+          "taskIds": [
+            "5.6"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+            "methodId": "ExecuteAsync_MatchedLocationPreservesCity_WritesExactCityAndOnlyUpdated",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "fallback-state",
+          "scenarioIds": [
+            "S23"
+          ],
+          "taskIds": [
+            "5.6"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_MatchedLocationFallsBackToState_WritesExactStateCityAndOnlyUpdated",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-update",
+          "scenarioIds": [
+            "S24",
+            "S36"
+          ],
+          "taskIds": [
+            "6.2",
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-update"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-skipped-insert",
+          "scenarioIds": [
+            "S24",
+            "S36"
+          ],
+          "taskIds": [
+            "6.2",
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-skipped-insert"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-during-update-before-success",
+          "scenarioIds": [
+            "S25"
+          ],
+          "taskIds": [
+            "6.3"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+            "methodId": "ExecuteAsync_ActiveCancellationDuringPersistenceBeforeSuccess_LeavesAssetUncommittedAndUncounted",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "ActiveCancellationCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-during-update-before-success"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-during-insert-before-success",
+          "scenarioIds": [
+            "S25"
+          ],
+          "taskIds": [
+            "6.3"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+            "methodId": "ExecuteAsync_ActiveCancellationDuringPersistenceBeforeSuccess_LeavesAssetUncommittedAndUncounted",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "ActiveCancellationCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-during-insert-before-success"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-after-update-effect",
+          "scenarioIds": [
+            "S26"
+          ],
+          "taskIds": [
+            "6.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+            "methodId": "ExecuteAsync_CancellationAfterSuccessfulPersistence_PublishesAndCountsCommittedEffect",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "CommittedCancellationCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-after-update-effect"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-after-insert-effect",
+          "scenarioIds": [
+            "S26"
+          ],
+          "taskIds": [
+            "6.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+            "methodId": "ExecuteAsync_CancellationAfterSuccessfulPersistence_PublishesAndCountsCommittedEffect",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "CommittedCancellationCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-after-insert-effect"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-after-handled-failed-decision",
+          "scenarioIds": [
+            "S27"
+          ],
+          "taskIds": [
+            "6.5"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPersistenceTests",
+            "methodId": "ExecuteAsync_CancellationAfterCommittedHandledFailure_PublishesAndCountsFailedDisposition",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "count-token-pre-cancelled",
+          "scenarioIds": [
+            "S30"
+          ],
+          "taskIds": [
+            "7.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_CountCancellationRows_ObservePreCancelledOrDuringCountTokenWithoutEligibility",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "CountCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "count-token-pre-cancelled"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-during-count",
+          "scenarioIds": [
+            "S30"
+          ],
+          "taskIds": [
+            "7.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_CountCancellationRows_ObservePreCancelledOrDuringCountTokenWithoutEligibility",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "CountCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-during-count"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-skipped-snapshot",
+          "scenarioIds": [
+            "S31"
+          ],
+          "taskIds": [
+            "7.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_ActiveCancellationBoundaryMatrix_StopsBeforeTargetDispositionAndRetainsPriorWork",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "BoundaryCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-skipped-snapshot"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-config-snapshot",
+          "scenarioIds": [
+            "S31"
+          ],
+          "taskIds": [
+            "7.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_ActiveCancellationBoundaryMatrix_StopsBeforeTargetDispositionAndRetainsPriorWork",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "BoundaryCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-config-snapshot"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-batch",
+          "scenarioIds": [
+            "S31"
+          ],
+          "taskIds": [
+            "7.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_ActiveCancellationBoundaryMatrix_StopsBeforeTargetDispositionAndRetainsPriorWork",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "BoundaryCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-batch"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-admin",
+          "scenarioIds": [
+            "S31"
+          ],
+          "taskIds": [
+            "7.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_ActiveCancellationBoundaryMatrix_StopsBeforeTargetDispositionAndRetainsPriorWork",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "BoundaryCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-admin"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-airport",
+          "scenarioIds": [
+            "S31"
+          ],
+          "taskIds": [
+            "7.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_ActiveCancellationBoundaryMatrix_StopsBeforeTargetDispositionAndRetainsPriorWork",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "BoundaryCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-airport"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-between-batches",
+          "scenarioIds": [
+            "S32"
+          ],
+          "taskIds": [
+            "7.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_CancellationBetweenBatchesOrDuringDelay_PreventsNextFetchAndRetainsPriorDispositions",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "BetweenCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-between-batches"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "cancel-during-delay",
+          "scenarioIds": [
+            "S32"
+          ],
+          "taskIds": [
+            "7.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorCancellationTests",
+            "methodId": "ExecuteAsync_CancellationBetweenBatchesOrDuringDelay_PreventsNextFetchAndRetainsPriorDispositions",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "BetweenCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "cancel-during-delay"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "foreign-oce-asset",
+          "scenarioIds": [
+            "S33",
+            "S40"
+          ],
+          "taskIds": [
+            "7.4",
+            "9.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_ForeignOceAssetFailure_AllowsPeerToCommitAndRunToComplete",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "foreign-oce-pass",
+          "scenarioIds": [
+            "S33"
+          ],
+          "taskIds": [
+            "7.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_BatchFetchForeignOceAndOrdinaryFailure_AreExactFatalPassFailuresWithoutAssetDisposition",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "pass-count",
+          "scenarioIds": [
+            "S34"
+          ],
+          "taskIds": [
+            "8.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_PassLevelFailureMatrix_FinishesFailedOnceWithoutFatalAssetIncrement",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "PassCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "pass-count"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "pass-skipped-snapshot",
+          "scenarioIds": [
+            "S34"
+          ],
+          "taskIds": [
+            "8.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_PassLevelFailureMatrix_FinishesFailedOnceWithoutFatalAssetIncrement",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "PassCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "pass-skipped-snapshot"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "pass-config",
+          "scenarioIds": [
+            "S34"
+          ],
+          "taskIds": [
+            "8.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_PassLevelFailureMatrix_FinishesFailedOnceWithoutFatalAssetIncrement",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "PassCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "pass-config"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "pass-batch",
+          "scenarioIds": [
+            "S34"
+          ],
+          "taskIds": [
+            "8.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_PassLevelFailureMatrix_FinishesFailedOnceWithoutFatalAssetIncrement",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "PassCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "pass-batch"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "pass-delay",
+          "scenarioIds": [
+            "S34"
+          ],
+          "taskIds": [
+            "8.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_PassLevelFailureMatrix_FinishesFailedOnceWithoutFatalAssetIncrement",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "PassCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "pass-delay"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-admin",
+          "scenarioIds": [
+            "S36"
+          ],
+          "taskIds": [
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-admin"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-airport",
+          "scenarioIds": [
+            "S36"
+          ],
+          "taskIds": [
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-airport"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-count",
+          "scenarioIds": [
+            "S36"
+          ],
+          "taskIds": [
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-count"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-skipped-snapshot",
+          "scenarioIds": [
+            "S36"
+          ],
+          "taskIds": [
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-skipped-snapshot"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-configuration",
+          "scenarioIds": [
+            "S36"
+          ],
+          "taskIds": [
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-configuration"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-batch",
+          "scenarioIds": [
+            "S36"
+          ],
+          "taskIds": [
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-batch"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "oom-delay",
+          "scenarioIds": [
+            "S36"
+          ],
+          "taskIds": [
+            "8.2"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorPassFailureTests",
+            "methodId": "ExecuteAsync_NonReporterOutOfMemoryMatrix_FinishesFailedWithoutOrdinaryDispositionAndRetainsEffects",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OomCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "oom-delay"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "open-start-ordinary",
+          "scenarioIds": [
+            "S37"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_OpenRunStartedReporterFailure_PropagatesOriginalWithoutSessionOrTerminalAttempt",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OpenCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "open-start-ordinary"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "open-start-oom",
+          "scenarioIds": [
+            "S37"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_OpenRunStartedReporterFailure_PropagatesOriginalWithoutSessionOrTerminalAttempt",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "OpenCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "open-start-oom"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-eligibility",
+          "scenarioIds": [
+            "S38"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "MidstreamCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "reporter-eligibility"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-log",
+          "scenarioIds": [
+            "S38"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "MidstreamCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "reporter-log"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-activity-start",
+          "scenarioIds": [
+            "S38",
+            "S18"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4",
+            "5.3"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "MidstreamCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "reporter-activity-start"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-activity-end",
+          "scenarioIds": [
+            "S38"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "MidstreamCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "reporter-activity-end"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-disposition",
+          "scenarioIds": [
+            "S38",
+            "S29"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4",
+            "6.7"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "MidstreamCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "reporter-disposition"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-cleanup",
+          "scenarioIds": [
+            "S38"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "MidstreamCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "reporter-cleanup"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-midstream-oom",
+          "scenarioIds": [
+            "S38"
+          ],
+          "taskIds": [
+            "8.3",
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorReporterFailureTests",
+            "methodId": "ExecuteAsync_MidstreamReporterFailureMatrix_BreaksSessionAndNeverAttemptsTerminalRecursion",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "MidstreamCases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "reporter-midstream-oom"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "terminal-cancelled-partial",
+          "scenarioIds": [
+            "S41"
+          ],
+          "taskIds": [
+            "9.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorTerminalInvariantTests",
+            "methodId": "ExecuteAsync_TerminalInvariantRows_ValidateCancelledAndFailedPartialResults",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "Cases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "terminal-cancelled-partial"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "terminal-failed-partial",
+          "scenarioIds": [
+            "S41",
+            "S28"
+          ],
+          "taskIds": [
+            "9.1",
+            "6.6",
+            "7.3"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorTerminalInvariantTests",
+            "methodId": "ExecuteAsync_TerminalInvariantRows_ValidateCancelledAndFailedPartialResults",
+            "bindingKind": "typed-case-table",
+            "parameterSignature": "(System.String)",
+            "dynamicDataMember": "Cases",
+            "orderedArguments": [
+              {
+                "type": "System.String",
+                "value": "terminal-failed-partial"
+              }
+            ]
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "reporter-finish-rejection",
+          "scenarioIds": [
+            "S39"
+          ],
+          "taskIds": [
+            "8.4"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorChange11Tests",
+            "methodId": "ExecuteAsync_TerminalSinkFailure_PropagatesOriginalExactlyOnceWithoutRetryOrSyntheticResult",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "zero-eligibility",
+          "scenarioIds": [
+            "S04"
+          ],
+          "taskIds": [
+            "3.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorTests",
+            "methodId": "ExecuteAsync_ZeroEligibility_UsesOneSessionBeforeCountAndReturnsExactCompletedResult",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "no-administrative-match",
+          "scenarioIds": [
+            "S15"
+          ],
+          "taskIds": [
+            "5.1",
+            "6.1"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorDispositionTests",
+            "methodId": "ExecuteAsync_NoAdministrativeMatch_PersistsSkippedBeforeExactDisposition",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        },
+        {
+          "caseId": "fixed-utc-terminal-order",
+          "scenarioIds": [
+            "S42"
+          ],
+          "taskIds": [
+            "2.4",
+            "8.5"
+          ],
+          "binding": {
+            "declaringType": "ImmichReverseGeo.Tests.ProcessingRunExecutorTerminalInvariantTests",
+            "methodId": "ExecuteAsync_FixedUtcAndTerminalOrder_CloseActivitiesBeforeOneFinishThenReturnSameResult",
+            "bindingKind": "no-argument",
+            "parameterSignature": "()",
+            "dynamicDataMember": null,
+            "orderedArguments": []
+          },
+          "verificationKind": "behavioral"
+        }
+      ],
+      "proofBindings": [
+        {
+          "proofId": "P01-fixture-isolation",
+          "kind": "CompiledStructural",
+          "methodId": "ExecutorCharacterizationFixture_UsesFixedUtcGatesAndOnlyApprovedInMemoryDependencies",
+          "gateId": null,
+          "scenarioIds": [
+            "S01"
+          ],
+          "taskIds": [
+            "2.1",
+            "2.2",
+            "2.3"
+          ],
+          "semanticClauses": [
+            "FixtureIsolation"
+          ]
+        },
+        {
+          "proofId": "P02-retained-mixed-skip",
+          "kind": "CompiledStructural",
+          "methodId": "ExecuteAsync_MixedBranches_ProduceExactCombinedCausalEventsWritesAndAccounting",
+          "gateId": null,
+          "scenarioIds": [
+            "S02"
+          ],
+          "taskIds": [
+            "1.2"
+          ],
+          "semanticClauses": [
+            "DirectExtractionReuse"
+          ]
+        },
+        {
+          "proofId": "P03-host-scope-isolation",
+          "kind": "ExternalGate",
+          "methodId": null,
+          "gateId": "GATE-9.5",
+          "scenarioIds": [
+            "S03"
+          ],
+          "taskIds": [
+            "1.3",
+            "9.5"
+          ],
+          "semanticClauses": [
+            "HostCompositionOutsideFixture",
+            "StrictScopeReview"
+          ]
+        },
+        {
+          "proofId": "P11-compiled-inventory",
+          "kind": "CompiledStructural",
+          "methodId": "VerificationManifest_DeclaredMatrixCasesResolveExactlyOnceInCompiledTypes",
+          "gateId": null,
+          "scenarioIds": [],
+          "taskIds": [
+            "1.1"
+          ],
+          "semanticClauses": [
+            "CompiledInventory"
+          ]
+        },
+        {
+          "proofId": "P92-focused-gate",
+          "kind": "ExternalGate",
+          "methodId": null,
+          "gateId": "GATE-9.2",
+          "scenarioIds": [],
+          "taskIds": [
+            "9.2"
+          ],
+          "semanticClauses": [
+            "FocusedExecutorGate"
+          ]
+        },
+        {
+          "proofId": "P93-canonical-gate",
+          "kind": "ExternalGate",
+          "methodId": null,
+          "gateId": "GATE-9.3",
+          "scenarioIds": [],
+          "taskIds": [
+            "9.3"
+          ],
+          "semanticClauses": [
+            "CanonicalSuiteGate"
+          ]
+        },
+        {
+          "proofId": "P94-architecture-gate",
+          "kind": "ExternalGate",
+          "methodId": null,
+          "gateId": "GATE-9.4",
+          "scenarioIds": [],
+          "taskIds": [
+            "9.4"
+          ],
+          "semanticClauses": [
+            "ArchitectureGate"
+          ]
+        }
+      ],
+      "scenarioPartition": [
+        {
+          "id": "S01",
+          "caseIds": [],
+          "proofIds": [
+            "P01-fixture-isolation"
+          ]
+        },
+        {
+          "id": "S02",
+          "caseIds": [],
+          "proofIds": [
+            "P02-retained-mixed-skip"
+          ]
+        },
+        {
+          "id": "S03",
+          "caseIds": [],
+          "proofIds": [
+            "P03-host-scope-isolation"
+          ]
+        },
+        {
+          "id": "S04",
+          "caseIds": [
+            "zero-eligibility"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S05",
+          "caseIds": [
+            "both-snapshot-sources-mutate"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S06",
+          "caseIds": [
+            "eligibility-lower-with-suppression"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S07",
+          "caseIds": [
+            "both-snapshot-sources-mutate"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S08",
+          "caseIds": [
+            "both-snapshot-sources-mutate"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S09",
+          "caseIds": [
+            "eligibility-lower-with-suppression",
+            "eligibility-higher",
+            "positive-immediate-empty"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S10",
+          "caseIds": [
+            "parallelism-negative",
+            "parallelism-zero"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S11",
+          "caseIds": [
+            "parallelism-within-one",
+            "parallelism-within-four",
+            "parallelism-within-thirty-two"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S12",
+          "caseIds": [
+            "parallelism-above-maximum"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S13",
+          "caseIds": [
+            "reverse-two-updates"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S14",
+          "caseIds": [
+            "country-fallback-update"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S15",
+          "caseIds": [
+            "no-administrative-match"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S16",
+          "caseIds": [
+            "country-fallback-update",
+            "unreachable-no-city-guard"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S17",
+          "caseIds": [
+            "ordinary-admin",
+            "ordinary-airport",
+            "ordinary-update",
+            "ordinary-insert"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S18",
+          "caseIds": [
+            "reporter-activity-start"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S19",
+          "caseIds": [
+            "country-fallback-update"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S20",
+          "caseIds": [
+            "airport-containing-overrides"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S21",
+          "caseIds": [
+            "airport-noncontaining-preserves-admin"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S22",
+          "caseIds": [
+            "airport-noncontaining-fills-absent"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S23",
+          "caseIds": [
+            "country-fallback-update",
+            "fallback-city",
+            "fallback-state"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S24",
+          "caseIds": [
+            "ordinary-update",
+            "ordinary-insert",
+            "oom-update",
+            "oom-skipped-insert"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S25",
+          "caseIds": [
+            "cancel-during-update-before-success",
+            "cancel-during-insert-before-success"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S26",
+          "caseIds": [
+            "cancel-after-update-effect",
+            "cancel-after-insert-effect"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S27",
+          "caseIds": [
+            "cancel-after-handled-failed-decision"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S28",
+          "caseIds": [
+            "terminal-failed-partial"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S29",
+          "caseIds": [
+            "reporter-disposition"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S30",
+          "caseIds": [
+            "count-token-pre-cancelled",
+            "cancel-during-count"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S31",
+          "caseIds": [
+            "cancel-skipped-snapshot",
+            "cancel-config-snapshot",
+            "cancel-batch",
+            "cancel-admin",
+            "cancel-airport"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S32",
+          "caseIds": [
+            "cancel-between-batches",
+            "cancel-during-delay"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S33",
+          "caseIds": [
+            "foreign-oce-asset",
+            "foreign-oce-pass"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S34",
+          "caseIds": [
+            "pass-count",
+            "pass-skipped-snapshot",
+            "pass-config",
+            "pass-batch",
+            "pass-delay"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S35",
+          "caseIds": [
+            "ordinary-update",
+            "ordinary-insert"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S36",
+          "caseIds": [
+            "oom-update",
+            "oom-skipped-insert",
+            "oom-admin",
+            "oom-airport",
+            "oom-count",
+            "oom-skipped-snapshot",
+            "oom-configuration",
+            "oom-batch",
+            "oom-delay"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S37",
+          "caseIds": [
+            "open-start-ordinary",
+            "open-start-oom"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S38",
+          "caseIds": [
+            "reporter-eligibility",
+            "reporter-log",
+            "reporter-activity-start",
+            "reporter-activity-end",
+            "reporter-disposition",
+            "reporter-cleanup",
+            "reporter-midstream-oom"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S39",
+          "caseIds": [
+            "reporter-finish-rejection"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S40",
+          "caseIds": [
+            "foreign-oce-asset"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S41",
+          "caseIds": [
+            "terminal-cancelled-partial",
+            "terminal-failed-partial"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S42",
+          "caseIds": [
+            "fixed-utc-terminal-order"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "S43",
+          "caseIds": [
+            "eligibility-lower-with-suppression",
+            "eligibility-higher",
+            "positive-immediate-empty"
+          ],
+          "proofIds": []
+        }
+      ],
+      "taskPartition": [
+        {
+          "id": "1.1",
+          "caseIds": [],
+          "proofIds": [
+            "P11-compiled-inventory"
+          ]
+        },
+        {
+          "id": "1.2",
+          "caseIds": [],
+          "proofIds": [
+            "P02-retained-mixed-skip"
+          ]
+        },
+        {
+          "id": "1.3",
+          "caseIds": [],
+          "proofIds": [
+            "P03-host-scope-isolation"
+          ]
+        },
+        {
+          "id": "2.1",
+          "caseIds": [],
+          "proofIds": [
+            "P01-fixture-isolation"
+          ]
+        },
+        {
+          "id": "2.2",
+          "caseIds": [],
+          "proofIds": [
+            "P01-fixture-isolation"
+          ]
+        },
+        {
+          "id": "2.3",
+          "caseIds": [],
+          "proofIds": [
+            "P01-fixture-isolation"
+          ]
+        },
+        {
+          "id": "2.4",
+          "caseIds": [
+            "fixed-utc-terminal-order"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "3.1",
+          "caseIds": [
+            "zero-eligibility"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "3.2",
+          "caseIds": [
+            "both-snapshot-sources-mutate"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "3.3",
+          "caseIds": [
+            "eligibility-lower-with-suppression"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "3.4",
+          "caseIds": [
+            "both-snapshot-sources-mutate"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "3.5",
+          "caseIds": [
+            "eligibility-lower-with-suppression",
+            "eligibility-higher",
+            "positive-immediate-empty"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "4.1",
+          "caseIds": [
+            "parallelism-negative",
+            "parallelism-zero",
+            "parallelism-above-maximum",
+            "parallelism-within-one",
+            "parallelism-within-four",
+            "parallelism-within-thirty-two"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "4.2",
+          "caseIds": [
+            "reverse-two-updates"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "4.3",
+          "caseIds": [
+            "both-snapshot-sources-mutate"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "5.1",
+          "caseIds": [
+            "country-fallback-update",
+            "unreachable-no-city-guard",
+            "no-administrative-match"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "5.2",
+          "caseIds": [
+            "ordinary-admin",
+            "ordinary-airport",
+            "ordinary-update",
+            "ordinary-insert"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "5.3",
+          "caseIds": [
+            "reporter-activity-start"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "5.4",
+          "caseIds": [
+            "airport-containing-overrides",
+            "airport-noncontaining-preserves-admin",
+            "airport-noncontaining-fills-absent"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "5.5",
+          "caseIds": [
+            "airport-containing-overrides",
+            "airport-noncontaining-preserves-admin",
+            "airport-noncontaining-fills-absent"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "5.6",
+          "caseIds": [
+            "country-fallback-update",
+            "unreachable-no-city-guard",
+            "fallback-city",
+            "fallback-state"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "6.1",
+          "caseIds": [
+            "country-fallback-update",
+            "no-administrative-match"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "6.2",
+          "caseIds": [
+            "ordinary-update",
+            "ordinary-insert",
+            "oom-update",
+            "oom-skipped-insert"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "6.3",
+          "caseIds": [
+            "cancel-during-update-before-success",
+            "cancel-during-insert-before-success"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "6.4",
+          "caseIds": [
+            "cancel-after-update-effect",
+            "cancel-after-insert-effect"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "6.5",
+          "caseIds": [
+            "cancel-after-handled-failed-decision"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "6.6",
+          "caseIds": [
+            "terminal-failed-partial"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "6.7",
+          "caseIds": [
+            "reporter-disposition"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "7.1",
+          "caseIds": [
+            "count-token-pre-cancelled",
+            "cancel-during-count",
+            "cancel-skipped-snapshot",
+            "cancel-config-snapshot",
+            "cancel-batch",
+            "cancel-admin",
+            "cancel-airport"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "7.2",
+          "caseIds": [
+            "cancel-between-batches",
+            "cancel-during-delay"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "7.3",
+          "caseIds": [
+            "terminal-failed-partial"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "7.4",
+          "caseIds": [
+            "foreign-oce-asset",
+            "foreign-oce-pass"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "8.1",
+          "caseIds": [
+            "pass-count",
+            "pass-skipped-snapshot",
+            "pass-config",
+            "pass-batch",
+            "pass-delay"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "8.2",
+          "caseIds": [
+            "oom-update",
+            "oom-skipped-insert",
+            "oom-admin",
+            "oom-airport",
+            "oom-count",
+            "oom-skipped-snapshot",
+            "oom-configuration",
+            "oom-batch",
+            "oom-delay"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "8.3",
+          "caseIds": [
+            "open-start-ordinary",
+            "open-start-oom",
+            "reporter-eligibility",
+            "reporter-log",
+            "reporter-activity-start",
+            "reporter-activity-end",
+            "reporter-disposition",
+            "reporter-cleanup",
+            "reporter-midstream-oom"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "8.4",
+          "caseIds": [
+            "open-start-ordinary",
+            "open-start-oom",
+            "reporter-eligibility",
+            "reporter-log",
+            "reporter-activity-start",
+            "reporter-activity-end",
+            "reporter-disposition",
+            "reporter-cleanup",
+            "reporter-midstream-oom",
+            "reporter-finish-rejection"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "8.5",
+          "caseIds": [
+            "fixed-utc-terminal-order"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "9.1",
+          "caseIds": [
+            "eligibility-lower-with-suppression",
+            "eligibility-higher",
+            "positive-immediate-empty",
+            "foreign-oce-asset",
+            "terminal-cancelled-partial",
+            "terminal-failed-partial"
+          ],
+          "proofIds": []
+        },
+        {
+          "id": "9.2",
+          "caseIds": [],
+          "proofIds": [
+            "P92-focused-gate"
+          ]
+        },
+        {
+          "id": "9.3",
+          "caseIds": [],
+          "proofIds": [
+            "P93-canonical-gate"
+          ]
+        },
+        {
+          "id": "9.4",
+          "caseIds": [],
+          "proofIds": [
+            "P94-architecture-gate"
+          ]
+        },
+        {
+          "id": "9.5",
+          "caseIds": [],
+          "proofIds": [
+            "P03-host-scope-isolation"
+          ]
+        }
+      ]
+    }
+  },
+  "equivalenceGate": {
+    "command": "node tests/ImmichReverseGeo.Tests/verify-processing-run-executor-contracts.mjs",
+    "expected": {
+      "ok": true,
+      "contracts": 67,
+      "methods": 50,
+      "activeMethods": 46,
+      "scenarios": 43,
+      "tasks": 42,
+      "gates": 4,
+      "semanticSha256": "00acade23e7c341c08f89649cf628954aaeba01101877b548dcc81886d033a47",
+      "mappingDigestSha256": "487ec142ea27cca83c329ef29360e5766b14d73ec8b12f03ca571dfc097ffb5e",
+      "proofBindings": 7
+    }
+  },
+  "finalVerificationOrder": [
+    "dotnet build tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --no-restore",
+    "dedicated Change14 category",
+    "focused task 9.2 exact command",
+    "npm run test exactly once",
+    "task 9.4 exact architecture command",
+    "canonical hash/equivalence command",
+    "strict OpenSpec/status/diff/src/staging"
+  ],
+  "finalResults": {
+    "ownerTurn": 12,
+    "postBrooksRound": 7,
+    "severity": "P0",
+    "orderedSequence": true,
+    "build": {
+      "passed": true,
+      "warnings": 0,
+      "errors": 0,
+      "reportedSeconds": 0.77,
+      "wallSeconds": 0.94
+    },
+    "change14": {
+      "passed": 104,
+      "failed": 0,
+      "wallSeconds": 0.71
+    },
+    "focusedExecutor": {
+      "passed": 111,
+      "failed": 0,
+      "wallSeconds": 1.04
+    },
+    "canonical": {
+      "command": "npm run test",
+      "invocations": 1,
+      "passed": 539,
+      "failed": 0,
+      "wallSeconds": 27.15
+    },
+    "architecture": {
+      "passed": 4,
+      "failed": 0,
+      "wallSeconds": 0.62
+    },
+    "equivalence": {
+      "passed": true,
+      "contracts": 67,
+      "proofBindings": 7,
+      "methods": 50,
+      "activeMethods": 46,
+      "scenarios": 43,
+      "tasks": 42,
+      "gates": 4,
+      "semanticSha256": "00acade23e7c341c08f89649cf628954aaeba01101877b548dcc81886d033a47",
+      "mappingDigestSha256": "487ec142ea27cca83c329ef29360e5766b14d73ec8b12f03ca571dfc097ffb5e",
+      "wallSeconds": 0.08
+    },
+    "strictOpenSpec": {
+      "passed": true,
+      "wallSeconds": 0.74
+    },
+    "status": {
+      "allDone": true,
+      "complete": 42,
+      "remaining": 0
+    },
+    "scope": {
+      "branch": "major-redesign",
+      "head": "fd48bd43a717cebeb27e7888e4963d066b144365",
+      "srcDiffEmpty": true,
+      "stagedDiffEmpty": true,
+      "productionChanges": false,
+      "dependenciesChanged": false,
+      "stagingCommitPushSyncArchiveClean": false
+    }
+  },
+  "auditRound4": {
+    "result": "rejected",
+    "targetMiss": "Unconsumed nested result field, subset-only schema checks, C# source-text proof in external equivalence, and constant S16 disposition/effect self-certification.",
+    "remediation": "Removed vacuous fields and source-file metadata; exact authority key closure externally and unmapped-member rejection at runtime; external equivalence reads only authority/plan/spec/tasks; compiled reflection/IL exclusively prove test wiring; S16 retains only independently observed fallback and guard fields."
+  },
+  "auditRound5": {
+    "result": "rejected",
+    "targetMiss": "Behavioral verification ignored fallbackShapes and structural verification left common authority fields unconsumed.",
+    "remediation": "Behavioral verification requires empty fallbackShapes. Structural verification consumes every common field and exact structural default; runtime and external mutation sentinels prove role and representative field mutations are rejected."
+  },
+  "formalBrooksPass1": {
+    "result": "rejected",
+    "healthScore": 80,
+    "findings": [
+      "Fail-open requirement partitions",
+      "Non-root-isolated transitive IL traversal"
+    ],
+    "remediation": "All 43 scenarios and 42 tasks bind non-emptily to exact consumed contracts or typed verified proofs; S39 consumes an exact contract; negative partition mutations fail runtime/external validation; IL traversal is root-specific with neighboring async sentinel proof."
+  },
+  "postBrooksRound7": {
+    "severity": "P0",
+    "finding": "ResultSame falsely short-circuited to true when ExecuteAsync returned no result.",
+    "remediation": "Nullable tri-state correlation now emits null with no returned result, true only for ReferenceEquals, and false for a distinct returned instance. S39 exact attempted terminal content and sink failure identity remain enforced; runtime direct assertions and external true-mutation rejection prove the distinction."
+  }
+}

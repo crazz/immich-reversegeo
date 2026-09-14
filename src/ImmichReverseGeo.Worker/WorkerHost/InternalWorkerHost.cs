@@ -1,0 +1,387 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Runtime.ExceptionServices;
+using System.Threading.Tasks;
+using ImmichReverseGeo.Core.WorkerJobs;
+using ImmichReverseGeo.Core.WorkerProcessExitOutcomes;
+using ImmichReverseGeo.Web.Composition;
+using ImmichReverseGeo.Web.LifecycleTelemetry;
+using ImmichReverseGeo.Web.WorkerHost.WorkerNdjsonOutput;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace ImmichReverseGeo.Web.WorkerHost;
+
+internal static class InternalWorkerHost
+{
+    internal static HostApplicationBuilder CreateBuilder(
+        ApplicationCompositionContext context,
+        WorkerProcessExitOutcomeAccumulator outcomes)
+    {
+        return CreateBuilder(context, outcomes, InternalWorkerProtocolVersion.V1);
+    }
+
+    internal static HostApplicationBuilder CreateBuilder(
+        ApplicationCompositionContext context,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+        ArgumentNullException.ThrowIfNull(outcomes);
+
+        var builder = CreateRawBuilder();
+        Configure(builder, context, outcomes, protocolVersion);
+        return builder;
+    }
+
+    internal static IHost Build(
+        ApplicationCompositionContext context,
+        WorkerProcessExitOutcomeAccumulator outcomes)
+    {
+        return Build(CreateBuilder(context, outcomes));
+    }
+
+    internal static IHost Build(
+        ApplicationCompositionContext context,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        return Build(CreateBuilder(context, outcomes, protocolVersion));
+    }
+
+    internal static Task<int> RunProductionAsync(WorkerProcessExitOutcomeAccumulator outcomes)
+    {
+        return RunProductionAsync(outcomes, InternalWorkerProtocolVersion.V1);
+    }
+
+    internal static Task<int> RunProductionAsync(
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        ArgumentNullException.ThrowIfNull(outcomes);
+
+        try
+        {
+            return RunAsync(
+                Directory.GetCurrentDirectory(),
+                Environment.GetEnvironmentVariable("DATA_DIR"),
+                Environment.GetEnvironmentVariable("CONFIG_DIR"),
+                outcomes,
+                protocolVersion);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
+            return Task.FromResult(outcomes.Fact.ExitCode);
+        }
+    }
+
+    internal static async Task<int> RunAsync(
+        string contentRoot,
+        string? dataDirectory,
+        string? configDirectory,
+        WorkerProcessExitOutcomeAccumulator outcomes)
+    {
+        return await RunAsync(
+            contentRoot,
+            dataDirectory,
+            configDirectory,
+            outcomes,
+            InternalWorkerProtocolVersion.V1);
+    }
+
+    internal static async Task<int> RunAsync(
+        string contentRoot,
+        string? dataDirectory,
+        string? configDirectory,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(contentRoot);
+        ArgumentNullException.ThrowIfNull(outcomes);
+
+        using var telemetry = RoleProcessTelemetry.CreateProduction(new RoleLogContext(
+            ImmichReverseGeo.Core.ApplicationRole.ApplicationRole.InternalWorker, null, Environment.ProcessId));
+        try
+        {
+            var builder = CreateRawBuilder();
+            var environment = builder.Environment.IsDevelopment()
+                ? CompositionEnvironment.Development
+                : CompositionEnvironment.Production;
+            var context = ApplicationCompositionContext.Create(
+                environment,
+                contentRoot,
+                dataDirectory,
+                configDirectory);
+            Configure(builder, context, outcomes, protocolVersion);
+            return await RunHostAsync(Build(builder), outcomes, telemetry);
+        }
+        catch (OutOfMemoryException)
+        {
+            telemetry.Failed();
+            telemetry.Stopped(RoleStopReason.FatalFailure);
+            throw;
+        }
+        catch
+        {
+            outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
+            telemetry.Failed();
+            telemetry.Stopped(outcomes.Fact);
+            return outcomes.Fact.ExitCode;
+        }
+    }
+
+    internal static Task<int> RunHostAsync(IHost host)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        return RunHostAsync(
+            host,
+            host.Services.GetRequiredService<WorkerProcessExitOutcomeAccumulator>());
+    }
+
+    internal static async Task<int> RunHostAsync(
+        IHost host,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        RoleProcessTelemetry? telemetry = null)
+    {
+        ArgumentNullException.ThrowIfNull(host);
+        ArgumentNullException.ThrowIfNull(outcomes);
+
+        ILogger? logger = null;
+        InternalWorkerLifecycleService? lifecycle = null;
+        OutOfMemoryException? firstFatalOutOfMemory = null;
+        var servicesAvailable = true;
+        System.Threading.CancellationTokenRegistration stoppingRegistration = default;
+
+        try
+        {
+            var registeredOutcomes = host.Services.GetRequiredService<WorkerProcessExitOutcomeAccumulator>();
+            if (!ReferenceEquals(registeredOutcomes, outcomes))
+            {
+                throw new InvalidOperationException("The worker host must use the caller-owned outcome accumulator.");
+            }
+
+            logger = host.Services.GetService<ILoggerFactory>()?.CreateLogger(typeof(InternalWorkerHost));
+            lifecycle = host.Services.GetService<InternalWorkerLifecycleService>();
+            lifecycle?.ObserveRole(telemetry);
+            if (telemetry is not null)
+            {
+                try
+                {
+                    var lifetime = host.Services.GetService<IHostApplicationLifetime>();
+                    if (lifetime is not null)
+                    {
+                        stoppingRegistration = lifetime.ApplicationStopping.Register(
+                            () => telemetry.Stopping(RoleStopReason.HostShutdown));
+                    }
+                }
+                catch
+                {
+                    // Optional observation must not replace a host-start failure.
+                }
+            }
+        }
+        catch (OutOfMemoryException exception)
+        {
+            firstFatalOutOfMemory = exception;
+            servicesAvailable = false;
+        }
+        catch
+        {
+            servicesAvailable = false;
+            outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
+        }
+
+        if (servicesAvailable)
+        {
+            try
+            {
+                await host.StartAsync();
+                await host.WaitForShutdownAsync();
+                if (lifecycle?.ExecuteTask is { } lifecycleTask)
+                {
+                    await lifecycleTask;
+                }
+            }
+            catch (OutOfMemoryException exception)
+            {
+                firstFatalOutOfMemory ??= exception;
+            }
+            catch
+            {
+                outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
+            }
+        }
+
+        telemetry?.Stopping(outcomes.Fact, firstFatalOutOfMemory is not null);
+        stoppingRegistration.Dispose();
+        try
+        {
+            if (host is IAsyncDisposable asyncDisposable)
+            {
+                await asyncDisposable.DisposeAsync();
+            }
+            else
+            {
+                host.Dispose();
+            }
+        }
+        catch (OutOfMemoryException exception)
+        {
+            firstFatalOutOfMemory ??= exception;
+        }
+        catch
+        {
+            outcomes.Add(WorkerProcessExitFact.CleanupInfrastructure());
+            LogSafely(logger, "worker-host-dispose-failed");
+        }
+
+        telemetry?.Stopped(outcomes.Fact, firstFatalOutOfMemory is not null);
+        if (firstFatalOutOfMemory is not null)
+        {
+            ExceptionDispatchInfo.Capture(firstFatalOutOfMemory).Throw();
+        }
+
+        return outcomes.Fact.ExitCode;
+    }
+
+    private static IHost Build(HostApplicationBuilder builder)
+    {
+        return builder.Build();
+    }
+
+    private static HostApplicationBuilder CreateRawBuilder()
+    {
+        return Host.CreateApplicationBuilder(new HostApplicationBuilderSettings { Args = [] });
+    }
+
+    private static void LogSafely(ILogger? logger, string category)
+    {
+        try
+        {
+            logger?.LogWarning(category);
+        }
+        catch
+        {
+        }
+    }
+
+    private static void Configure(
+        HostApplicationBuilder builder,
+        ApplicationCompositionContext context,
+        WorkerProcessExitOutcomeAccumulator outcomes,
+        InternalWorkerProtocolVersion protocolVersion)
+    {
+        builder.Logging.ClearProviders();
+        builder.Logging.AddConsole(options => options.LogToStandardErrorThreshold = LogLevel.Trace);
+        builder.Services.AddInternalWorkerComposition(context);
+        builder.Services.AddInternalWorkerHostServices(
+            new WorkerNdjsonStandardOutputStreamFactory(),
+            outcomes,
+            protocolVersion);
+    }
+}
+
+internal static class InternalWorkerProcess
+{
+    internal static int Run(
+        IReadOnlyList<string> selectedArguments,
+        TextWriter errorWriter,
+        Func<WorkerProcessExitOutcomeAccumulator, Task<int>> runWorkerAsync)
+    {
+        ArgumentNullException.ThrowIfNull(runWorkerAsync);
+        return Run(
+            selectedArguments,
+            errorWriter,
+            _ => null,
+            (version, outcomes) =>
+            {
+                if (version != InternalWorkerProtocolVersion.V1)
+                {
+                    throw new InvalidOperationException("The legacy worker runner only supports protocol v1.");
+                }
+
+                return runWorkerAsync(outcomes);
+            });
+    }
+
+    internal static int Run(
+        IReadOnlyList<string> selectedArguments,
+        TextWriter errorWriter,
+        Func<string, string?> environmentVariableReader,
+        Func<InternalWorkerProtocolVersion, WorkerProcessExitOutcomeAccumulator, Task<int>> runWorkerAsync)
+    {
+        ArgumentNullException.ThrowIfNull(selectedArguments);
+        ArgumentNullException.ThrowIfNull(errorWriter);
+        ArgumentNullException.ThrowIfNull(environmentVariableReader);
+        ArgumentNullException.ThrowIfNull(runWorkerAsync);
+
+        if (selectedArguments.Count != 0)
+        {
+            throw new InvalidOperationException("Internal worker arguments must have been consumed before host construction.");
+        }
+
+        InternalWorkerProtocolVersionSelection selection =
+            InternalWorkerProtocolVersionSelector.Select(environmentVariableReader);
+        if (selection is not InternalWorkerProtocolVersionSelection.Success selected)
+        {
+            return CompleteInvalidInvocation(errorWriter);
+        }
+
+        var outcomes = new WorkerProcessExitOutcomeAccumulator();
+
+        try
+        {
+            runWorkerAsync(selected.Version, outcomes).GetAwaiter().GetResult();
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
+        }
+
+        if (!outcomes.HasFact)
+        {
+            outcomes.Add(WorkerProcessExitFact.StartupInfrastructure());
+        }
+
+        return InternalWorkerProcessExitBoundary.Complete(outcomes.Fact, errorWriter);
+    }
+
+    internal static int CompleteInvalidInvocation(TextWriter errorWriter)
+    {
+        return InternalWorkerProcessExitBoundary.Complete(WorkerProcessExitFact.InputInvalid(), errorWriter);
+    }
+}
+
+internal static class InternalWorkerProcessExitBoundary
+{
+    internal static int Complete(WorkerProcessExitFact fact, TextWriter errorWriter)
+    {
+        ArgumentNullException.ThrowIfNull(fact);
+        ArgumentNullException.ThrowIfNull(errorWriter);
+
+        if (fact.ExitCode != WorkerProcessExitCodes.Completed)
+        {
+            try
+            {
+                errorWriter.WriteLine(fact.Diagnostic.FormatFinalSummary());
+                errorWriter.Flush();
+            }
+            catch
+            {
+            }
+        }
+
+        return fact.ExitCode;
+    }
+}

@@ -18,45 +18,58 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
 
 ## Preferred setup
 
-- Add the service to your existing Immich `docker-compose.yml`.
-- Reuse the same `.env` file that already contains your Immich database settings.
-- Keep `/config` and `/data` persisted with Docker volumes.
-- No extra Docker network configuration is needed when the service lives in the same compose project as Immich.
+The reference below uses **Standard**, with a Web UI and your saved schedule. Compare [Deployment Modes](./deployment-modes.md) before choosing Web-only or the optional Run-once service.
 
-Reference file:
-[docker-compose.yml](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/docker-compose.yml)
+- Add these services to your existing Immich Compose file and reuse its database `.env`.
+- Keep both named volumes: `/config` stores settings and `/data` stores geographic caches and runtime state.
+- Services in the same Compose project use its existing network. With a separate project, explicitly join the database's network and use its reachable database hostname.
+- The Web port is bound to localhost. Use a private access path for a remote host; see [VPS and firewall notes](#vps-and-firewall-notes).
 
-Copy/paste snippet:
+This example uses `ghcr.io/crazz/immich-reversegeo:latest` and the image's normal entrypoint. The new modes are currently [Unreleased](./changelog.md#unreleased); use a release that includes them rather than assuming the mutable tag already does. Its source is the reference Compose file from the same documentation revision:
 
 ```yaml title="docker-compose.yml"
---8<-- "https://raw.githubusercontent.com/immich-reversegeo/immich-reversegeo/master/docker-compose.yml"
+--8<-- "docker-compose.yml"
 ```
 
-This service expects:
+Your shared `.env` must supply the existing Immich database values, for example `DB_HOST=database`, `DB_PORT=5432`, `DB_USERNAME`, `DB_PASSWORD`, and `DB_DATABASE_NAME`. Use your actual database service name and credentials. Do not store credentials in `settings.json`.
 
-- the same database connection values Immich already uses
-- to run in the same compose project and Docker network as Immich
-- a persistent `/config` volume for settings
-- a persistent `/data` volume for downloaded Overture data and runtime state
-- a free host port for the web UI, with `8080` as the default example
+Start the Web service:
 
-Typical variables come from the shared `.env` file:
-
-```env
-DB_HOST=database
-DB_PORT=5432
-DB_USERNAME=postgres
-DB_PASSWORD=...
-DB_DATABASE_NAME=immich
-DATA_DIR=/data
-CONFIG_DIR=/config
+```sh
+docker compose up -d immich-reversegeo
 ```
 
-Then start the stack:
+Only an absent `IMMICH_REVERSEGEO_MODE` selects Standard by default. Do not add an empty value to `.env`; empty, whitespace-only, padded, case-varied, or unknown values stop startup with exit `2`.
 
-```bash
-docker compose up -d
+### Web-only variation
+
+Uncomment this entry in the Web service's `environment` list:
+
+```yaml
+- IMMICH_REVERSEGEO_MODE=web-only
 ```
+
+Keep its image, port `8080`, database environment, network, and separate mounts. Recreate it with `docker compose up -d immich-reversegeo` so the new environment takes effect. The same UI, manual processing, Lookup, and heavy Data actions remain available; the internal scheduler is absent and saved schedule values remain unchanged. Mode is read only at startup and is not a Settings option.
+
+## Optional Run-once job
+
+The reference includes `immich-reversegeo-run-once` beside the Web service. It uses the same image, database environment, network, and persistent config/data volumes, with exact `IMMICH_REVERSEGEO_MODE=run-once`, no `ports`, and `restart: "no"`. No entrypoint or command override is needed. Its `run-once` profile prevents ordinary Compose startup from launching it.
+
+Start one disposable attempt from the Compose directory:
+
+```sh
+docker compose run --rm immich-reversegeo-run-once
+```
+
+Cron or another external scheduler can run that same command. Run-once has no Web listener or child worker, makes one authoritative attempt in its own process without a scheduled precheck, waits for cleanup, and exits. Configure processing settings through a Web mode before using the job. Web-only is useful when the UI remains available while an external scheduler owns cadence.
+
+Use the [Run-once exit table](./deployment-modes.md#run-once-exit-codes) for automation; logs are for human inspection. Busy exit `3` means no pass ran. There is no internal retry or automatic replacement. Already committed asset updates, skipped records, and published caches remain after cancellation or failure. Avoid running maintenance and an independent writer concurrently; see [multiple-container limits](./architecture.md#worker-jobs-and-multiple-containers).
+
+## Stopping or updating the service
+
+Keep `stop_grace_period: 40s` on the Immich ReverseGeo service in your Compose file. During shutdown, the app rejects new processing runs, requests cancellation of active work, and waits for process and output cleanup. The setting gives the app time to finish before Docker forces the container to stop.
+
+Use `docker compose stop immich-reversegeo` for a planned stop. Follow [Upgrading and Rollback](./upgrading.md) to record image identities, pause schedules, back up persistent storage, replace the image and verify the result. A forced stop or power loss can still interrupt processing; after restarting, check the Dashboard and logs before starting another run.
 
 ## VPS and firewall notes
 

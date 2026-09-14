@@ -18,6 +18,10 @@ public class OverturePlacesService
     private readonly string _dataDir;
     private readonly string _bundledDataDir;
     private readonly object _releaseLock = new();
+    private readonly Func<string?> _releaseDiscovery;
+    private readonly Func<double, double, string?, string, CancellationToken, OvertureLookupDiagnostics> _placeQuery;
+    private readonly Func<double, double, CancellationToken, OvertureInfrastructureLookupDiagnostics?> _bundledInfrastructureQuery;
+    private readonly Func<double, double, string, CancellationToken, OvertureInfrastructureLookupDiagnostics> _infrastructureQuery;
     private string? _cachedRelease;
     private DateTime _cachedReleaseFetchedUtc;
 
@@ -26,6 +30,23 @@ public class OverturePlacesService
         _logger = logger;
         _dataDir = dataDir;
         _bundledDataDir = bundledDataDir;
+        _releaseDiscovery = DiscoverLatestReleaseViaDuckDb;
+        _placeQuery = QueryOverture;
+        _bundledInfrastructureQuery = QueryBundledInfrastructure;
+        _infrastructureQuery = QueryInfrastructure;
+    }
+
+    internal OverturePlacesService(
+        ILogger<OverturePlacesService> logger,
+        string dataDir,
+        string bundledDataDir,
+        OverturePlacesTestHooks hooks)
+        : this(logger, dataDir, bundledDataDir)
+    {
+        _releaseDiscovery = hooks.ReleaseDiscovery ?? _releaseDiscovery;
+        _placeQuery = hooks.PlaceQuery ?? _placeQuery;
+        _bundledInfrastructureQuery = hooks.BundledInfrastructureQuery ?? _bundledInfrastructureQuery;
+        _infrastructureQuery = hooks.InfrastructureQuery ?? _infrastructureQuery;
     }
 
     public async Task<OvertureLookupDiagnostics> FindNearestPlaceWithDiagnosticsAsync(
@@ -34,14 +55,25 @@ public class OverturePlacesService
         string? alpha2,
         CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         try
         {
             var release = await GetLatestReleaseForOvertureAsync(ct);
-            var result = await Task.Run(() => QueryOverture(lat, lon, alpha2, release), ct);
+            var result = await Task.Run(() => _placeQuery(lat, lon, alpha2, release, ct), ct);
+            ct.ThrowIfCancellationRequested();
             return result with { Release = release, CountryFilter = alpha2 };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
+            ct.ThrowIfCancellationRequested();
             _logger.LogWarning(
                 "Overture lookup failed at ({Lat:F4}, {Lon:F4}): {Message}",
                 lat,
@@ -57,20 +89,32 @@ public class OverturePlacesService
         string? iso3,
         CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         try
         {
-            var cached = QueryBundledInfrastructure(lat, lon);
+            var cached = _bundledInfrastructureQuery(lat, lon, ct);
             if (cached is not null)
             {
+                ct.ThrowIfCancellationRequested();
                 return cached;
             }
 
             var release = await GetLatestReleaseForOvertureAsync(ct);
-            var result = await Task.Run(() => QueryInfrastructure(lat, lon, release), ct);
+            var result = await Task.Run(() => _infrastructureQuery(lat, lon, release, ct), ct);
+            ct.ThrowIfCancellationRequested();
             return result with { Release = release };
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
+            ct.ThrowIfCancellationRequested();
             _logger.LogWarning(
                 "Overture infrastructure lookup failed at ({Lat:F4}, {Lon:F4}): {Message}",
                 lat,
@@ -82,41 +126,44 @@ public class OverturePlacesService
 
     public async Task<string> GetLatestReleaseForOvertureAsync(CancellationToken ct = default)
     {
+        ct.ThrowIfCancellationRequested();
         lock (_releaseLock)
         {
             if (!string.IsNullOrWhiteSpace(_cachedRelease)
                 && DateTime.UtcNow - _cachedReleaseFetchedUtc < TimeSpan.FromHours(12))
             {
+                ct.ThrowIfCancellationRequested();
                 return _cachedRelease;
             }
         }
 
-        var release = await Task.Run(GetLatestReleaseViaDuckDb, ct);
+        var release = await Task.Run(GetLatestReleaseForOverture, ct);
+        ct.ThrowIfCancellationRequested();
 
         lock (_releaseLock)
         {
+            ct.ThrowIfCancellationRequested();
             _cachedRelease = release;
             _cachedReleaseFetchedUtc = DateTime.UtcNow;
         }
 
+        ct.ThrowIfCancellationRequested();
         return release;
     }
 
-    private string GetLatestReleaseViaDuckDb()
+    private string GetLatestReleaseForOverture()
     {
         try
         {
-            using var conn = new DuckDBConnection("Data Source=:memory:");
-            conn.Open();
-            OvertureDataAccess.LoadHttpfs(conn);
-
-            using var query = conn.CreateCommand();
-            query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
-            var value = query.ExecuteScalar()?.ToString();
+            var value = _releaseDiscovery();
             if (!string.IsNullOrWhiteSpace(value))
             {
                 return value;
             }
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch (Exception ex)
         {
@@ -129,8 +176,20 @@ public class OverturePlacesService
         return OverturePlacesLogic.DocumentedFallbackRelease;
     }
 
-    private OvertureLookupDiagnostics QueryOverture(double lat, double lon, string? alpha2, string release)
+    private static string? DiscoverLatestReleaseViaDuckDb()
     {
+        using var conn = new DuckDBConnection("Data Source=:memory:");
+        conn.Open();
+        OvertureDataAccess.LoadHttpfs(conn);
+
+        using var query = conn.CreateCommand();
+        query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
+        return query.ExecuteScalar()?.ToString();
+    }
+
+    private OvertureLookupDiagnostics QueryOverture(double lat, double lon, string? alpha2, string release, CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
         var latBuffer = OverturePlacesLogic.SearchRadiusMetres / 111_320d;
         var lonBuffer = latBuffer / Math.Max(0.1, Math.Cos(lat * Math.PI / 180d));
         var minLat = lat - latBuffer;
@@ -141,7 +200,9 @@ public class OverturePlacesService
 
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
+        ct.ThrowIfCancellationRequested();
         OvertureDataAccess.LoadAzureAndSpatial(conn);
+        ct.ThrowIfCancellationRequested();
 
         using var query = conn.CreateCommand();
         query.CommandText = OverturePlacesLogic.BuildQuery(lat, lon, minLat, maxLat, minLon, maxLon, alpha2, releaseUrl);
@@ -149,9 +210,20 @@ public class OverturePlacesService
         var candidates = new List<OvertureCandidateDiagnostic>();
         OverturePlaceResult? best = null;
 
+        ct.ThrowIfCancellationRequested();
         using var reader = query.ExecuteReader();
-        while (reader.Read())
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             var candidateLat = reader.GetDouble(5);
             var candidateLon = reader.GetDouble(6);
             var distance = OverturePlacesLogic.HaversineMetres(lat, lon, candidateLat, candidateLon);
@@ -201,11 +273,13 @@ public class OverturePlacesService
                 decision));
         }
 
+        ct.ThrowIfCancellationRequested();
         return new OvertureLookupDiagnostics(best, candidates, release, alpha2);
     }
 
-    private OvertureInfrastructureLookupDiagnostics? QueryBundledInfrastructure(double lat, double lon)
+    private OvertureInfrastructureLookupDiagnostics? QueryBundledInfrastructure(double lat, double lon, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var dbPath = Path.Combine(_bundledDataDir, "defaults", "overture-airports.db");
         if (!File.Exists(dbPath))
         {
@@ -214,6 +288,7 @@ public class OverturePlacesService
 
         using var conn = new SqliteConnection($"Data Source={dbPath}");
         conn.Open();
+        ct.ThrowIfCancellationRequested();
         using var cmd = conn.CreateCommand();
 
         var latBuffer = OverturePlacesLogic.InfrastructureSearchRadiusMetres / 111_320d;
@@ -243,13 +318,24 @@ public class OverturePlacesService
               AND bbox_ymin <= {maxLat.ToString(System.Globalization.CultureInfo.InvariantCulture)}
             """;
 
+        ct.ThrowIfCancellationRequested();
         using var reader = cmd.ExecuteReader();
+        ct.ThrowIfCancellationRequested();
         var point = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326).CreatePoint(new Coordinate(lon, lat));
         var candidates = new List<OvertureInfrastructureCandidateDiagnostic>();
         OvertureInfrastructureResult? best = null;
 
-        while (reader.Read())
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             var candidateLat = reader.GetDouble(5);
             var candidateLon = reader.GetDouble(6);
             var distance = OverturePlacesLogic.HaversineMetres(lat, lon, candidateLat, candidateLon);
@@ -298,12 +384,15 @@ public class OverturePlacesService
 
         using var meta = conn.CreateCommand();
         meta.CommandText = "SELECT value FROM _meta WHERE key='release'";
+        ct.ThrowIfCancellationRequested();
         var release = meta.ExecuteScalar()?.ToString();
+        ct.ThrowIfCancellationRequested();
         return new OvertureInfrastructureLookupDiagnostics(best, candidates, release);
     }
 
-    private OvertureInfrastructureLookupDiagnostics QueryInfrastructure(double lat, double lon, string release)
+    private OvertureInfrastructureLookupDiagnostics QueryInfrastructure(double lat, double lon, string release, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var latBuffer = OverturePlacesLogic.InfrastructureSearchRadiusMetres / 111_320d;
         var lonBuffer = latBuffer / Math.Max(0.1, Math.Cos(lat * Math.PI / 180d));
         var minLat = lat - latBuffer;
@@ -317,7 +406,9 @@ public class OverturePlacesService
 
         using var conn = new DuckDBConnection("Data Source=:memory:");
         conn.Open();
+        ct.ThrowIfCancellationRequested();
         OvertureDataAccess.LoadAzureAndSpatial(conn);
+        ct.ThrowIfCancellationRequested();
 
         using var query = conn.CreateCommand();
         query.CommandText = OverturePlacesLogic.BuildInfrastructureQuery(
@@ -332,9 +423,20 @@ public class OverturePlacesService
         var candidates = new List<OvertureInfrastructureCandidateDiagnostic>();
         OvertureInfrastructureResult? best = null;
 
+        ct.ThrowIfCancellationRequested();
         using var reader = query.ExecuteReader();
-        while (reader.Read())
+        ct.ThrowIfCancellationRequested();
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             var candidateLat = reader.GetDouble(5);
             var candidateLon = reader.GetDouble(6);
             var distance = OverturePlacesLogic.HaversineMetres(lat, lon, candidateLat, candidateLon);
@@ -386,7 +488,15 @@ public class OverturePlacesService
                 decision));
         }
 
+        ct.ThrowIfCancellationRequested();
         return new OvertureInfrastructureLookupDiagnostics(best, candidates, release);
     }
+}
 
+internal sealed class OverturePlacesTestHooks
+{
+    public Func<string?>? ReleaseDiscovery { get; init; }
+    public Func<double, double, string?, string, CancellationToken, OvertureLookupDiagnostics>? PlaceQuery { get; init; }
+    public Func<double, double, CancellationToken, OvertureInfrastructureLookupDiagnostics?>? BundledInfrastructureQuery { get; init; }
+    public Func<double, double, string, CancellationToken, OvertureInfrastructureLookupDiagnostics>? InfrastructureQuery { get; init; }
 }

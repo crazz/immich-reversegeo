@@ -2,11 +2,11 @@
 # Add this service to your existing Immich docker-compose.yml.
 services:
   immich-reversegeo:
-    image: ghcr.io/immich-reversegeo/immich-reversegeo:latest
+    image: ghcr.io/crazz/immich-reversegeo:latest
     container_name: immich-reversegeo
     pull_policy: always
     ports:
-      - "8080:8080"          # change the left side if 8080 is already in use; do NOT expose publicly
+      - "127.0.0.1:8080:8080" # change the host port if needed; use trusted access for remote hosts
     volumes:
       - reversegeo-config:/config      # settings (no database secrets in settings.json)
       - reversegeo-data:/data          # Overture caches, skipped.db, runtime data
@@ -14,7 +14,27 @@ services:
       - .env                 # reuse Immich's own .env (DB_USERNAME, DB_PASSWORD, etc.)
     environment:
       - ASPNETCORE_URLS=http://+:8080
+      # Omit the mode for Standard (Web UI and saved schedule).
+      # Uncomment for the same UI and manual/heavy actions without an internal schedule:
+      # - IMMICH_REVERSEGEO_MODE=web-only
+    stop_grace_period: 40s
     restart: unless-stopped
+
+  # Optional one-shot service: docker compose run --rm immich-reversegeo-run-once
+  # The profile prevents an ordinary compose up from starting this job.
+  immich-reversegeo-run-once:
+    image: ghcr.io/crazz/immich-reversegeo:latest
+    pull_policy: always
+    profiles: ["run-once"]
+    volumes:
+      - reversegeo-config:/config
+      - reversegeo-data:/data
+    env_file:
+      - .env
+    environment:
+      - IMMICH_REVERSEGEO_MODE=run-once
+    stop_grace_period: 40s
+    restart: "no"
 
 volumes:
   reversegeo-config:

@@ -1,0 +1,284 @@
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
+using ImmichReverseGeo.Core.WorkerProtocol;
+using ImmichReverseGeo.Web.WorkerCommandInvocation;
+using ImmichReverseGeo.Web.WorkerEventDelivery;
+using WorkerInvocation = ImmichReverseGeo.Web.WorkerCommandInvocation.WorkerCommandInvocation;
+
+namespace ImmichReverseGeo.Web.ChildWorkerLaunching;
+
+internal interface IChildWorkerLauncher
+{
+    ValueTask<ChildWorkerLaunchResult> LaunchAsync(
+        WorkerInvocation invocation,
+        WorkerJobDispatch dispatch,
+        IWorkerJobEventSink eventSink,
+        ChildWorkerLauncherOptions options,
+        CancellationToken cancellationToken);
+}
+
+internal interface IWorkerJobEventSink
+{
+    ValueTask AcceptAsync(
+        WorkerJobOutputMessage message,
+        CancellationToken cancellationToken);
+}
+
+internal interface IProcessAssetsWorkerJobEventSink : IWorkerJobEventSink
+{
+    ValueTask AcceptProcessAssetsAsync(
+        WorkerJobOutputMessage message,
+        WorkerProtocolEvent compatibilityEvent,
+        CancellationToken cancellationToken);
+}
+
+internal interface IWorkerProtocolEventSink
+{
+    ValueTask AcceptAsync(WorkerProtocolEvent @event, CancellationToken cancellationToken);
+}
+
+internal sealed class ProcessAssetsWorkerJobEventSink(
+    ProcessingRunRequest request,
+    IWorkerProtocolEventSink processingSink) : IProcessAssetsWorkerJobEventSink
+{
+    private readonly ProcessAssetsWorkerJobProjection _projection = new(request);
+
+    internal IAcceptedWorkerEventSink? AcceptedDeliverySink => processingSink as IAcceptedWorkerEventSink;
+
+    public ValueTask AcceptAsync(
+        WorkerJobOutputMessage message,
+        CancellationToken cancellationToken)
+    {
+        return processingSink.AcceptAsync(
+            _projection.Map(message),
+            cancellationToken);
+    }
+
+
+    public ValueTask AcceptProcessAssetsAsync(
+        WorkerJobOutputMessage message,
+        WorkerProtocolEvent compatibilityEvent,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(message);
+        ArgumentNullException.ThrowIfNull(compatibilityEvent);
+        return processingSink.AcceptAsync(compatibilityEvent, cancellationToken);
+    }
+}
+
+internal sealed record ChildWorkerLauncherOptions
+{
+    internal static ChildWorkerLauncherOptions Default { get; } = new();
+    internal TimeProvider TimeProvider { get; init; } = TimeProvider.System;
+    internal TimeSpan ReadyTimeout { get; init; } = TimeSpan.FromSeconds(30);
+    internal ChildWorkerEvidenceFinalityGate? EvidenceFinalityGate { get; init; }
+    internal WorkerEventDeliveryPolicy? EventDeliveryPolicy { get; init; }
+
+    internal void Validate()
+    {
+        Validate(this);
+    }
+
+    private static void Validate(ChildWorkerLauncherOptions options)
+    {
+        ArgumentNullException.ThrowIfNull(options.TimeProvider, nameof(options));
+        options.EventDeliveryPolicy?.Validate();
+        if (options.ReadyTimeout != Timeout.InfiniteTimeSpan && options.ReadyTimeout <= TimeSpan.Zero)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options));
+        }
+    }
+}
+
+internal abstract class ChildWorkerLaunchResult
+{
+    private ChildWorkerLaunchResult()
+    {
+    }
+
+    internal sealed class StartFailed(ChildWorkerStartFailureCategory category) : ChildWorkerLaunchResult
+    {
+        internal ChildWorkerStartFailureCategory Category { get; } = category;
+    }
+
+    internal sealed class Started(ChildWorkerSession session) : ChildWorkerLaunchResult
+    {
+        internal ChildWorkerSession Session { get; } = session;
+    }
+}
+
+internal enum ChildWorkerStartFailureCategory
+{
+    ProcessStartFailed
+}
+
+internal abstract class ChildWorkerStartupObservation
+{
+    private ChildWorkerStartupObservation()
+    {
+    }
+
+    internal sealed class Pending : ChildWorkerStartupObservation
+    {
+        internal static Pending Instance { get; } = new();
+    }
+
+    internal sealed class PostStartSetupFailed : ChildWorkerStartupObservation
+    {
+        internal static PostStartSetupFailed Instance { get; } = new();
+    }
+
+    internal sealed class ReadyAccepted : ChildWorkerStartupObservation
+    {
+        internal static ReadyAccepted Instance { get; } = new();
+    }
+
+    internal sealed class ReadyTimedOut : ChildWorkerStartupObservation
+    {
+        internal static ReadyTimedOut Instance { get; } = new();
+    }
+
+    internal sealed class PreReadyEndOfStream : ChildWorkerStartupObservation
+    {
+        internal static PreReadyEndOfStream Instance { get; } = new();
+    }
+
+    internal sealed class PreReadyExit : ChildWorkerStartupObservation
+    {
+        internal static PreReadyExit Instance { get; } = new();
+    }
+
+    internal sealed class PreReadyExitObservationFailed : ChildWorkerStartupObservation
+    {
+        internal static PreReadyExitObservationFailed Instance { get; } = new();
+    }
+
+    internal sealed class PreReadyReadFailed : ChildWorkerStartupObservation
+    {
+        internal static PreReadyReadFailed Instance { get; } = new();
+    }
+
+    internal sealed class ProtocolFailure(WorkerProtocolFailure failure) : ChildWorkerStartupObservation
+    {
+        internal WorkerProtocolFailure Failure { get; } = failure;
+    }
+
+    internal sealed class SinkFailed : ChildWorkerStartupObservation
+    {
+        internal static SinkFailed Instance { get; } = new();
+    }
+
+    internal sealed class RequestSerializationFailed : ChildWorkerStartupObservation
+    {
+        internal static RequestSerializationFailed Instance { get; } = new();
+    }
+
+    internal sealed class RequestWriteFailed : ChildWorkerStartupObservation
+    {
+        internal static RequestWriteFailed Instance { get; } = new();
+    }
+
+    internal sealed class RequestFlushFailed : ChildWorkerStartupObservation
+    {
+        internal static RequestFlushFailed Instance { get; } = new();
+    }
+
+    internal sealed class Disposed : ChildWorkerStartupObservation
+    {
+        internal static Disposed Instance { get; } = new();
+    }
+}
+
+internal abstract class ChildWorkerProtocolObservation
+{
+    private ChildWorkerProtocolObservation()
+    {
+    }
+
+    internal sealed class ProtocolFailure(WorkerProtocolFailure failure) : ChildWorkerProtocolObservation
+    {
+        internal WorkerProtocolFailure Failure { get; } = failure;
+    }
+
+    internal sealed class SinkFailure : ChildWorkerProtocolObservation
+    {
+        internal static SinkFailure Instance { get; } = new();
+    }
+}
+
+internal abstract class ChildWorkerStreamFinality
+{
+    private ChildWorkerStreamFinality()
+    {
+    }
+
+    internal sealed class EndOfStream : ChildWorkerStreamFinality
+    {
+        internal static EndOfStream Instance { get; } = new();
+    }
+
+    internal sealed class ReadFailed : ChildWorkerStreamFinality
+    {
+        internal static ReadFailed Instance { get; } = new();
+    }
+}
+
+internal sealed class ChildWorkerStandardErrorTail
+{
+    private readonly byte[] _bytes;
+
+    internal ChildWorkerStandardErrorTail(ReadOnlySpan<byte> bytes, long totalBytes, bool totalBytesSaturated, bool isTruncated)
+    {
+        _bytes = bytes.ToArray();
+        TotalBytes = totalBytes;
+        TotalBytesSaturated = totalBytesSaturated;
+        IsTruncated = isTruncated;
+    }
+
+    internal ReadOnlyMemory<byte> Bytes => _bytes;
+    internal long TotalBytes { get; }
+    internal bool TotalBytesSaturated { get; }
+    internal bool IsTruncated { get; }
+    internal string Text => System.Text.Encoding.UTF8.GetString(_bytes);
+}
+
+internal sealed record ChildWorkerCompletionObservation(
+    int ProcessId,
+    Guid RunId,
+    ChildWorkerStartupObservation Startup,
+    bool ExitObserved,
+    int? ExitCode,
+    ChildWorkerStreamFinality StandardOutputFinality,
+    ChildWorkerStreamFinality StandardErrorFinality,
+    WorkerProtocolEvent? Terminal,
+    WorkerJobOutputMessage? JobTerminal,
+    ChildWorkerProtocolObservation? FirstProtocolObservation,
+    ChildWorkerStandardErrorTail StandardErrorTail,
+    WorkerJobKind JobKind,
+    InternalWorkerProtocolVersion ProtocolVersion)
+{
+    internal bool AcceptedRunStarted { get; init; }
+    internal WorkerEventDeliveryObservation? EventDelivery { get; init; }
+    internal Guid JobId => RunId;
+}
+
+internal interface IChildProcessFactory
+{
+    ValueTask<IChildProcess?> StartAsync(ChildProcessStartDescriptor descriptor, CancellationToken cancellationToken);
+}
+
+internal interface IChildProcess : IAsyncDisposable
+{
+    int ProcessId { get; }
+    Stream StandardInput { get; }
+    Stream StandardOutput { get; }
+    Stream StandardError { get; }
+    Task<int> WaitForExitAsync();
+    ChildWorkingSetObservation ReadWorkingSet();
+    ChildProcessExitState GetExitState();
+    ChildProcessKillOutcome KillProcessTree();
+}

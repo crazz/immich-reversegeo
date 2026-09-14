@@ -2,22 +2,55 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using DuckDB.NET.Data;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Overture.Services;
 
-public class OvertureDivisionCacheService
+public class OvertureDivisionCacheService : ICacheMutationSourceOperation
 {
+    private static readonly string[] RequiredDivisionAreaColumns =
+    [
+        "id",
+        "name",
+        "subtype",
+        "class_name",
+        "admin_level",
+        "country",
+        "is_land",
+        "is_territorial",
+        "geom_wkb",
+        "bbox_xmin",
+        "bbox_ymin",
+        "bbox_xmax",
+        "bbox_ymax"
+    ];
+
     private readonly ILogger<OvertureDivisionCacheService> _logger;
     private readonly string _dataDir;
     private readonly Func<string, string?> _iso3ToAlpha2;
-    private readonly ConcurrentDictionary<string, Lazy<Task>> _inflightDownloads = new();
+    private readonly Func<string, string, CancellationToken, long> _exportOperation;
+    private readonly Func<string, CancellationToken, Task> _sourceOperation;
+    private readonly Func<CancellationToken, Task> _beforePublication;
+    private readonly Func<CancellationToken, Task> _afterPublication;
+    private readonly Func<string, OvertureDivisionStatus> _statusReader;
+    private readonly Func<string, string, bool> _hasRowsOperation;
+    private readonly Func<string, bool> _validationOperation;
+    private readonly Func<string?> _releaseDiscovery;
+    private readonly Action _afterInFlightTaskAcquired;
+    private readonly ICacheFilePublisher _filePublisher;
+    private readonly ICacheCandidateOwnership _candidateOwnership;
+    private readonly ConcurrentDictionary<string, MutationFlight> _inflightDownloads = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
+    private readonly ConcurrentDictionary<string, SemaphoreSlim> _mutationLocks = new();
+
+    public CacheMutationSource Source => CacheMutationSource.Overture;
 
     public OvertureDivisionCacheService(
         ILogger<OvertureDivisionCacheService> logger,
@@ -27,6 +60,17 @@ public class OvertureDivisionCacheService
         _logger = logger;
         _dataDir = dirs.DataDir;
         _iso3ToAlpha2 = iso3ToAlpha2;
+        _exportOperation = ExportOvertureDivisions;
+        _sourceOperation = DownloadDataInternalAsync;
+        _beforePublication = _ => Task.CompletedTask;
+        _afterPublication = _ => Task.CompletedTask;
+        _statusReader = ReadStatus;
+        _hasRowsOperation = HasRows;
+        _validationOperation = IsValidDb;
+        _releaseDiscovery = DiscoverLatestOvertureReleaseForCache;
+        _afterInFlightTaskAcquired = static () => { };
+        _filePublisher = new AtomicCacheFilePublisher();
+        _candidateOwnership = new CacheCandidateOwnership();
     }
 
     public OvertureDivisionCacheService(ILogger<OvertureDivisionCacheService> logger, string dataDir, Func<string, string?> iso3ToAlpha2)
@@ -34,6 +78,74 @@ public class OvertureDivisionCacheService
         _logger = logger;
         _dataDir = dataDir;
         _iso3ToAlpha2 = iso3ToAlpha2;
+        _exportOperation = ExportOvertureDivisions;
+        _sourceOperation = DownloadDataInternalAsync;
+        _beforePublication = _ => Task.CompletedTask;
+        _afterPublication = _ => Task.CompletedTask;
+        _statusReader = ReadStatus;
+        _hasRowsOperation = HasRows;
+        _validationOperation = IsValidDb;
+        _releaseDiscovery = DiscoverLatestOvertureReleaseForCache;
+        _afterInFlightTaskAcquired = static () => { };
+        _filePublisher = new AtomicCacheFilePublisher();
+        _candidateOwnership = new CacheCandidateOwnership();
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        Func<string, string, long> exportOperation)
+        : this(logger, dataDir, iso3ToAlpha2)
+    {
+        ArgumentNullException.ThrowIfNull(exportOperation);
+        _exportOperation = (path, alpha2, _) => exportOperation(path, alpha2);
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        Func<string, string, long> exportOperation,
+        Func<string, CancellationToken, Task> sourceOperation)
+        : this(logger, dataDir, iso3ToAlpha2, exportOperation)
+    {
+        _sourceOperation = sourceOperation ?? throw new ArgumentNullException(nameof(sourceOperation));
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        Func<string, string, long> exportOperation,
+        Func<CancellationToken, Task> beforePublication)
+        : this(logger, dataDir, iso3ToAlpha2, exportOperation)
+    {
+        _beforePublication = beforePublication ?? throw new ArgumentNullException(nameof(beforePublication));
+    }
+
+    internal OvertureDivisionCacheService(
+        ILogger<OvertureDivisionCacheService> logger,
+        string dataDir,
+        Func<string, string?> iso3ToAlpha2,
+        OvertureDivisionCacheTestHooks hooks)
+        : this(logger, dataDir, iso3ToAlpha2)
+    {
+        if (hooks.ExportOperation is not null)
+        {
+            _exportOperation = hooks.ExportOperation;
+        }
+
+        _sourceOperation = hooks.SourceOperation ?? _sourceOperation;
+        _beforePublication = hooks.BeforePublication ?? _beforePublication;
+        _afterPublication = hooks.AfterPublication ?? _afterPublication;
+        _statusReader = hooks.StatusReader ?? _statusReader;
+        _hasRowsOperation = hooks.HasRowsOperation ?? _hasRowsOperation;
+        _validationOperation = hooks.ValidationOperation ?? _validationOperation;
+        _releaseDiscovery = hooks.ReleaseDiscovery ?? _releaseDiscovery;
+        _afterInFlightTaskAcquired = hooks.AfterInFlightTaskAcquired ?? _afterInFlightTaskAcquired;
+        _filePublisher = hooks.FilePublisher ?? _filePublisher;
+        _candidateOwnership = hooks.CandidateOwnership ?? _candidateOwnership;
     }
 
     public Dictionary<string, OvertureDivisionStatus> GetStatus()
@@ -50,19 +162,16 @@ public class OvertureDivisionCacheService
             var iso3 = Path.GetFileNameWithoutExtension(file);
             try
             {
-                using var conn = new SqliteConnection($"Data Source={file};Pooling=false");
-                conn.Open();
-                using var cmd = conn.CreateCommand();
-                cmd.CommandText = "SELECT COUNT(*) FROM division_area";
-                var count = (long)cmd.ExecuteScalar()!;
-                var downloadedAt = ReadMetaTimestamp(conn, "downloadedAt");
-                var release = ReadMetaValue(conn, "release");
-                var fileSizeBytes = new FileInfo(file).Length;
-                result[iso3] = new OvertureDivisionStatus(count, downloadedAt, release, fileSizeBytes);
-                if (count > 0)
+                var status = _statusReader(file);
+                result[iso3] = status;
+                if (status.RowCount > 0)
                 {
                     _readyCaches[iso3] = 0;
                 }
+            }
+            catch (OutOfMemoryException)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -81,74 +190,250 @@ public class OvertureDivisionCacheService
             return false;
         }
 
-        if (_readyCaches.ContainsKey(iso3))
-        {
-            return true;
-        }
-
-        var hasRows = HasRows(GetDbPath(iso3), "division_area");
-        if (hasRows)
+        var hasData = TryReadUsableExistingCache(iso3, out _);
+        if (hasData)
         {
             _readyCaches[iso3] = 0;
         }
-
-        return hasRows;
-    }
-
-    public void DeleteFile(string iso3)
-    {
-        _readyCaches.TryRemove(iso3, out _);
-        DeleteFileAndTemps(GetDbPath(iso3), iso3);
-    }
-
-    public (Task Task, OvertureDivisionEnsureResult Result) GetOrStartDownload(string iso3, CancellationToken ct = default)
-    {
-        if (HasData(iso3))
+        else
         {
-            return (Task.CompletedTask, OvertureDivisionEnsureResult.AlreadyReady);
+            _readyCaches.TryRemove(iso3, out _);
         }
 
-        var startedNew = false;
-        var lazyDownload = _inflightDownloads.GetOrAdd(
+        return hasData;
+    }
+
+    public async ValueTask<CacheMutationSourceResult> ExecuteAsync(
+        CacheMutationOperation operation,
+        string iso3,
+        ICacheMutationReporter reporter,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(reporter);
+        CacheMutationRequest.RequireCanonicalIso3(iso3, nameof(iso3));
+        cancellationToken.ThrowIfCancellationRequested();
+        string alpha2 = _iso3ToAlpha2(iso3)
+            ?? throw new InvalidOperationException(
+                $"The country code {iso3} is not supported by Overture.");
+        if (alpha2.Length != 2
+            || alpha2.Any(static value => value is < 'A' or > 'Z'))
+        {
+            throw new InvalidOperationException(
+                $"The country code {iso3} has no canonical Overture mapping.");
+        }
+
+        await ReportAsync(
+            reporter,
+            CacheMutationProgressStep.CheckingExisting,
+            operation,
             iso3,
-            key =>
-            {
-                startedNew = true;
-                return new Lazy<Task>(
-                    () => DownloadDataInternalAsync(key, ct),
-                    LazyThreadSafetyMode.ExecutionAndPublication);
-            });
+            "Checking the existing Overture cache.",
+            cancellationToken).ConfigureAwait(false);
 
-        var result = startedNew
-            ? OvertureDivisionEnsureResult.StartedDownload
-            : OvertureDivisionEnsureResult.AwaitedExistingDownload;
-
-        return (lazyDownload.Value, result);
-    }
-
-    public async Task<OvertureDivisionEnsureResult> EnsureDataAsync(string iso3, CancellationToken ct = default)
-    {
-        var (downloadTask, result) = GetOrStartDownload(iso3, ct);
-
-        try
+        if (operation == CacheMutationOperation.Ensure
+            && TryReadWorkerResult(
+                operation,
+                iso3,
+                CacheMutationDisposition.AlreadyReady,
+                out CacheMutationSourceResult? ready))
         {
-            await downloadTask.WaitAsync(ct);
-            return result;
+            await ReportAsync(
+                reporter,
+                CacheMutationProgressStep.Completed,
+                operation,
+                iso3,
+                "The Overture cache is already ready.",
+                cancellationToken).ConfigureAwait(false);
+            return ready!;
         }
-        finally
+
+        while (true)
         {
-            if (downloadTask.IsCompleted)
+            MutationFlight? candidate = null;
+            candidate = new MutationFlight(
+                operation,
+                ProducesStrictMetadata: true,
+                new Lazy<Task>(
+                    () => RunSourceOperationAsync(
+                        iso3,
+                        cancellationToken,
+                        candidate!,
+                        () => MutateWithCountryLockAsync(
+                            iso3,
+                            forceRefresh: true,
+                            operation,
+                            reporter,
+                            cancellationToken)),
+                    LazyThreadSafetyMode.ExecutionAndPublication));
+            MutationFlight winning = _inflightDownloads.GetOrAdd(iso3, candidate);
+
+            if (operation == CacheMutationOperation.Refresh
+                && winning.Operation == CacheMutationOperation.Ensure)
             {
-                _inflightDownloads.TryRemove(iso3, out _);
+                await winning.Task.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+                cancellationToken.ThrowIfCancellationRequested();
+                continue;
+            }
+
+            await winning.Task.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+            cancellationToken.ThrowIfCancellationRequested();
+            if (TryReadWorkerResult(
+                    operation,
+                    iso3,
+                    CacheMutationDisposition.Published,
+                    out CacheMutationSourceResult? published))
+            {
+                await ReportAsync(
+                    reporter,
+                    CacheMutationProgressStep.Completed,
+                    operation,
+                    iso3,
+                    "The Overture cache is ready.",
+                    cancellationToken).ConfigureAwait(false);
+                return published!;
+            }
+
+            if (ReferenceEquals(winning, candidate) || winning.ProducesStrictMetadata)
+            {
+                throw new InvalidOperationException(
+                    "The published Overture cache could not be verified.");
             }
         }
     }
 
-    private async Task DownloadDataInternalAsync(string iso3, CancellationToken ct)
+    public (Task Task, OvertureDivisionEnsureResult Result) GetOrStartDownload(string iso3, CancellationToken ct = default)
     {
-        var dbPath = GetDbPath(iso3);
+        ct.ThrowIfCancellationRequested();
         if (HasData(iso3))
         {
+            ct.ThrowIfCancellationRequested();
+            return (Task.CompletedTask, OvertureDivisionEnsureResult.AlreadyReady);
+        }
+
+        MutationFlight? candidate = null;
+        candidate = new MutationFlight(
+            CacheMutationOperation.Ensure,
+            ProducesStrictMetadata: false,
+            new Lazy<Task>(
+                () => RunSourceOperationAsync(
+                    iso3,
+                    ct,
+                    candidate!,
+                    () => _sourceOperation(iso3, ct)),
+                LazyThreadSafetyMode.ExecutionAndPublication));
+        MutationFlight winning = _inflightDownloads.GetOrAdd(iso3, candidate);
+
+        var result = ReferenceEquals(candidate, winning)
+            ? OvertureDivisionEnsureResult.StartedDownload
+            : OvertureDivisionEnsureResult.AwaitedExistingDownload;
+
+        _afterInFlightTaskAcquired();
+        var sharedTask = winning.Task.Value;
+        ct.ThrowIfCancellationRequested();
+        return (sharedTask, result);
+    }
+
+    public Task<OvertureDivisionEnsureResult> EnsureDataAsync(string iso3, CancellationToken ct = default)
+    {
+        var sharedDownload = GetOrStartDownload(iso3, ct);
+        return AwaitSharedDownloadAsync(sharedDownload.Task, sharedDownload.Result, iso3, ct);
+    }
+
+    private static async Task<OvertureDivisionEnsureResult> AwaitSharedDownloadAsync(
+        Task sharedDownload,
+        OvertureDivisionEnsureResult result,
+        string iso3,
+        CancellationToken ct)
+    {
+        try
+        {
+            await sharedDownload.WaitAsync(ct);
+            ct.ThrowIfCancellationRequested();
+            return result;
+        }
+        catch (OperationCanceledException ex) when (!ct.IsCancellationRequested)
+        {
+            throw new InvalidOperationException($"Overture division source became unavailable for {iso3}.", ex);
+        }
+    }
+
+    private async Task RunSourceOperationAsync(
+        string iso3,
+        CancellationToken ct,
+        MutationFlight flight,
+        Func<Task> operation)
+    {
+        try
+        {
+            await operation().ConfigureAwait(false);
+        }
+        finally
+        {
+            RemoveExact(_inflightDownloads, iso3, flight);
+        }
+    }
+
+    private static bool RemoveExact(
+        ConcurrentDictionary<string, MutationFlight> downloads,
+        string iso3,
+        MutationFlight flight)
+    {
+        return ((ICollection<KeyValuePair<string, MutationFlight>>)downloads).Remove(
+            new KeyValuePair<string, MutationFlight>(iso3, flight));
+    }
+
+    internal static bool RemoveExact(ConcurrentDictionary<string, Lazy<Task>> downloads, string iso3, Lazy<Task> lazy)
+    {
+        return ((ICollection<KeyValuePair<string, Lazy<Task>>>)downloads).Remove(
+            new KeyValuePair<string, Lazy<Task>>(iso3, lazy));
+    }
+
+    private Task DownloadDataInternalAsync(string iso3, CancellationToken ct) =>
+        MutateWithCountryLockAsync(
+            iso3,
+            forceRefresh: false,
+            CacheMutationOperation.Ensure,
+            CacheMutationReporters.None,
+            ct);
+
+    private async Task MutateWithCountryLockAsync(
+        string iso3,
+        bool forceRefresh,
+        CacheMutationOperation operation,
+        ICacheMutationReporter reporter,
+        CancellationToken ct)
+    {
+        SemaphoreSlim mutationLock = _mutationLocks.GetOrAdd(
+            iso3,
+            static _ => new SemaphoreSlim(1, 1));
+        await mutationLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            await DownloadDataInternalAsync(
+                iso3,
+                forceRefresh,
+                operation,
+                reporter,
+                ct).ConfigureAwait(false);
+        }
+        finally
+        {
+            mutationLock.Release();
+        }
+    }
+
+    private async Task DownloadDataInternalAsync(
+        string iso3,
+        bool forceRefresh,
+        CacheMutationOperation operation,
+        ICacheMutationReporter reporter,
+        CancellationToken ct)
+    {
+        ct.ThrowIfCancellationRequested();
+        var dbPath = GetDbPath(iso3);
+        if (!forceRefresh && HasData(iso3))
+        {
+            ct.ThrowIfCancellationRequested();
             return;
         }
 
@@ -160,45 +445,89 @@ public class OvertureDivisionCacheService
 
         var dir = Path.GetDirectoryName(dbPath)!;
         Directory.CreateDirectory(dir);
-        var tmpPath = Path.Combine(dir, $"{iso3}.{Guid.NewGuid():N}.tmp");
+        var tmpPath = Path.Combine(
+            dir,
+            $"{iso3}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
 
-        foreach (var stale in Directory.GetFiles(dir, $"{iso3}.*.tmp"))
-        {
-            TryDelete(stale);
-        }
+        CleanupAbandonedCandidates(dir, iso3, tmpPath);
+        using ICacheCandidateLease candidateLease = _candidateOwnership.Acquire(tmpPath);
 
         try
         {
-            var rowCount = await Task.Run(() => ExportOvertureDivisions(tmpPath, alpha2), ct);
+            await ReportAsync(
+                reporter,
+                CacheMutationProgressStep.PreparingSource,
+                operation,
+                iso3,
+                "Preparing the Overture source.",
+                ct).ConfigureAwait(false);
+            await ReportAsync(
+                reporter,
+                CacheMutationProgressStep.Downloading,
+                operation,
+                iso3,
+                "Downloading Overture administrative areas.",
+                ct).ConfigureAwait(false);
+            await ReportAsync(
+                reporter,
+                CacheMutationProgressStep.Exporting,
+                operation,
+                iso3,
+                "Exporting Overture administrative areas.",
+                ct).ConfigureAwait(false);
+            await using ICacheMutationActivity activity = await reporter.BeginActivityAsync(
+                $"Overture cache {iso3}",
+                ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            var rowCount = await Task.Run(() => _exportOperation(tmpPath, alpha2, ct), ct);
+            ct.ThrowIfCancellationRequested();
             if (rowCount == 0)
             {
                 throw new InvalidOperationException($"No Overture division rows were downloaded for {iso3}.");
             }
 
-            if (!IsValidDb(tmpPath))
+            if (!RunValidationOperation(tmpPath)
+                || !HasRequiredCandidateMetadata(tmpPath, alpha2))
             {
                 throw new InvalidOperationException(
-                    $"Overture division download for {iso3} produced an invalid SQLite file at {tmpPath}");
+                    $"Overture division download for {iso3} produced an invalid cache.");
             }
 
-            File.Move(tmpPath, dbPath, overwrite: true);
+            await ReportAsync(
+                reporter,
+                CacheMutationProgressStep.ValidatingCandidate,
+                operation,
+                iso3,
+                "Validating the Overture cache candidate.",
+                ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+            await _beforePublication(ct);
+            ct.ThrowIfCancellationRequested();
+            await ReportAsync(
+                reporter,
+                CacheMutationProgressStep.Publishing,
+                operation,
+                iso3,
+                "Publishing the Overture cache.",
+                ct).ConfigureAwait(false);
+            _filePublisher.Publish(tmpPath, dbPath);
+            await _afterPublication(ct);
+            ct.ThrowIfCancellationRequested();
             _readyCaches[iso3] = 0;
             _logger.LogInformation("Overture division download complete for {ISO3}: {Rows} areas", iso3, rowCount);
         }
         catch
         {
-            TryDelete(tmpPath);
+            TryDeleteAfterFailure(tmpPath);
             throw;
-        }
-        finally
-        {
-            _inflightDownloads.TryRemove(iso3, out _);
         }
     }
 
-    private long ExportOvertureDivisions(string tmpPath, string alpha2)
+    private long ExportOvertureDivisions(string tmpPath, string alpha2, CancellationToken ct)
     {
+        ct.ThrowIfCancellationRequested();
         var release = GetLatestOvertureReleaseForCache();
+        ct.ThrowIfCancellationRequested();
         var releaseUrl = string.Format(
             System.Globalization.CultureInfo.InvariantCulture,
             OvertureDivisionsLogic.DivisionAreaReleaseUrlTemplate,
@@ -206,7 +535,9 @@ public class OvertureDivisionCacheService
 
         using var duck = new DuckDBConnection("Data Source=:memory:");
         duck.Open();
+        ct.ThrowIfCancellationRequested();
         OvertureDataAccess.LoadAzureAndSpatial(duck);
+        ct.ThrowIfCancellationRequested();
 
         using var selectCmd = duck.CreateCommand();
         selectCmd.CommandText = $@"
@@ -227,10 +558,12 @@ public class OvertureDivisionCacheService
             FROM read_parquet('{releaseUrl}', filename = true, hive_partitioning = 1)
             WHERE lower(country) = '{alpha2.ToLowerInvariant()}'
             ";
+        ct.ThrowIfCancellationRequested();
         using var reader = selectCmd.ExecuteReader();
+        ct.ThrowIfCancellationRequested();
+        ct.ThrowIfCancellationRequested();
 
-        using var sqlite = new SqliteConnection($"Data Source={tmpPath}");
-        sqlite.Open();
+        using var sqlite = OpenTemporaryOutputConnection(tmpPath);
 
         using (var ddl = sqlite.CreateCommand())
         {
@@ -265,9 +598,11 @@ public class OvertureDivisionCacheService
             meta.CommandText = @"
                 INSERT INTO _meta VALUES ('downloadedAt', $at);
                 INSERT INTO _meta VALUES ('release', $release);
+                INSERT INTO _meta VALUES ('country', $country);
                 ";
             meta.Parameters.AddWithValue("$at", DateTime.UtcNow.ToString("O"));
             meta.Parameters.AddWithValue("$release", release);
+            meta.Parameters.AddWithValue("$country", alpha2.ToUpperInvariant());
             meta.ExecuteNonQuery();
         }
 
@@ -297,8 +632,17 @@ public class OvertureDivisionCacheService
         var pYMax = insert.Parameters.Add("$ymax", SqliteType.Real);
 
         long rows = 0;
-        while (reader.Read())
+        while (true)
         {
+            ct.ThrowIfCancellationRequested();
+            var hasRow = reader.Read();
+            ct.ThrowIfCancellationRequested();
+            if (!hasRow)
+            {
+                break;
+            }
+
+            ct.ThrowIfCancellationRequested();
             pId.Value = reader.GetString(0);
             pName.Value = reader.GetString(1);
             pSubType.Value = reader.IsDBNull(2) ? DBNull.Value : reader.GetString(2);
@@ -316,26 +660,335 @@ public class OvertureDivisionCacheService
             rows++;
         }
 
+        ct.ThrowIfCancellationRequested();
         tx.Commit();
+        ct.ThrowIfCancellationRequested();
         sqlite.Close();
         SqliteConnection.ClearPool(sqlite);
+        ct.ThrowIfCancellationRequested();
         return rows;
     }
 
-    private static string GetLatestOvertureReleaseForCache()
+    internal static SqliteConnection OpenTemporaryOutputConnection(string tmpPath)
+    {
+        var connectionString = new SqliteConnectionStringBuilder
+        {
+            DataSource = tmpPath,
+            Pooling = false
+        }.ConnectionString;
+        var sqlite = new SqliteConnection(connectionString);
+        try
+        {
+            sqlite.Open();
+            return sqlite;
+        }
+        catch
+        {
+            sqlite.Dispose();
+            throw;
+        }
+    }
+
+    private string GetLatestOvertureReleaseForCache() => ResolveLatestRelease(_releaseDiscovery);
+
+    internal static string ResolveLatestRelease(Func<string?> releaseDiscovery)
     {
         try
         {
-            using var conn = new DuckDBConnection("Data Source=:memory:");
-            conn.Open();
-            OvertureDataAccess.LoadHttpfs(conn);
-            using var query = conn.CreateCommand();
-            query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
-            return query.ExecuteScalar()?.ToString() ?? OverturePlacesLogic.DocumentedFallbackRelease;
+            return releaseDiscovery() ?? OverturePlacesLogic.DocumentedFallbackRelease;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
             return OverturePlacesLogic.DocumentedFallbackRelease;
+        }
+    }
+
+    private static string? DiscoverLatestOvertureReleaseForCache()
+    {
+        using var conn = new DuckDBConnection("Data Source=:memory:");
+        conn.Open();
+        OvertureDataAccess.LoadHttpfs(conn);
+        using var query = conn.CreateCommand();
+        query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
+        return query.ExecuteScalar()?.ToString();
+    }
+
+    private static OvertureDivisionStatus ReadStatus(string file)
+    {
+        using var conn = new SqliteConnection($"Data Source={file};Pooling=false");
+        conn.Open();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COUNT(*) FROM division_area";
+        var count = (long)cmd.ExecuteScalar()!;
+        var downloadedAt = ReadMetaTimestamp(conn, "downloadedAt");
+        var release = ReadMetaValue(conn, "release");
+        return new OvertureDivisionStatus(count, downloadedAt, release, new FileInfo(file).Length);
+    }
+
+    private bool TryReadWorkerResult(
+        CacheMutationOperation operation,
+        string iso3,
+        CacheMutationDisposition disposition,
+        out CacheMutationSourceResult? result)
+    {
+        result = null;
+        try
+        {
+            if (!TryReadUsableExistingCache(
+                    iso3,
+                    out OvertureDivisionStatus? status))
+            {
+                return false;
+            }
+
+            result = new CacheMutationSourceResult(
+                CacheMutationSource.Overture,
+                operation,
+                iso3,
+                disposition,
+                status!.RowCount,
+                new DateTimeOffset(status.DownloadedAt!.Value.ToUniversalTime()),
+                status.FileSizeBytes!.Value,
+                status.Release!,
+                null);
+            return true;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private bool TryReadUsableExistingCache(
+        string iso3,
+        out OvertureDivisionStatus? status)
+    {
+        status = null;
+        try
+        {
+            CacheMutationRequest.RequireCanonicalIso3(iso3, nameof(iso3));
+            string? alpha2 = _iso3ToAlpha2(iso3);
+            if (alpha2 is null
+                || alpha2.Length != 2
+                || alpha2.Any(static value => value is < 'A' or > 'Z'))
+            {
+                return false;
+            }
+
+            string path = GetDbPath(iso3);
+            if (!RunHasRowsOperation(path, "division_area")
+                || !_validationOperation(path)
+                || !HasReaderCompatibleSchema(path))
+            {
+                return false;
+            }
+
+            status = _statusReader(path);
+            return status.RowCount > 0
+                && status.DownloadedAt is not null
+                && status.FileSizeBytes is > 0
+                && !string.IsNullOrWhiteSpace(status.Release)
+                && OptionalEncodedCountryMatches(path, alpha2);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            status = null;
+            return false;
+        }
+    }
+
+    private static bool OptionalEncodedCountryMatches(
+        string path,
+        string expectedAlpha2)
+    {
+        using var connection = new SqliteConnection(
+            new SqliteConnectionStringBuilder
+            {
+                DataSource = path,
+                Mode = SqliteOpenMode.ReadOnly,
+                Pooling = false
+            }.ConnectionString);
+        connection.Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT value FROM _meta WHERE key = 'country'";
+        object? encoded = command.ExecuteScalar();
+        return encoded is null
+            || string.Equals(encoded.ToString(), expectedAlpha2, StringComparison.Ordinal);
+    }
+
+    private static ValueTask ReportAsync(
+        ICacheMutationReporter reporter,
+        CacheMutationProgressStep step,
+        CacheMutationOperation operation,
+        string iso3,
+        string message,
+        CancellationToken cancellationToken) =>
+        reporter.ReportProgressAsync(
+            new CacheMutationProgressPayload(
+                step,
+                CacheMutationSource.Overture,
+                operation,
+                iso3,
+                message),
+            cancellationToken);
+
+    private static bool HasRequiredCandidateMetadata(string path, string expectedAlpha2)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = path,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Pooling = false
+                }.ConnectionString);
+            connection.Open();
+            if (!HasReaderCompatibleSchema(connection))
+            {
+                return false;
+            }
+
+            using var command = connection.CreateCommand();
+            command.CommandText = """
+                SELECT
+                    (SELECT COUNT(*) FROM division_area),
+                    (SELECT value FROM _meta WHERE key = 'downloadedAt'),
+                    (SELECT value FROM _meta WHERE key = 'release'),
+                    (SELECT value FROM _meta WHERE key = 'country')
+                """;
+            using var reader = command.ExecuteReader();
+            if (!reader.Read()
+                || reader.GetInt64(0) <= 0
+                || reader.IsDBNull(1)
+                || !DateTimeOffset.TryParse(
+                    reader.GetString(1),
+                    System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind,
+                    out _)
+                || reader.IsDBNull(2)
+                || string.IsNullOrWhiteSpace(reader.GetString(2))
+                || reader.IsDBNull(3)
+                || !string.Equals(reader.GetString(3), expectedAlpha2, StringComparison.Ordinal))
+            {
+                return false;
+            }
+
+            return new FileInfo(path).Length > 0;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool HasReaderCompatibleSchema(string path)
+    {
+        try
+        {
+            using var connection = new SqliteConnection(
+                new SqliteConnectionStringBuilder
+                {
+                    DataSource = path,
+                    Mode = SqliteOpenMode.ReadOnly,
+                    Pooling = false
+                }.ConnectionString);
+            connection.Open();
+            return HasReaderCompatibleSchema(connection);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private static bool HasReaderCompatibleSchema(SqliteConnection connection)
+    {
+        using var command = connection.CreateCommand();
+        command.CommandText = "PRAGMA table_info(division_area)";
+        using var reader = command.ExecuteReader();
+        var columns = new HashSet<string>(StringComparer.Ordinal);
+        while (reader.Read())
+        {
+            columns.Add(reader.GetString(1));
+        }
+
+        return RequiredDivisionAreaColumns.All(columns.Contains);
+    }
+
+    private bool RunHasRowsOperation(string path, string tableName)
+    {
+        try
+        {
+            return _hasRowsOperation(path, tableName);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private void CleanupAbandonedCandidates(
+        string directory,
+        string iso3,
+        string ownedCandidate)
+    {
+        var candidates = new HashSet<string>(
+            Directory.GetFiles(directory, $"{iso3}.*.tmp"),
+            StringComparer.Ordinal);
+        foreach (string ownerPath in Directory.GetFiles(
+                     directory,
+                     $"{iso3}.*.tmp.owner"))
+        {
+            candidates.Add(ownerPath[..^".owner".Length]);
+        }
+
+        foreach (string candidate in candidates)
+        {
+            if (!string.Equals(candidate, ownedCandidate, StringComparison.Ordinal))
+            {
+                _candidateOwnership.TryCleanupAbandoned(candidate);
+            }
+        }
+    }
+
+    private bool RunValidationOperation(string path)
+    {
+        try
+        {
+            return _validationOperation(path);
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -359,6 +1012,10 @@ public class OvertureDivisionCacheService
             cmd.CommandText = $"SELECT COUNT(*) FROM {tableName}";
             return (long)cmd.ExecuteScalar()! > 0;
         }
+        catch (OutOfMemoryException)
+        {
+            throw;
+        }
         catch
         {
             return false;
@@ -379,6 +1036,10 @@ public class OvertureDivisionCacheService
             using var cmd = conn.CreateCommand();
             cmd.CommandText = "SELECT value FROM _meta WHERE key = 'downloadedAt'";
             return cmd.ExecuteScalar() is not null;
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -405,18 +1066,14 @@ public class OvertureDivisionCacheService
         return null;
     }
 
-    private static void DeleteFileAndTemps(string path, string iso3)
+    private static void TryDeleteAfterFailure(string path)
     {
-        TryDelete(path);
-        var dir = Path.GetDirectoryName(path);
-        if (dir is null || !Directory.Exists(dir))
+        try
         {
-            return;
+            TryDelete(path);
         }
-
-        foreach (var stale in Directory.GetFiles(dir, $"{iso3}.*.tmp"))
+        catch
         {
-            TryDelete(stale);
         }
     }
 
@@ -428,6 +1085,10 @@ public class OvertureDivisionCacheService
             {
                 File.Delete(path);
             }
+        }
+        catch (OutOfMemoryException)
+        {
+            throw;
         }
         catch
         {
@@ -451,6 +1112,26 @@ public class OvertureDivisionCacheService
 
         throw new InvalidCastException($"Unsupported blob value type '{value.GetType().FullName}' at ordinal {ordinal}.");
     }
+
+    private sealed record MutationFlight(
+        CacheMutationOperation Operation,
+        bool ProducesStrictMetadata,
+        Lazy<Task> Task);
+}
+
+internal sealed class OvertureDivisionCacheTestHooks
+{
+    public Func<string, string, CancellationToken, long>? ExportOperation { get; init; }
+    public Func<string, CancellationToken, Task>? SourceOperation { get; init; }
+    public Func<CancellationToken, Task>? BeforePublication { get; init; }
+    public Func<CancellationToken, Task>? AfterPublication { get; init; }
+    public Func<string, OvertureDivisionStatus>? StatusReader { get; init; }
+    public Func<string, string, bool>? HasRowsOperation { get; init; }
+    public Func<string, bool>? ValidationOperation { get; init; }
+    public Func<string?>? ReleaseDiscovery { get; init; }
+    public Action? AfterInFlightTaskAcquired { get; init; }
+    public ICacheFilePublisher? FilePublisher { get; init; }
+    public ICacheCandidateOwnership? CandidateOwnership { get; init; }
 }
 
 public record OvertureDivisionStatus(long RowCount, DateTime? DownloadedAt, string? Release, long? FileSizeBytes);

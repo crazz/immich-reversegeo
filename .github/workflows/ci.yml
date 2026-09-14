@@ -4,7 +4,15 @@ on:
   push:
     branches:
       - master
+      - major-redesign
   pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   app:
@@ -30,5 +38,118 @@ jobs:
       - name: Test
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --no-build --filter "TestCategory!=Integration&TestCategory!=Performance"
 
-      - name: Build Docker image
-        run: docker build -f src/ImmichReverseGeo.Web/Dockerfile -t immich-reversegeo:test .
+  # Block 68 memory soak remains separately invoked, outside required PR CI.
+  docker-mode-integration:
+    name: Docker Mode Integration
+    needs: app
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          lfs: true
+
+      - name: Install Docker smoke prerequisites
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends strace sqlite3 jq iptables
+
+      - name: Test Docker deployment modes
+        run: npm run test:docker-smoke
+
+      - name: Clean owned Docker smoke resources
+        if: always()
+        run: |
+          shopt -s nullglob
+          status=0
+          for run in _out/docker-mode-smoke/immich46-*; do
+            timeout --signal=TERM --kill-after=5s 30s bash scripts/docker-mode-smoke.sh --cleanup-only "${run##*/}" || status=$?
+          done
+          exit "$status"
+
+      - name: Upload Docker mode failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: docker-mode-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.job }}
+          path: _out/docker-mode-smoke/*/evidence/
+          if-no-files-found: error
+          retention-days: 7
+
+  change23:
+    name: Change 23 focused tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run Change 23 focused tests
+        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --filter "TestCategory=Change23"
+
+  change26:
+    name: Worker lifecycle and failure recovery (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Build fixture staging
+        run: dotnet build tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release
+
+      - name: Run worker lifecycle and failure recovery tests without rebuilding
+        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --no-build --filter "(TestCategory=Change26|TestCategory=Change28|TestCategory=Change29|TestCategory=Change30|TestCategory=Change31|TestCategory=Change34|TestCategory=Change35|TestCategory=Change48|TestCategory=Change51|TestCategory=Change52|TestCategory=Change53|TestCategory=Change54|TestCategory=Change65)&TestCategory!=Integration"
+
+      - name: Publish fixture staging
+        run: dotnet publish tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --output _out/change26-publish
+
+      - name: Smoke published fixture staging without rebuilding
+        run: dotnet _out/change26-publish/ImmichReverseGeo.Tests.dll --filter "(TestCategory=Change26|TestCategory=Change28|TestCategory=Change29|TestCategory=Change30|TestCategory=Change31|TestCategory=Change34|TestCategory=Change35|TestCategory=Change48|TestCategory=Change51|TestCategory=Change52|TestCategory=Change53|TestCategory=Change54|TestCategory=Change65)&TestCategory!=Integration"
+
+  change31-postgresql:
+    name: Change 31 PostgreSQL integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      postgres:
+        image: postgres@sha256:cf78e76683b9ca8c5733cbbdce6c9262b45b6767934dd0a95e671f9a0fc20685
+        env:
+          POSTGRES_DB: change31_test
+          POSTGRES_USER: change31
+          POSTGRES_PASSWORD: change31
+        options: >-
+          --health-cmd "pg_isready -U change31 -d change31_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 12
+        ports:
+          - 5432
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Run Change 31 PostgreSQL integration tests
+        env:
+          IMMICH_REVERSEGEO_TEST_POSTGRES_CONNECTION_STRING: Host=localhost;Port=${{ job.services.postgres.ports[5432] }};Database=change31_test;Username=change31;Password=change31;Pooling=true
+        run: dotnet test --project tests/ImmichReverseGeo.Tests/ImmichReverseGeo.Tests.csproj --configuration Release --settings integration.runsettings --filter "(TestCategory=Change31|TestCategory=Change54|TestCategory=Change57|TestCategory=Change58)&TestCategory=Integration"

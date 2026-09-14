@@ -1,4 +1,6 @@
 using ImmichReverseGeo.Web.Services;
+using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.WorkerJobs;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -15,8 +17,6 @@ public class SkippedAssetsRepositoryTests
     [TestCleanup]
     public void Cleanup()
     {
-        // Release any pooled SQLite connections before deleting files (required on Windows)
-        SqliteConnection.ClearAllPools();
         if (Directory.Exists(_tempDir))
         {
             Directory.Delete(_tempDir, recursive: true);
@@ -92,5 +92,157 @@ public class SkippedAssetsRepositoryTests
         Assert.IsFalse(remaining.Contains(first));
         Assert.IsTrue(remaining.Contains(second));
         Assert.IsFalse(remaining.Contains(third));
+    }
+
+    [TestMethod]
+    [TestCategory("Change54")]
+    public async Task ClearAllAsync_ReturnsActualCountAndClosesFileHandles()
+    {
+        var repo = new SkippedAssetsRepository(NullLogger<SkippedAssetsRepository>.Instance, _tempDir);
+        await repo.InitialiseAsync();
+        await repo.AddAsync(Guid.NewGuid());
+        await repo.AddAsync(Guid.NewGuid());
+
+        long removed = await repo.ClearAllAsync();
+
+        Assert.AreEqual(2L, removed);
+        Assert.AreEqual(0L, await repo.GetCountAsync());
+        string databasePath = Path.Combine(_tempDir, "skipped.db");
+        File.Delete(databasePath);
+        Assert.IsFalse(File.Exists(databasePath));
+    }
+
+    [TestMethod]
+    [TestCategory("Change54")]
+    public async Task MissingDatabase_ReturnsConfirmedZeroWithoutCreatingFile()
+    {
+        var repo = new SkippedAssetsRepository(NullLogger<SkippedAssetsRepository>.Instance, _tempDir);
+        string databasePath = Path.Combine(_tempDir, "skipped.db");
+
+        Assert.AreEqual(0L, await repo.GetCountAsync());
+        Assert.AreEqual(0L, await repo.ClearAllAsync());
+        Assert.AreEqual(0L, await repo.RemoveAsync([Guid.NewGuid()]));
+        Assert.IsFalse(File.Exists(databasePath));
+        Assert.IsFalse(Directory.Exists(_tempDir));
+    }
+
+    [TestMethod]
+    [TestCategory("Change54")]
+    public async Task ReadOnlyDatabase_DoesNotReportSuccessfulClear()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("Unix file permissions are exercised on Linux and macOS.");
+            return;
+        }
+
+        var repo = new SkippedAssetsRepository(NullLogger<SkippedAssetsRepository>.Instance, _tempDir);
+        await repo.InitialiseAsync();
+        await repo.AddAsync(Guid.NewGuid());
+        string databasePath = Path.Combine(_tempDir, "skipped.db");
+        UnixFileMode original = File.GetUnixFileMode(databasePath);
+        try
+        {
+            File.SetUnixFileMode(databasePath, UnixFileMode.UserRead);
+
+            await Assert.ThrowsAsync<SqliteException>(() => repo.ClearAllAsync());
+            Assert.AreEqual(1L, await repo.GetCountAsync());
+        }
+        finally
+        {
+            File.SetUnixFileMode(databasePath, original);
+        }
+    }
+
+    [TestMethod]
+    [TestCategory("Change54")]
+    public async Task ControllerRelease_PrecedesActualFreshCountConnectionAndHandleDeletion()
+    {
+        var repo = new SkippedAssetsRepository(NullLogger<SkippedAssetsRepository>.Instance, _tempDir);
+        await repo.InitialiseAsync();
+        await repo.AddAsync(Guid.NewGuid());
+        await repo.AddAsync(Guid.NewGuid());
+        await using var coordinator = new WorkerJobCoordinator(WorkerJobDescriptors.Registered);
+        DatabaseMaintenanceAdmissionResult.Admitted readOverlap =
+            Assert.IsInstanceOfType<DatabaseMaintenanceAdmissionResult.Admitted>(
+                coordinator.TryReserveDatabaseMaintenance(
+                    DatabaseMaintenanceRequestOrigin.ResetGeoDataPage));
+        try
+        {
+            Assert.AreEqual(2L, await repo.GetCountAsync());
+            Assert.IsInstanceOfType<ExclusiveHeavyOwnerBusyMetadata.DatabaseMaintenance>(
+                coordinator.Snapshot.ActiveOwner);
+        }
+        finally
+        {
+            await readOverlap.Reservation.DisposeAsync();
+        }
+
+        var controller = new DatabaseMaintenanceController(
+            coordinator,
+            new UnusedImmichStore(),
+            repo,
+            NullLogger<DatabaseMaintenanceController>.Instance);
+
+        DatabaseMaintenanceResult result = await controller.ExecuteAsync(
+            new DatabaseMaintenanceRequest.ClearSkipList());
+
+        Assert.AreEqual(DatabaseMaintenanceDisposition.Complete, result.Disposition);
+        Assert.AreEqual(2L, result.Skipped.Count);
+        Assert.IsNull(coordinator.Snapshot.ActiveOwner);
+        Assert.AreEqual(0L, await repo.GetCountAsync());
+        string databasePath = Path.Combine(_tempDir, "skipped.db");
+        File.Delete(databasePath);
+        Assert.IsFalse(File.Exists(databasePath));
+    }
+
+    [TestMethod]
+    [TestCategory("Change54")]
+    public async Task WindowsExclusiveFileHandle_IsReportedAsActualStorageFailure()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("Windows file sharing is exercised by the Windows Change54 CI matrix.");
+            return;
+        }
+
+        var repo = new SkippedAssetsRepository(NullLogger<SkippedAssetsRepository>.Instance, _tempDir);
+        await repo.InitialiseAsync();
+        await repo.AddAsync(Guid.NewGuid());
+        string databasePath = Path.Combine(_tempDir, "skipped.db");
+        using (new FileStream(databasePath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        {
+            Exception? failure = null;
+            try
+            {
+                await repo.ClearAllAsync();
+            }
+            catch (Exception exception)
+            {
+                failure = exception;
+            }
+
+            Assert.IsNotNull(failure);
+            Assert.IsTrue(failure is SqliteException or IOException, failure.GetType().FullName);
+        }
+
+        Assert.AreEqual(1L, await repo.GetCountAsync());
+    }
+
+    private sealed class UnusedImmichStore : IImmichLocationResetStore
+    {
+        public Task<long> ClearAllLocationDataAsync(CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Clear Skip List must not use the Immich store.");
+
+        public Task<IReadOnlyList<Guid>> ClearLocationDataForAssetsAsync(
+            IReadOnlyCollection<Guid> assetIds,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Clear Skip List must not use the Immich store.");
+
+        public Task<IReadOnlyList<Guid>> ClearLocationDataByValueAsync(
+            LocationResetScope scope,
+            string value,
+            CancellationToken cancellationToken = default) =>
+            throw new AssertFailedException("Clear Skip List must not use the Immich store.");
     }
 }
