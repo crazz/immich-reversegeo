@@ -93,6 +93,21 @@
         {
             <div class="result-note">@_result.TruncatedTextCount result text values truncated by the worker transport bound.</div>
         }
+        <div class="result-card final-card @(_result.FinalCity is not null ? "found" : "not-found")">
+            <div class="result-header">
+                <span class="result-source">Final output (what would be written to Immich)</span>
+                <span class="result-badge @(_result.FinalCity is not null ? "badge-found" : "badge-miss")">
+                    @(_result.FinalCity is not null ? "complete" : "incomplete — would not write")
+                </span>
+            </div>
+            <div class="result-row"><span class="result-key">City</span><span class="result-val">@(_result.FinalCity ?? "—")</span></div>
+            <div class="result-row"><span class="result-key">City Source</span><span class="result-val">@(_result.FinalCitySource ?? "—")</span></div>
+            <div class="result-row"><span class="result-key">State</span><span class="result-val">@(_result.FinalState ?? "—")</span></div>
+            <div class="result-row"><span class="result-key">State Source</span><span class="result-val">@(_result.FinalStateSource ?? "—")</span></div>
+            <div class="result-row"><span class="result-key">Country</span><span class="result-val">@(_result.FinalCountry ?? "—")</span></div>
+            <div class="result-row"><span class="result-key">Country Source</span><span class="result-val">@(_result.FinalCountrySource ?? "—")</span></div>
+        </div>
+
         <div class="result-card @(_result.CountryStatus == CoordinateLookupCountryStatus.Matched ? "found" : "not-found")">
             <div class="result-header">
                 <span class="result-source">Country — Overture Bundled Cache</span>
@@ -284,21 +299,6 @@
             {
                 <div class="result-note">@_result.OvertureDiagnostics.TruncatedTextCount source text values truncated by the worker transport bound.</div>
             }
-        </div>
-
-        <div class="result-card final-card @(_result.FinalCity is not null ? "found" : "not-found")">
-            <div class="result-header">
-                <span class="result-source">Final output (what would be written to Immich)</span>
-                <span class="result-badge @(_result.FinalCity is not null ? "badge-found" : "badge-miss")">
-                    @(_result.FinalCity is not null ? "complete" : "incomplete — would not write")
-                </span>
-            </div>
-            <div class="result-row"><span class="result-key">City</span><span class="result-val">@(_result.FinalCity ?? "—")</span></div>
-            <div class="result-row"><span class="result-key">City Source</span><span class="result-val">@(_result.FinalCitySource ?? "—")</span></div>
-            <div class="result-row"><span class="result-key">State</span><span class="result-val">@(_result.FinalState ?? "—")</span></div>
-            <div class="result-row"><span class="result-key">State Source</span><span class="result-val">@(_result.FinalStateSource ?? "—")</span></div>
-            <div class="result-row"><span class="result-key">Country</span><span class="result-val">@(_result.FinalCountry ?? "—")</span></div>
-            <div class="result-row"><span class="result-key">Country Source</span><span class="result-val">@(_result.FinalCountrySource ?? "—")</span></div>
         </div>
 
         <div class="result-card trace-card">

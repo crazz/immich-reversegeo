@@ -22,14 +22,14 @@
             {
                 <p class="alert alert-error">This will clear reverse geo location data for every matching asset. It does not touch any other metadata. Continue?</p>
                 <div class="btn-row">
-                    <button @onclick="ResetAllConfirmed" class="btn btn-primary" disabled="@_operationActive">Yes, reset all geo data</button>
+                    <button @onclick="ResetAllConfirmed" class="btn btn-danger" disabled="@_operationActive">Yes, reset all geo data</button>
                     <button @onclick="CancelResetAll" class="btn btn-secondary" disabled="@_operationActive">Cancel</button>
                 </div>
             }
             else
             {
                 <div class="btn-row">
-                    <button @onclick="BeginResetAll" class="btn btn-secondary" disabled="@_operationActive">Reset All Data…</button>
+                    <button @onclick="BeginResetAll" class="btn btn-danger" disabled="@_operationActive">Reset All Data…</button>
                 </div>
             }
         </div>
@@ -48,7 +48,7 @@
             </div>
             <div class="btn-row">
                 <button @onclick="ResetSelectedAssetsAsync"
-                        class="btn btn-secondary"
+                        class="btn btn-danger"
                         disabled="@(_operationActive || string.IsNullOrWhiteSpace(_assetIdsInput))">
                     Reset Selected Items
                 </button>
@@ -103,7 +103,7 @@
             </div>
             <div class="btn-row">
                 <button @onclick="ResetSelectedLocationAsync"
-                        class="btn btn-secondary"
+                        class="btn btn-danger"
                         disabled="@(_operationActive || string.IsNullOrWhiteSpace(_selectedLocationValue))">
                     Reset Matching @GetScopeDisplayName(_selectedLocationScope)
                 </button>

@@ -23,26 +23,28 @@
     <details class="settings-disclosure">
         <summary>Database Connection Details</summary>
         <p class="section-intro">Pre-populated from environment variables. These values come from the current running process, so if you change Windows or user environment variables after Visual Studio was already open, restart Visual Studio before running again.</p>
-        <div class="form-group">
-            <label>Host</label>
-            <input value="@_dbHost" class="form-control env-readonly" readonly aria-readonly="true" />
-            <div class="hint env-field-hint">Environment value</div>
-        </div>
-        <div class="form-group">
-            <label>Port</label>
-            <input type="number" value="@_dbPort" class="form-control env-readonly" readonly aria-readonly="true" />
-        </div>
-        <div class="form-group">
-            <label>Database</label>
-            <input value="@_dbName" class="form-control env-readonly" readonly aria-readonly="true" />
-        </div>
-        <div class="form-group">
-            <label>Username</label>
-            <input value="@_dbUser" class="form-control env-readonly" readonly aria-readonly="true" />
-        </div>
-        <div class="form-group">
-            <label>Password</label>
-            <input type="password" value="@_dbPassword" class="form-control env-readonly" readonly aria-readonly="true" />
+        <div class="credential-fields">
+            <div class="form-group">
+                <label>Host</label>
+                <input value="@_dbHost" class="form-control env-readonly" readonly aria-readonly="true" />
+                <div class="hint env-field-hint">Environment value</div>
+            </div>
+            <div class="form-group">
+                <label>Port</label>
+                <input type="number" value="@_dbPort" class="form-control env-readonly" readonly aria-readonly="true" />
+            </div>
+            <div class="form-group">
+                <label>Database</label>
+                <input value="@_dbName" class="form-control env-readonly" readonly aria-readonly="true" />
+            </div>
+            <div class="form-group">
+                <label>Username</label>
+                <input value="@_dbUser" class="form-control env-readonly" readonly aria-readonly="true" />
+            </div>
+            <div class="form-group">
+                <label>Password</label>
+                <input type="password" value="@_dbPassword" class="form-control env-readonly" readonly aria-readonly="true" />
+            </div>
         </div>
         <div class="btn-row">
             <button @onclick="TestConnection" class="btn btn-secondary">Test Connection</button>
@@ -177,15 +179,17 @@
 
 <section class="settings-card">
     <h3>Processing</h3>
-    <div class="form-group">
-        <label>Batch Size <input type="number" @bind="_cfg.Processing.BatchSize" /></label>
-    </div>
-    <div class="form-group">
-        <label>Batch Delay (ms) <input type="number" @bind="_cfg.Processing.BatchDelayMs" /></label>
-    </div>
-    <div class="form-group">
-        <label>Max Parallelism <input type="number" min="1" max="32" @bind="_cfg.Processing.MaxDegreeOfParallelism" /></label>
-        <span class="hint">How many assets can be resolved in parallel within a batch. Start with 4 and increase carefully.</span>
+    <div class="processing-fields">
+        <div class="form-group">
+            <label>Batch Size <input type="number" @bind="_cfg.Processing.BatchSize" /></label>
+        </div>
+        <div class="form-group">
+            <label>Batch Delay (ms) <input type="number" @bind="_cfg.Processing.BatchDelayMs" /></label>
+        </div>
+        <div class="form-group">
+            <label>Max Parallelism <input type="number" min="1" max="32" @bind="_cfg.Processing.MaxDegreeOfParallelism" /></label>
+            <span class="hint">How many assets can be resolved in parallel within a batch. Start with 4 and increase carefully.</span>
+        </div>
     </div>
     <div class="form-group">
         <label><input type="checkbox" @bind="_cfg.Processing.UseAirportInfrastructure" /> Use bundled airport infrastructure to improve city matching when it fits</label>

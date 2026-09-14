@@ -8,49 +8,25 @@
 @inject SkippedAssetsRepository Skipped
 @implements IDisposable
 
-<h2>Dashboard</h2>
-
-<section class="settings-card worker-status-card" aria-labelledby="worker-status-heading">
-    <div class="worker-status-header">
-        <div>
-            <h3 id="worker-status-heading">Service Status</h3>
-            <p class="section-intro">Deployment policy and the ProcessAssets worker in this Web host.</p>
-        </div>
-        <a href="/logs" class="worker-status-logs-link">Open Logs</a>
+<header class="page-header">
+    <h2>Dashboard</h2>
+    <div class="btn-row">
+        <button @onclick="RunNow" disabled="@(!_circuitReady || _loadingStats || State.IsRunning || _runPending || _dbError is not null)" class="btn btn-primary">
+            @(!_circuitReady ? "Starting UI…" : _loadingStats ? "Checking DB…" : State.IsRunning ? "Running…" : _runPending ? "Starting…" : "Run Now")
+        </button>
+        <button @onclick="StopRun" disabled="@IsStopping" class="btn btn-secondary"
+                hidden="@(!(State.IsRunning || IsStopping))">
+            @(IsStopping ? "Stopping…" : "Stop")
+        </button>
+        <button @onclick="RefreshStats" disabled="@(!_circuitReady || _loadingStats)" class="btn btn-secondary">
+            @(_loadingStats ? "Refreshing…" : "Refresh Stats")
+        </button>
+        @if (State.LastRunCompleted.HasValue)
+        {
+            <span class="run-info">Last completed: @State.LastRunCompleted.Value.ToString("u")</span>
+        }
     </div>
-    <dl class="worker-status-grid">
-        <div class="worker-status-field">
-            <dt>Deployment mode</dt>
-            <dd>@_workerStatus.ModeLabel</dd>
-        </div>
-        <div class="worker-status-field worker-status-policy">
-            <dt>Internal scheduling</dt>
-            <dd>
-                <strong>@_workerStatus.SchedulePolicyLabel</strong>
-                <span>@_workerStatus.SchedulePolicyDescription</span>
-            </dd>
-        </div>
-        <div class="worker-status-field worker-status-worker"
-             role="status" aria-live="polite" aria-atomic="true">
-            <dt>ProcessAssets worker</dt>
-            <dd>
-                <span class="status-dot @_workerStatus.WorkerCssClass" aria-hidden="true"></span>
-                <span>Worker: @_workerStatus.WorkerLabel</span>
-            </dd>
-        </div>
-    </dl>
-    @if (_workerStatus.Worker == ProcessAssetsWorkerState.Failed)
-    {
-        <div @key="_workerStatus.Revision" class="alert alert-error worker-status-failure" role="alert">
-            <strong>ProcessAssets worker failed.</strong>
-            @if (_workerStatus.FailureSummary is not null)
-            {
-                <span>@_workerStatus.FailureSummary</span>
-            }
-            <span>Open Logs for the recorded processing details.</span>
-        </div>
-    }
-</section>
+</header>
 
 @if (!_circuitReady)
 {
@@ -102,30 +78,55 @@ else if (_dbError is not null)
         ? (int)(State.ProcessedThisRun * 100.0 / State.TotalUnprocessed)
         : 0;
 }
-<div class="progress-bar-wrap" style="visibility:@(State.IsRunning && State.TotalUnprocessed > 0 ? "visible" : "hidden")">
+<div class="progress-bar-wrap" hidden="@(!(State.IsRunning && State.TotalUnprocessed > 0))">
     <div class="progress-bar" style="width:@pct%"></div>
 </div>
-<p class="run-info" style="visibility:@(State.IsRunning && State.TotalUnprocessed > 0 ? "visible" : "hidden")">
+<p class="run-info" hidden="@(!(State.IsRunning && State.TotalUnprocessed > 0))">
     @pct% — @State.ProcessedThisRun / @State.TotalUnprocessed
 </p>
-<p class="run-info activity">@(State.CurrentActivity is not null ? $"⏳ {State.CurrentActivity}" : "\u00a0")</p>
+<p class="run-info activity" hidden="@(State.CurrentActivity is null)">@(State.CurrentActivity is not null ? $"⏳ {State.CurrentActivity}" : "\u00a0")</p>
 
-<div class="btn-row">
-    <button @onclick="RunNow" disabled="@(!_circuitReady || _loadingStats || State.IsRunning || _runPending || _dbError is not null)" class="btn btn-primary">
-        @(!_circuitReady ? "Starting UI…" : _loadingStats ? "Checking DB…" : State.IsRunning ? "Running…" : _runPending ? "Starting…" : "Run Now")
-    </button>
-    <button @onclick="StopRun" disabled="@IsStopping" class="btn btn-secondary"
-            style="visibility:@(State.IsRunning || IsStopping ? "visible" : "hidden")">
-        @(IsStopping ? "Stopping…" : "Stop")
-    </button>
-    <button @onclick="RefreshStats" disabled="@(!_circuitReady || _loadingStats)" class="btn btn-secondary">
-        @(_loadingStats ? "Refreshing…" : "Refresh Stats")
-    </button>
-    @if (State.LastRunCompleted.HasValue)
+<section class="settings-card worker-status-card" aria-labelledby="worker-status-heading">
+    <div class="worker-status-header">
+        <div>
+            <h3 id="worker-status-heading">Service Status</h3>
+            <p class="section-intro">Deployment policy and the ProcessAssets worker in this Web host.</p>
+        </div>
+        <a href="/logs" class="worker-status-logs-link">Open Logs</a>
+    </div>
+    <dl class="worker-status-grid">
+        <div class="worker-status-field">
+            <dt>Deployment mode</dt>
+            <dd>@_workerStatus.ModeLabel</dd>
+        </div>
+        <div class="worker-status-field worker-status-policy">
+            <dt>Internal scheduling</dt>
+            <dd>
+                <strong>@_workerStatus.SchedulePolicyLabel</strong>
+                <span>@_workerStatus.SchedulePolicyDescription</span>
+            </dd>
+        </div>
+        <div class="worker-status-field worker-status-worker"
+             role="status" aria-live="polite" aria-atomic="true">
+            <dt>ProcessAssets worker</dt>
+            <dd>
+                <span class="status-dot @_workerStatus.WorkerCssClass" aria-hidden="true"></span>
+                <span>Worker: @_workerStatus.WorkerLabel</span>
+            </dd>
+        </div>
+    </dl>
+    @if (_workerStatus.Worker == ProcessAssetsWorkerState.Failed)
     {
-        <span class="run-info">Last completed: @State.LastRunCompleted.Value.ToString("u")</span>
+        <div @key="_workerStatus.Revision" class="alert alert-error worker-status-failure" role="alert">
+            <strong>ProcessAssets worker failed.</strong>
+            @if (_workerStatus.FailureSummary is not null)
+            {
+                <span>@_workerStatus.FailureSummary</span>
+            }
+            <span>Open Logs for the recorded processing details.</span>
+        </div>
     }
-</div>
+</section>
 
 <h3>Recent Activity</h3>
 <div class="log-tail">

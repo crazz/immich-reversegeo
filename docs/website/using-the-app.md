@@ -12,7 +12,11 @@ These pages are available in Standard and Web-only. For external scheduling with
 
 ## Dashboard
 
-Use `Run Now` on the Dashboard to start a manual processing pass immediately.
+Use `Run Now` at the top of the Dashboard to start a manual processing pass immediately.
+
+The four counters come first, followed by Service Status and the full-width Recent Activity log. Progress appears while a run is active. On smaller screens, navigation stays above the page and controls wrap onto additional rows.
+
+![Dashboard with synthetic processing data](./assets/images/dashboard.jpg)
 
 - it works even if automatic scheduling is turned off
 - it uses your current Settings values for batch size, delay, parallelism, and airport matching
@@ -51,6 +55,8 @@ Lookup starts a temporary isolated worker in both Standard and Web-only mode. Wh
 
 If processing, another lookup, cache refresh, or coordinated maintenance owns the local work slot, the page reports that it is busy and starts no second worker. If the worker cannot start or stops without a valid result, Lookup shows a short safe failure message. It does not switch to an in-process resolver. Retry only after the previous operation and cleanup have finished and any reported cause is corrected.
 
+The **Final output (what would be written to Immich)** card appears before the source details. Read those proposed values first, then inspect the source cards and existing trace disclosures to understand the result.
+
 Lookup is always a preview. It may download or read geographic caches, but it does not update an Immich asset or write the displayed city, state, or country to `asset_exif`.
 
 Optional GADM data is restricted to academic and other non-commercial use; check the [license guidance](./data-sources.md#optional-gadm-administrative-data) before selecting it. Compare the Lookup result before enabling it for bulk processing.
@@ -75,6 +81,8 @@ The Data area contains maintenance tools that change downloaded caches or Immich
 ### Administrative cache inventory
 
 Open **Administrative Areas** to inspect downloaded Overture and GADM caches. The table shows each discovered country cache, its current storage status, version or release when available, file size, download time, and last-modified time. It does not scan administrative-area rows to calculate an area count, so opening the page does not load the geographic data.
+
+On narrow screens, scroll the table horizontally to reach every column and the row actions.
 
 Use the source and country filters to narrow the list. `Available` means the expected cache schema can be read. `In progress` means Immich ReverseGeo found temporary work for a cache that has not been published yet. `Invalid`, `Unreadable`, or `Unsafe` identifies a cache that should not be used as ready data. If a source is marked `Truncated`, the directory exceeded the inventory safety limit; the page discards that source's partial list instead of presenting it as complete. Refresh the page after cache work finishes to read storage again.
 
@@ -116,3 +124,5 @@ Use the Logs page when you want to inspect recent activity outside the Dashboard
 
 - filter the in-app log view to all messages, warnings, or errors
 - download the current filtered view as `immich-reversegeo.log`
+
+Long log messages wrap to fit the screen. Wrapping does not change the text or order in the downloaded log.
