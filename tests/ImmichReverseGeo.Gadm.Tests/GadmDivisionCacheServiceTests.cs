@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Spatial;
 using ImmichReverseGeo.Core.WorkerJobs;
 using ImmichReverseGeo.Gadm.Services;
 using Microsoft.Data.Sqlite;
@@ -212,6 +213,11 @@ public class GadmDivisionCacheServiceTests
         try
         {
             CreateValidCache(cachePath, "4.0");
+            using (var connection = new SqliteConnection($"Data Source={cachePath};Pooling=false"))
+            {
+                connection.Open();
+                Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Gadm, CancellationToken.None));
+            }
             DateTime beforeWriteUtc = File.GetLastWriteTimeUtc(cachePath);
             byte[] beforeBytes = File.ReadAllBytes(cachePath);
             var reporter = new RecordingCacheMutationReporter();
@@ -1688,6 +1694,9 @@ public class GadmDivisionCacheServiceTests
             var directory = Path.Combine(_tempDir, "gadm-divisions");
             Directory.CreateDirectory(directory);
             CreateValidCache(Path.Combine(directory, iso3 + ".db"), "test-version");
+            using var connection = new SqliteConnection($"Data Source={Path.Combine(directory, iso3 + ".db")};Pooling=false");
+            connection.Open();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Gadm, CancellationToken.None));
         }
         public void Release() => _release.TrySetResult();
         public void ResetGate() { _release = NewGate(); Entered = NewGate(); }

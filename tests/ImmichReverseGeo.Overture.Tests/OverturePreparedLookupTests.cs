@@ -29,9 +29,18 @@ public sealed class OverturePreparedLookupTests
             }
         });
         var reference = fixture.Service();
-        foreach (var point in new[] { (1d, 1d), (2d, 2d), (0d, 5d), (8d, 8d) })
+        var points = new[] { (1d, 1d), (2d, 2d), (0d, 5d), (8d, 8d), (4.0001d, 3d) };
+        var expectedResults = await Task.WhenAll(points.Select(point =>
+            reference.FindContainingDivisionAreasAsync(point.Item1, point.Item2, "US", "USA")));
+        using (var connection = new SqliteConnection($"Data Source={fixture.Database};Pooling=false"))
         {
-            var expected = await reference.FindContainingDivisionAreasAsync(point.Item1, point.Item2, "US", "USA");
+            connection.Open();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Overture, default));
+        }
+        for (var index = 0; index < points.Length; index++)
+        {
+            var point = points[index];
+            var expected = expectedResults[index];
             var actual = await prepared.FindContainingDivisionAreasAsync(point.Item1, point.Item2, "US", "USA");
             Assert.IsNull(actual.Error, "The prepared path must retain source availability.");
             Assert.AreEqual(expected.BestMatch, actual.BestMatch);
@@ -137,6 +146,48 @@ public sealed class OverturePreparedLookupTests
         command.Transaction = transaction;
         command.CommandText = "UPDATE _meta SET value='released'";
         Assert.AreEqual(1, command.ExecuteNonQuery(), "No abandoned read transaction may block a writer.");
+    }
+
+    [TestMethod]
+    public async Task IndexedReplacementDuringRead_KeepsMetadataAndGeometryOnOneSnapshot()
+    {
+        if (OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("This case exercises Unix open-file replacement semantics.");
+        }
+        using var fixture = new Fixture();
+        using var cache = new AdministrativeGeometryCache(10_000_000);
+        static void Index(string path)
+        {
+            using var connection = new SqliteConnection($"Data Source={path};Pooling=false");
+            connection.Open();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Overture, default));
+        }
+        Index(fixture.Database);
+        var replaced = false;
+        var service = fixture.Service(new OvertureDivisionsTestHooks
+        {
+            SpatialCache = cache,
+            AdministrativeCheckpoint = checkpoint =>
+            {
+                if (checkpoint == OvertureAdministrativeCheckpoint.AfterCandidateMetadata && !replaced)
+                {
+                    var next = fixture.Database + ".replacement";
+                    fixture.Create(next, replacement: true);
+                    Index(next);
+                    File.Move(next, fixture.Database, overwrite: true);
+                    replaced = true;
+                }
+            }
+        });
+        var first = await service.FindContainingDivisionAreasAsync(1, 1, "US", "USA");
+        var second = await service.FindContainingDivisionAreasAsync(1, 1, "US", "USA");
+        Assert.IsNull(first.Error);
+        Assert.IsNull(second.Error);
+        Assert.AreEqual("original", first.Release);
+        Assert.IsTrue(first.Candidates.Any(x => x.GeometryContainsPoint));
+        Assert.AreEqual("replacement", second.Release);
+        Assert.IsTrue(second.Candidates.All(x => !x.GeometryContainsPoint));
     }
 
     private sealed class Fixture : IDisposable

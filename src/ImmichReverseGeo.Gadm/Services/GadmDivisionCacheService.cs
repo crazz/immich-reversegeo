@@ -10,6 +10,7 @@ using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using Microsoft.Data.Sqlite;
+using ImmichReverseGeo.Spatial;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Gadm.Services;
@@ -46,6 +47,15 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
     private readonly Action _afterSharedMutationObserved;
     private readonly ConcurrentDictionary<string, InflightMutation> _inflightMutations = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
+
+    private readonly AdministrativeCandidatePreparation _candidatePreparation = new(
+        GeometrySource.Gadm,
+        static (path, readOnly) => new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString()));
 
     public CacheMutationSource Source => CacheMutationSource.Gadm;
 
@@ -338,7 +348,8 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
                     operation,
                     iso3,
                     CacheMutationDisposition.AlreadyReady,
-                    out CacheMutationSourceResult? ready))
+                    out CacheMutationSourceResult? ready)
+                && !_candidatePreparation.IsNeeded(GetDbPath(iso3), cancellationToken))
             {
                 await ReportAsync(
                     reporter,
@@ -361,7 +372,10 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
                         reporter,
                         cancellationToken,
                         candidate!),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
+                    LazyThreadSafetyMode.ExecutionAndPublication))
+            {
+                LocalPreparation = operation == CacheMutationOperation.Ensure && HasData(iso3)
+            };
             InflightMutation winner = _inflightMutations.GetOrAdd(iso3, candidate);
             if (!ReferenceEquals(candidate, winner))
             {
@@ -381,17 +395,18 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
             _afterInFlightTaskAcquired();
             Task activeTask = active.Task.Value;
             ct.ThrowIfCancellationRequested();
-            return (activeTask, GadmDivisionEnsureResult.AwaitedExistingDownload);
+            return (activeTask, DescribeEnsure(active, owner: false));
         }
 
-        if (HasData(iso3))
+        var localPreparation = HasData(iso3);
+        if (localPreparation && !_candidatePreparation.IsNeeded(GetDbPath(iso3), ct))
         {
             if (_inflightMutations.TryGetValue(iso3, out active))
             {
                 _afterInFlightTaskAcquired();
                 Task activeTask = active.Task.Value;
                 ct.ThrowIfCancellationRequested();
-                return (activeTask, GadmDivisionEnsureResult.AwaitedExistingDownload);
+                return (activeTask, DescribeEnsure(active, owner: false));
             }
 
             ct.ThrowIfCancellationRequested();
@@ -402,13 +417,16 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         candidate = new InflightMutation(
             CacheMutationOperation.Ensure,
             new Lazy<Task<CacheMutationSourceResult>>(
-                () => RunLegacySourceOperationAsync(iso3, ct, candidate!),
-                LazyThreadSafetyMode.ExecutionAndPublication));
+                () => localPreparation
+                    ? RunOwnedMutationAsync(CacheMutationOperation.Ensure, iso3, CacheMutationReporters.None, ct, candidate!)
+                    : RunLegacySourceOperationAsync(iso3, ct, candidate!),
+                LazyThreadSafetyMode.ExecutionAndPublication))
+        {
+            LocalPreparation = localPreparation
+        };
         InflightMutation winner = _inflightMutations.GetOrAdd(iso3, candidate);
 
-        var result = ReferenceEquals(candidate, winner)
-            ? GadmDivisionEnsureResult.StartedDownload
-            : GadmDivisionEnsureResult.AwaitedExistingDownload;
+        var result = DescribeEnsure(winner, ReferenceEquals(candidate, winner));
 
         _afterInFlightTaskAcquired();
         Task sharedTask = winner.Task.Value;
@@ -537,7 +555,9 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
                 out CacheMutationSourceResult? ready))
         {
             ct.ThrowIfCancellationRequested();
-            return ready;
+            return _candidatePreparation.IsNeeded(dbPath, ct)
+                ? await AugmentCacheAsync(iso3, reporter, ct).ConfigureAwait(false)
+                : ready;
         }
 
         var gadmCode = ValidateSourceIdentity(iso3);
@@ -601,6 +621,7 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
                 throw new InvalidOperationException($"No GADM rows were downloaded for {iso3}.");
             }
 
+            _candidatePreparation.BuildFile(tmpDbPath, ct);
             if (!RunValidationOperation(tmpDbPath)
                 || !EncodedCountryMatches(tmpDbPath, iso3))
             {
@@ -625,6 +646,7 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
                 "Publishing the GADM cache.",
                 ct).ConfigureAwait(false);
             _filePublisher.Publish(tmpDbPath, dbPath);
+            _candidatePreparation.RememberReady(dbPath);
             await _afterPublicationOperation(ct);
             ct.ThrowIfCancellationRequested();
             _readyCaches[iso3] = 0;
@@ -975,9 +997,99 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         await source.CopyToAsync(destination, ct);
     }
 
+    private static GadmDivisionEnsureResult DescribeEnsure(InflightMutation flight, bool owner) =>
+        flight.LocalPreparation
+            ? owner ? GadmDivisionEnsureResult.StartedLocalPreparation : GadmDivisionEnsureResult.AwaitedLocalPreparation
+            : owner ? GadmDivisionEnsureResult.StartedDownload : GadmDivisionEnsureResult.AwaitedExistingDownload;
+
+    private async Task<CacheMutationSourceResult> AugmentCacheAsync(
+        string iso3, ICacheMutationReporter reporter, CancellationToken ct)
+    {
+        var path = GetDbPath(iso3);
+        var stamp = AdministrativeCandidatePreparation.Stamp(path);
+        var temporary = Path.Combine(Path.GetDirectoryName(path)!, $"{iso3}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        await ReportAsync(reporter, CacheMutationProgressStep.PreparingSource, CacheMutationOperation.Ensure,
+            iso3, "Preparing the local GADM candidate index.", ct).ConfigureAwait(false);
+        await using var activity = await reporter.BeginActivityAsync($"Preparing local GADM cache {iso3}", ct).ConfigureAwait(false);
+        ICacheCandidateLease? ownership = null;
+        AdministrativeCandidatePreparation.PreparedCopy? copy = null;
+        var published = false;
+        var cacheIo = true;
+        try
+        {
+            ownership = _candidateOwnership.Acquire(temporary);
+            copy = await _candidatePreparation.PrepareCopyAsync(path, temporary, ct).ConfigureAwait(false);
+            cacheIo = false;
+            await ReportAsync(reporter, CacheMutationProgressStep.ValidatingCandidate, CacheMutationOperation.Ensure,
+                iso3, "Validating the local GADM cache candidate.", ct).ConfigureAwait(false);
+            cacheIo = true;
+            if (!RunValidationOperation(temporary) || !EncodedCountryMatches(temporary, iso3))
+            {
+                throw new InvalidDataException("The augmented GADM cache could not be verified.");
+            }
+
+            await _beforePublicationOperation(ct).ConfigureAwait(false);
+            cacheIo = false;
+            await ReportAsync(reporter, CacheMutationProgressStep.Publishing, CacheMutationOperation.Ensure,
+                iso3, "Publishing the local GADM candidate index.", ct).ConfigureAwait(false);
+            cacheIo = true;
+            ct.ThrowIfCancellationRequested();
+            if (!copy.SourceIsCurrent)
+            {
+                throw new IOException("The source cache changed during local preparation.");
+            }
+
+            _filePublisher.Publish(temporary, path);
+            published = true;
+            _candidatePreparation.RememberReady(path);
+            await _afterPublicationOperation(ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+        }
+        catch (Exception ex) when (!published && cacheIo && ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            if (ex is SqliteException sqlite)
+            {
+                AdministrativeCandidateIndex.RethrowIfCritical(sqlite);
+            }
+            ct.ThrowIfCancellationRequested();
+            _candidatePreparation.RememberFailure(path, stamp);
+        }
+        finally
+        {
+            try
+            {
+                TryDelete(temporary);
+                ownership?.Dispose();
+            }
+            finally
+            {
+                copy?.Dispose();
+            }
+        }
+
+        if (!TryReadWorkerResult(CacheMutationOperation.Ensure, iso3,
+                published ? CacheMutationDisposition.Published : CacheMutationDisposition.AlreadyReady, out var result))
+        {
+            throw new InvalidOperationException("The GADM cache is no longer usable after local preparation.");
+        }
+
+        if (!published)
+        {
+            _logger.LogInformation("Using the valid GADM cache for {ISO3} without optional candidate acceleration.", iso3);
+        }
+
+        await ReportAsync(reporter, CacheMutationProgressStep.Completed, CacheMutationOperation.Ensure, iso3,
+            published ? "The local GADM candidate index is ready." : "Using the existing GADM cache without optional candidate acceleration.",
+            ct, result.Version).ConfigureAwait(false);
+        return result;
+    }
+
     private sealed record InflightMutation(
         CacheMutationOperation Operation,
-        Lazy<Task<CacheMutationSourceResult>> Task);
+        Lazy<Task<CacheMutationSourceResult>> Task)
+    {
+        public bool LocalPreparation { get; init; }
+    }
 }
 
 internal sealed class GadmDivisionCacheTestHooks
@@ -1000,7 +1112,9 @@ public enum GadmDivisionEnsureResult
 {
     AlreadyReady,
     AwaitedExistingDownload,
-    StartedDownload
+    StartedDownload,
+    StartedLocalPreparation,
+    AwaitedLocalPreparation
 }
 
 public record GadmDivisionStatus(long RowCount, DateTime? DownloadedAt, string? Version, long? FileSizeBytes);

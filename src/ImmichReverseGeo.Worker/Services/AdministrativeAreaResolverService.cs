@@ -93,12 +93,14 @@ public class AdministrativeAreaResolverService : IProcessingAdministrativeResolv
             overtureResult = await ResolveOvertureAsync(lat, lon, alpha2, iso3, cityResolverProfile, session, ct).ConfigureAwait(false);
         }
 
-        if (config.UseGadmAdministrativeAreas)
+        if (config.UseGadmAdministrativeAreas
+            && (config.PreferGadmAdministrativeAreas || overtureResult?.City is null || overtureResult.State is null))
         {
             gadmResult = await ResolveGadmAsync(lat, lon, iso3, config.UseGadmTerritoryFallbacks, session, ct).ConfigureAwait(false);
         }
 
-        if (config.UseGadmAdministrativeAreas && config.PreferGadmAdministrativeAreas)
+        if (config.UseGadmAdministrativeAreas && config.PreferGadmAdministrativeAreas
+            && (gadmResult?.City is null || gadmResult.State is null))
         {
             overtureResult ??= await ResolveOvertureAsync(lat, lon, alpha2, iso3, cityResolverProfile, session, ct).ConfigureAwait(false);
         }
@@ -342,6 +344,8 @@ public class AdministrativeAreaResolverService : IProcessingAdministrativeResolv
     private static string? GetOvertureCacheActivityMessage(string iso3, OvertureDivisionEnsureResult result) => result switch
     {
         OvertureDivisionEnsureResult.StartedDownload => $"Downloading Overture administrative cache for {iso3}...",
+        OvertureDivisionEnsureResult.StartedLocalPreparation => $"Preparing local Overture administrative cache for {iso3}...",
+        OvertureDivisionEnsureResult.AwaitedLocalPreparation => $"Waiting for local Overture administrative cache preparation for {iso3}...",
         OvertureDivisionEnsureResult.AwaitedExistingDownload => $"Waiting for Overture administrative cache for {iso3}...",
         _ => null
     };
@@ -349,6 +353,8 @@ public class AdministrativeAreaResolverService : IProcessingAdministrativeResolv
     private static string GetOvertureCacheLogMessage(string iso3, OvertureDivisionEnsureResult result) => result switch
     {
         OvertureDivisionEnsureResult.StartedDownload => $"Starting Overture administrative cache download for {iso3}.",
+        OvertureDivisionEnsureResult.StartedLocalPreparation => $"Preparing local Overture candidate index for {iso3}.",
+        OvertureDivisionEnsureResult.AwaitedLocalPreparation => $"Waiting for in-flight local Overture candidate preparation for {iso3}.",
         OvertureDivisionEnsureResult.AwaitedExistingDownload => $"Waiting for in-flight Overture administrative cache download for {iso3}.",
         _ => $"Overture administrative cache already ready for {iso3}."
     };
@@ -356,6 +362,8 @@ public class AdministrativeAreaResolverService : IProcessingAdministrativeResolv
     private static string? GetGadmCacheActivityMessage(string iso3, GadmDivisionEnsureResult result) => result switch
     {
         GadmDivisionEnsureResult.StartedDownload => $"Downloading GADM administrative cache for {iso3}...",
+        GadmDivisionEnsureResult.StartedLocalPreparation => $"Preparing local GADM administrative cache for {iso3}...",
+        GadmDivisionEnsureResult.AwaitedLocalPreparation => $"Waiting for local GADM administrative cache preparation for {iso3}...",
         GadmDivisionEnsureResult.AwaitedExistingDownload => $"Waiting for GADM administrative cache for {iso3}...",
         _ => null
     };
@@ -363,6 +371,8 @@ public class AdministrativeAreaResolverService : IProcessingAdministrativeResolv
     private static string GetGadmCacheLogMessage(string iso3, GadmDivisionEnsureResult result) => result switch
     {
         GadmDivisionEnsureResult.StartedDownload => $"Starting GADM administrative cache download for {iso3}.",
+        GadmDivisionEnsureResult.StartedLocalPreparation => $"Preparing local GADM candidate index for {iso3}.",
+        GadmDivisionEnsureResult.AwaitedLocalPreparation => $"Waiting for in-flight local GADM candidate preparation for {iso3}.",
         GadmDivisionEnsureResult.AwaitedExistingDownload => $"Waiting for in-flight GADM administrative cache download for {iso3}.",
         _ => $"GADM administrative cache already ready for {iso3}."
     };

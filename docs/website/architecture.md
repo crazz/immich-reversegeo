@@ -42,7 +42,7 @@ An admitted processing attempt:
 1. Acquires the processing lock for the Immich database. If another processing pass owns it, this attempt does no processing.
 2. Reads batches of currently eligible GPS-tagged assets. A batch is a portion of a pass, not a limit on the whole run.
 3. Detects the country using bundled country polygons.
-4. Resolves state and city from cached Overture divisions and, if enabled, optional GADM data. Missing country caches are prepared on demand.
+4. Resolves state and city from the configured primary administrative source. If GADM is enabled, the secondary source fills any missing city or state. Only needed country caches are prepared.
 5. Applies the configured airport and city-selection rules.
 6. Writes complete location results to Immich and tracks assets that should be skipped on later passes.
 7. Finishes output and resource cleanup before releasing the active job's local slot.
@@ -52,6 +52,8 @@ An eligible asset has GPS coordinates, is not deleted, and has both city and cou
 Lookup uses the geographic resolution path as a preview: it can prepare caches but does not write location values to an Immich asset. Use [Lookup first](./using-the-app.md#lookup) to check a result before changing processing settings. [Data Sources](./data-sources.md) explains source ordering, coverage and the non-commercial restriction on optional GADM data.
 
 ## Persistent data and temporary state
+
+Country caches can also contain a small disk index of administrative names and geographic bounds. It narrows the candidate search before polygon data is read; it does not duplicate polygon coordinates or increase the geometry reuse budget. Existing caches receive this optional index through local preparation when a worker needs them. See [cache preparation and temporary storage](./using-the-app.md#administrative-cache-inventory).
 
 During a worker job, GADM and Overture administrative lookups reuse geometry that has already been loaded. Smaller polygons use a prepared search index. Large, detailed polygons can use compact coordinates and scan their boundaries, avoiding the memory cost of a large index. The choice depends on each polygon's size and memory cost and applies to every country. Nearby assets can share this work even when their coordinates differ. Source preferences, airport matching and location names follow the same rules.
 

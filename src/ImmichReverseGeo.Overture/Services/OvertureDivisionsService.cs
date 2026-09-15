@@ -412,7 +412,7 @@ public class OvertureDivisionsService
         var adminLevelColumn = _hasColumn(conn, "division_area", "admin_level", ct) ? "admin_level" : "NULL AS admin_level";
         ct.ThrowIfCancellationRequested();
         using var transaction = conn.BeginTransaction(deferred: true);
-        var rows = ReadCandidateMetadata(conn, transaction, adminLevelColumn, lat, lon, ct);
+        var rows = ReadCandidateMetadata(conn, transaction, adminLevelColumn, lat, lon, generation, ct);
         _administrativeCheckpoint?.Invoke(OvertureAdministrativeCheckpoint.AfterCandidateMetadata);
         ct.ThrowIfCancellationRequested();
         // The open read snapshot may finish after replacement, but its generation
@@ -495,7 +495,7 @@ public class OvertureDivisionsService
 
     private static List<CandidateMetadata> ReadCandidateMetadata(
         SqliteConnection conn, SqliteTransaction transaction, string adminLevelColumn,
-        double lat, double lon, CancellationToken ct)
+        double lat, double lon, GeometryGeneration? generation, CancellationToken ct)
     {
         using var cmd = conn.CreateCommand();
         cmd.Transaction = transaction;
@@ -523,54 +523,72 @@ public class OvertureDivisionsService
         cmd.Parameters.AddWithValue("$lon", lon);
         cmd.Parameters.AddWithValue("$lat", lat);
 
-        ct.ThrowIfCancellationRequested();
-        using var reader = cmd.ExecuteReader();
-        ct.ThrowIfCancellationRequested();
-        var rows = new List<CandidateMetadata>();
-
-        while (true)
+        var legacySql = cmd.CommandText;
+        var accelerated = AdministrativeCandidateIndex.TryConfigure(cmd, GeometrySource.Overture, generation, ct);
+        try
         {
+            return ReadRows();
+        }
+        catch (SqliteException exception) when (accelerated)
+        {
+            AdministrativeCandidateIndex.RethrowIfCritical(exception);
             ct.ThrowIfCancellationRequested();
-            var hasRow = reader.Read();
-            ct.ThrowIfCancellationRequested();
-            if (!hasRow)
-            {
-                break;
-            }
-
-            ct.ThrowIfCancellationRequested();
-            var bboxContains = !reader.IsDBNull(9)
-                               && !reader.IsDBNull(10)
-                               && !reader.IsDBNull(11)
-                               && !reader.IsDBNull(12)
-                               && lon >= reader.GetDouble(9)
-                               && lon <= reader.GetDouble(11)
-                               && lat >= reader.GetDouble(10)
-                               && lat <= reader.GetDouble(12);
-            var bboxArea = bboxContains
-                ? Math.Abs((reader.GetDouble(11) - reader.GetDouble(9)) * (reader.GetDouble(12) - reader.GetDouble(10)))
-                : double.MaxValue;
-
-            var candidate = new OvertureDivisionResult(
-                reader.GetString(0),
-                reader.GetString(1),
-                OvertureDataAccess.ReadNullableString(reader, 2),
-                OvertureDataAccess.ReadNullableString(reader, 3),
-                reader.IsDBNull(4) ? null : reader.GetInt32(4),
-                OvertureDataAccess.ReadNullableString(reader, 5),
-                null,
-                OvertureDataAccess.ReadSqliteBool(reader, 6),
-                OvertureDataAccess.ReadSqliteBool(reader, 7),
-                bboxContains,
-                false,
-                false,
-                bboxArea);
-            ct.ThrowIfCancellationRequested();
-
-            rows.Add(new CandidateMetadata(candidate, reader.IsDBNull(8) ? null : reader.GetInt64(8)));
+            AdministrativeCandidateIndex.Disable(generation);
+            cmd.CommandText = legacySql;
+            return ReadRows();
         }
 
-        return rows;
+        List<CandidateMetadata> ReadRows()
+        {
+            ct.ThrowIfCancellationRequested();
+            using var reader = cmd.ExecuteReader();
+            ct.ThrowIfCancellationRequested();
+            var rows = new List<CandidateMetadata>();
+
+            while (true)
+            {
+                ct.ThrowIfCancellationRequested();
+                var hasRow = reader.Read();
+                ct.ThrowIfCancellationRequested();
+                if (!hasRow)
+                {
+                    break;
+                }
+
+                ct.ThrowIfCancellationRequested();
+                var bboxContains = !reader.IsDBNull(9)
+                                   && !reader.IsDBNull(10)
+                                   && !reader.IsDBNull(11)
+                                   && !reader.IsDBNull(12)
+                                   && lon >= reader.GetDouble(9)
+                                   && lon <= reader.GetDouble(11)
+                                   && lat >= reader.GetDouble(10)
+                                   && lat <= reader.GetDouble(12);
+                var bboxArea = bboxContains
+                    ? Math.Abs((reader.GetDouble(11) - reader.GetDouble(9)) * (reader.GetDouble(12) - reader.GetDouble(10)))
+                    : double.MaxValue;
+
+                var candidate = new OvertureDivisionResult(
+                    reader.GetString(0),
+                    reader.GetString(1),
+                    OvertureDataAccess.ReadNullableString(reader, 2),
+                    OvertureDataAccess.ReadNullableString(reader, 3),
+                    reader.IsDBNull(4) ? null : reader.GetInt32(4),
+                    OvertureDataAccess.ReadNullableString(reader, 5),
+                    null,
+                    OvertureDataAccess.ReadSqliteBool(reader, 6),
+                    OvertureDataAccess.ReadSqliteBool(reader, 7),
+                    bboxContains,
+                    false,
+                    false,
+                    bboxArea);
+                ct.ThrowIfCancellationRequested();
+
+                rows.Add(new CandidateMetadata(candidate, reader.IsDBNull(8) ? null : reader.GetInt64(8)));
+            }
+
+            return rows;
+        }
     }
 
     private sealed record CandidateMetadata(OvertureDivisionResult Candidate, long? BlobLength);

@@ -196,4 +196,7 @@
           Condition="'$(OS)' != 'Windows_NT'" />
   </Target>
 
+  <ItemGroup>
+    <Compile Include="../AdministrativeCandidates.Shared/LocalCandidatePreparationTests.cs" Link="AdministrativeCandidates/LocalCandidatePreparationTests.cs" />
+  </ItemGroup>
 </Project>

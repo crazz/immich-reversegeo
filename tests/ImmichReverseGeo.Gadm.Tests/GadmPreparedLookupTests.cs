@@ -18,9 +18,18 @@ public sealed class GadmPreparedLookupTests
         var prepared = new GadmDivisionsService(NullLogger<GadmDivisionsService>.Instance, fixture.Root, cache,
             checkpoint => { if (checkpoint == GadmDivisionsService.GadmLookupCheckpoint.AfterGeometryBlobRead) { reads++; } });
         var reference = new GadmDivisionsService(NullLogger<GadmDivisionsService>.Instance, fixture.Root);
-        foreach (var point in new[] { (1d, 1d), (2d, 2d), (0d, 5d), (8d, 8d) })
+        var points = new[] { (1d, 1d), (2d, 2d), (0d, 5d), (8d, 8d), (4.0001d, 3d) };
+        var expectedResults = await Task.WhenAll(points.Select(point =>
+            reference.FindContainingDivisionAreasAsync(point.Item1, point.Item2, "USA")));
+        using (var connection = new SqliteConnection($"Data Source={fixture.Database};Pooling=false"))
         {
-            var expected = await reference.FindContainingDivisionAreasAsync(point.Item1, point.Item2, "USA");
+            connection.Open();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Gadm, default));
+        }
+        for (var index = 0; index < points.Length; index++)
+        {
+            var point = points[index];
+            var expected = expectedResults[index];
             var actual = await prepared.FindContainingDivisionAreasAsync(point.Item1, point.Item2, "USA");
             Assert.IsNull(actual.Error);
             Assert.AreEqual(expected.BestMatch, actual.BestMatch);
@@ -74,6 +83,34 @@ public sealed class GadmPreparedLookupTests
         command.Transaction = transaction;
         command.CommandText = "UPDATE _meta SET value='after-cancellation'";
         Assert.AreEqual(1, command.ExecuteNonQuery(), "The cancelled read must not keep its source transaction locked.");
+    }
+
+    [TestMethod]
+    public async Task AcceleratedReadFailure_DiscardsPartialRowsBeforeOneLegacyRetry()
+    {
+        using var fixture = new Fixture();
+        var reference = new GadmDivisionsService(NullLogger<GadmDivisionsService>.Instance, fixture.Root);
+        var expected = await reference.FindContainingDivisionAreasAsync(1, 1, "USA");
+        using (var connection = new SqliteConnection($"Data Source={fixture.Database};Pooling=false"))
+        {
+            connection.Open();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Gadm, default));
+        }
+        using var cache = new AdministrativeGeometryCache(10_000_000);
+        var reads = 0;
+        var service = new GadmDivisionsService(NullLogger<GadmDivisionsService>.Instance, fixture.Root, cache,
+            checkpoint =>
+            {
+                if (checkpoint == GadmDivisionsService.GadmLookupCheckpoint.AfterCandidateRowRead && ++reads == 2)
+                {
+                    throw new SqliteException("controlled optional reader failure", 1);
+                }
+            });
+        var actual = await service.FindContainingDivisionAreasAsync(1, 1, "USA");
+        Assert.IsNull(actual.Error);
+        Assert.AreEqual(5, reads, "Two partial reads plus one full two-row legacy scan and EOF.");
+        Assert.AreEqual(expected.BestMatch, actual.BestMatch);
+        CollectionAssert.AreEqual(expected.Candidates.ToArray(), actual.Candidates.ToArray(), "No partial or duplicate candidates survive the retry.");
     }
 
     private sealed class Fixture : IDisposable

@@ -10,6 +10,9 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/i
 
 ## Unreleased
 
+- Processing skips an unnecessary secondary administrative lookup once the preferred source has both city and state. Your GADM switches still control which source is used first; Lookup continues to show the requested source comparisons. See [GADM settings](./configuration.md#gadm-administrative-areas).
+- Downloaded country caches can now use a small disk search index without increasing the geometry memory budget. Existing caches are prepared locally when needed, preserving their geodata and download dates. Allow temporary space for one additional country cache; no cache reset or Compose change is needed. If optional preparation fails, a valid existing cache remains usable. See [cache preparation](./using-the-app.md#administrative-cache-inventory).
+
 - Large administrative boundaries can now reuse a compact representation with less retained memory. The choice depends on each polygon's size and memory cost, for every country. Boundaries too large to cache no longer discard useful cached geometry. The optimization applies automatically without changing Compose, settings or downloaded caches; first-use work can still cause memory peaks. See [memory and geometry reuse](./architecture.md#persistent-data-and-temporary-state).
 
 - Processing can reuse prepared GADM and Overture boundaries across assets within one worker job, reducing repeated geographic work. Reuse has a shared memory budget and ends with the worker; downloaded caches remain on disk. No Compose, settings or cache migration is needed. See [how reuse affects memory and processing](./architecture.md#persistent-data-and-temporary-state).
