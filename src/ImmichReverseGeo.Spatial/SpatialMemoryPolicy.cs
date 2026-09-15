@@ -6,6 +6,8 @@ namespace ImmichReverseGeo.Spatial;
 
 internal static class SpatialMemoryPolicy
 {
+    internal const long MaximumPreparedWkbBytes = 32L * 1024 * 1024;
+
     internal static long DefaultBudget => BudgetFor(
         ReadContainerLimit("/sys/fs/cgroup/memory.max")
         ?? ReadContainerLimit("/sys/fs/cgroup/memory/memory.limit_in_bytes")
@@ -64,4 +66,45 @@ internal static class SpatialMemoryPolicy
             return false;
         }
     }
+
+    internal static bool TrySelect(long wkbBytes, long budget, out GeometryMemoryEstimate estimate)
+    {
+        estimate = default;
+        if (wkbBytes < 0 || budget < 0)
+        {
+            return false;
+        }
+
+        if (wkbBytes <= MaximumPreparedWkbBytes
+            && TryEstimate(wkbBytes, out var retained, out var construction)
+            && retained + construction <= budget)
+        {
+            estimate = new GeometryMemoryEstimate(false, retained, 0, construction);
+            return true;
+        }
+
+        try
+        {
+            // Include packed coordinates, ring objects and materialized coordinate
+            // arrays. Distance workspace remains reserved for each compact entry;
+            // construction headroom covers WKB, parsing and validity checking.
+            estimate = new GeometryMemoryEstimate(true,
+                checked(wkbBytes * 6 + 2 * 1024 * 1024),
+                checked(wkbBytes * 4 + 65536),
+                checked(wkbBytes * 14 + 65536));
+            return estimate.ReservationBytes <= budget;
+        }
+        catch (OverflowException)
+        {
+            estimate = default;
+            return false;
+        }
+    }
+}
+
+internal readonly record struct GeometryMemoryEstimate(
+    bool Compact, long RetainedBytes, long EvaluationWorkspaceBytes, long ConstructionBytes)
+{
+    internal long EntryBytes => checked(RetainedBytes + EvaluationWorkspaceBytes);
+    internal long ReservationBytes => checked(EntryBytes + ConstructionBytes);
 }

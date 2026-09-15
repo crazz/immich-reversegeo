@@ -1,5 +1,8 @@
 using System.Threading;
+using NetTopologySuite;
+using NetTopologySuite.Algorithm.Locate;
 using NetTopologySuite.Geometries;
+using NetTopologySuite.Geometries.Implementation;
 using NetTopologySuite.Geometries.Prepared;
 using NetTopologySuite.IO;
 
@@ -10,20 +13,33 @@ internal sealed class AdministrativeGeometry
 {
     private readonly Geometry? _geometry;
     private readonly IPreparedGeometry? _prepared;
+    private readonly object? _evaluationSync;
 
-    private AdministrativeGeometry(Geometry? geometry, IPreparedGeometry? prepared)
+    internal bool IsCompact => _evaluationSync is not null;
+
+    private AdministrativeGeometry(Geometry? geometry, IPreparedGeometry? prepared, bool compact = false)
     {
         _geometry = geometry;
         _prepared = prepared;
+        _evaluationSync = compact ? new object() : null;
     }
 
     internal static AdministrativeGeometry Read(byte[] wkb, bool prepare, CancellationToken cancellationToken)
+        => ReadCore(wkb, prepare, false, cancellationToken);
+
+    internal static AdministrativeGeometry ReadCompact(byte[] wkb, CancellationToken cancellationToken)
+        => ReadCore(wkb, false, true, cancellationToken);
+
+    private static AdministrativeGeometry ReadCore(byte[] wkb, bool prepare, bool compact, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         Geometry geometry;
         try
         {
-            geometry = new WKBReader().Read(wkb);
+            var reader = compact
+                ? new WKBReader(new NtsGeometryServices(PackedCoordinateSequenceFactory.DoubleFactory))
+                : new WKBReader();
+            geometry = reader.Read(wkb);
         }
         catch (ParseException)
         {
@@ -38,7 +54,8 @@ internal sealed class AdministrativeGeometry
 
         cancellationToken.ThrowIfCancellationRequested();
         IPreparedGeometry? prepared = null;
-        if (prepare && geometry is IPolygonal && !geometry.IsEmpty && IsEligible(geometry))
+        var eligible = (prepare || compact) && geometry is IPolygonal && !geometry.IsEmpty && IsEligible(geometry);
+        if (prepare && eligible)
         {
             cancellationToken.ThrowIfCancellationRequested();
             prepared = PreparedGeometryFactory.Prepare(geometry);
@@ -48,18 +65,46 @@ internal sealed class AdministrativeGeometry
         }
 
         cancellationToken.ThrowIfCancellationRequested();
-        return new AdministrativeGeometry(geometry, prepared);
+        return new AdministrativeGeometry(geometry, prepared, compact && eligible);
     }
 
     internal bool Covers(Point point, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
+        if (_evaluationSync is null)
+        {
+            return CoversCore(point, cancellationToken);
+        }
+
+        // One compact entry owns one evaluation workspace allowance. Do not
+        // acquire the global cache lock or another reservation while leased.
+        while (!Monitor.TryEnter(_evaluationSync, 50))
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+        }
+
+        try
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            return CoversCore(point, cancellationToken);
+        }
+        finally
+        {
+            Monitor.Exit(_evaluationSync);
+        }
+    }
+
+    private bool CoversCore(Point point, CancellationToken cancellationToken)
+    {
         var result = false;
         if (_geometry is not null)
         {
             try
             {
-                result = (_prepared?.Covers(point) ?? _geometry.Covers(point))
+                var contained = IsCompact && !point.IsEmpty
+                    ? SimplePointInAreaLocator.Locate(point.Coordinate, _geometry) != Location.Exterior
+                    : (_prepared?.Covers(point) ?? _geometry.Covers(point));
+                result = contained
                     || _geometry.Distance(point) <= 0.00015;
             }
             catch (ParseException)

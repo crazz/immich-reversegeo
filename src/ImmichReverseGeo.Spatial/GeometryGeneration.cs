@@ -28,4 +28,11 @@ public sealed class GeometryGeneration
 
 public readonly record struct SpatialCacheStatistics(
     long BudgetBytes, long AccountedBytes, int RetainedEntries, int PendingPreparations, int WaitingQueries,
-    long Hits, long BlobLoads, long Preparations, long Evictions, long UnretainedEvaluations);
+    long Hits, long BlobLoads, long Preparations, long Evictions, long UnretainedEvaluations)
+{
+    public long CompactConstructions { get; init; }
+    public long CompactHits { get; init; }
+    public long IntrinsicRejections { get; init; }
+    public long CompactRetainedBytes { get; init; }
+    public long CompactWorkspaceBytes { get; init; }
+}

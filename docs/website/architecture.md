@@ -53,9 +53,11 @@ Lookup uses the geographic resolution path as a preview: it can prepare caches b
 
 ## Persistent data and temporary state
 
-During a worker job, GADM and Overture administrative lookups reuse geometry that has already been loaded and prepared. Nearby assets can share this work even when their coordinates differ. The two sources share one memory budget; unused entries can be evicted, and a replaced country cache gets fresh geometry. Source preferences, airport matching and the selected location names follow the same rules.
+During a worker job, GADM and Overture administrative lookups reuse geometry that has already been loaded. Smaller polygons use a prepared search index. Large, detailed polygons can use compact coordinates and scan their boundaries, avoiding the memory cost of a large index. The choice depends on each polygon's size and memory cost and applies to every country. Nearby assets can share this work even when their coordinates differ. Source preferences, airport matching and location names follow the same rules.
 
-This temporary reuse ends with the worker. A downloaded country cache is therefore different from prepared state in RAM: the next processing pass or Lookup can read the existing disk cache but still needs to prepare geometry again. The reuse budget is one quarter of the detected memory allowance, capped at 1 GiB, with a 128 MiB fallback when no allowance is available. It accounts for geometry and preparation costs; it is not a limit on total container memory. Oversized geometry is evaluated without retaining it, so a smaller memory allowance can reduce the speed benefit.
+The two sources share one memory budget. Unused entries can be evicted, and a replaced country cache gets fresh geometry. A polygon that cannot fit in either form is evaluated without retaining it; that rejection does not evict useful cached geometry. Smaller memory allowances can still reduce reuse.
+
+This temporary state ends with the worker. The next processing pass or Lookup can read existing disk caches but still needs to load and validate geometry again. The reuse budget is one quarter of the detected memory allowance, capped at 1 GiB, with a 128 MiB fallback when no allowance is available. It accounts for retained geometry and reserved workspace, not total container memory. Parsing, validation, database work and geometry evaluated outside the cache can still create memory peaks. Compact reuse applies automatically after upgrading; no Compose change or cache reset is needed, and downloads and first-use work can still take time.
 
 | Location | Contents | What survives a worker or container restart |
 |---|---|---|
