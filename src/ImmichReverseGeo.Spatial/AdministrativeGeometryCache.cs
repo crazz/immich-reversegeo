@@ -28,6 +28,11 @@ public sealed class AdministrativeGeometryCache : IDisposable
     private long _preparations;
     private long _evictions;
     private long _unretained;
+    private long _compactConstructions;
+    private long _compactHits;
+    private long _intrinsicRejections;
+    private long _compactRetained;
+    private long _compactWorkspace;
     private int _operations;
     private int _waiting;
     private bool _disposed;
@@ -116,7 +121,14 @@ public sealed class AdministrativeGeometryCache : IDisposable
         lock (_sync)
         {
             return new SpatialCacheStatistics(_budget, _accounted, _entries.Count, _pending.Count, _waiting,
-                _hits, _blobLoads, _preparations, _evictions, _unretained);
+                _hits, _blobLoads, _preparations, _evictions, _unretained)
+            {
+                CompactConstructions = _compactConstructions,
+                CompactHits = _compactHits,
+                IntrinsicRejections = _intrinsicRejections,
+                CompactRetainedBytes = _compactRetained,
+                CompactWorkspaceBytes = _compactWorkspace
+            };
         }
     }
 
@@ -209,7 +221,7 @@ public sealed class AdministrativeGeometryCache : IDisposable
             _buildGate.Wait(ct);
             try
             {
-                var reservation = Reserve(key, blobLength, out var retainedBytes);
+                var reservation = Reserve(key, blobLength, out var estimate);
                 try
                 {
                     ct.ThrowIfCancellationRequested();
@@ -217,7 +229,12 @@ public sealed class AdministrativeGeometryCache : IDisposable
                     var bytes = loader();
                     // A metadata/blob mismatch must never bypass admission.
                     var retain = reservation > 0 && bytes.LongLength == blobLength;
-                    var geometry = AdministrativeGeometry.Read(bytes, retain, ct);
+                    var geometry = retain && estimate.Compact
+                        ? AdministrativeGeometry.ReadCompact(bytes, ct)
+                        : AdministrativeGeometry.Read(bytes, retain, ct);
+                    // Ineligible compact input keeps the reference predicate but
+                    // cannot retain raw/lazy state under a compact admission.
+                    retain &= !estimate.Compact || geometry.IsCompact;
                     if (retain)
                     {
                         lock (_sync)
@@ -227,11 +244,17 @@ public sealed class AdministrativeGeometryCache : IDisposable
                             {
                                 // Allocate before changing either collection. Once
                                 // inserted, linking the existing node cannot allocate.
-                                var prepared = new Entry(key, geometry, retainedBytes);
+                                var prepared = new Entry(key, geometry, estimate);
                                 prepared.Node = new LinkedListNode<Entry>(prepared);
                                 _entries.Add(key, prepared);
                                 _lru.AddLast(prepared.Node);
-                                _accounted -= reservation - retainedBytes;
+                                _accounted -= reservation - estimate.EntryBytes;
+                                if (geometry.IsCompact)
+                                {
+                                    _compactRetained += estimate.RetainedBytes;
+                                    _compactWorkspace += estimate.EvaluationWorkspaceBytes;
+                                    _compactConstructions++;
+                                }
                                 reservation = 0;
                                 entry = prepared;
                                 _preparations++;
@@ -277,14 +300,25 @@ public sealed class AdministrativeGeometryCache : IDisposable
         }
     }
 
-    private long Reserve(Key key, long blobLength, out long retainedBytes)
+    private long Reserve(Key key, long blobLength, out GeometryMemoryEstimate estimate)
     {
-        var estimated = SpatialMemoryPolicy.TryEstimate(blobLength, out retainedBytes, out var temporaryBytes);
+        var affordable = SpatialMemoryPolicy.TrySelect(blobLength, _budget, out estimate);
         lock (_sync)
         {
-            var needed = estimated ? retainedBytes + temporaryBytes : long.MaxValue;
+            if (!affordable)
+            {
+                _intrinsicRejections++;
+                return 0;
+            }
+
+            if (key.Generation.Retired)
+            {
+                return 0;
+            }
+
+            var needed = estimate.ReservationBytes;
             var node = _lru.First;
-            while (node is not null && (!estimated || needed > _budget - _accounted))
+            while (node is not null && needed > _budget - _accounted)
             {
                 var next = node.Next;
                 if (node.Value.Users == 0)
@@ -295,7 +329,7 @@ public sealed class AdministrativeGeometryCache : IDisposable
                 node = next;
             }
 
-            if (!estimated || key.Generation.Retired || needed > _budget - _accounted)
+            if (needed > _budget - _accounted)
             {
                 return 0;
             }
@@ -314,6 +348,10 @@ public sealed class AdministrativeGeometryCache : IDisposable
 
         entry.Users++;
         _hits++;
+        if (entry.Geometry.IsCompact)
+        {
+            _compactHits++;
+        }
         _lru.Remove(entry.Node!);
         _lru.AddLast(entry.Node!);
         return entry;
@@ -338,7 +376,7 @@ public sealed class AdministrativeGeometryCache : IDisposable
             entry.Users--;
             if (entry.Users == 0 && entry.Retired)
             {
-                _accounted -= entry.Bytes;
+                ReleaseAccounting(entry);
             }
         }
     }
@@ -384,17 +422,27 @@ public sealed class AdministrativeGeometryCache : IDisposable
         _evictions++;
         if (entry.Users == 0)
         {
-            _accounted -= entry.Bytes;
+            ReleaseAccounting(entry);
+        }
+    }
+
+    private void ReleaseAccounting(Entry entry)
+    {
+        _accounted -= entry.Estimate.EntryBytes;
+        if (entry.Geometry.IsCompact)
+        {
+            _compactRetained -= entry.Estimate.RetainedBytes;
+            _compactWorkspace -= entry.Estimate.EvaluationWorkspaceBytes;
         }
     }
 
     private readonly record struct Key(GeometryGeneration Generation, string AreaId);
 
-    private sealed class Entry(Key key, AdministrativeGeometry geometry, long bytes)
+    private sealed class Entry(Key key, AdministrativeGeometry geometry, GeometryMemoryEstimate estimate)
     {
         internal Key Key { get; } = key;
         internal AdministrativeGeometry Geometry { get; } = geometry;
-        internal long Bytes { get; } = bytes;
+        internal GeometryMemoryEstimate Estimate { get; } = estimate;
         internal int Users { get; set; } = 1;
         internal bool Retired { get; set; }
         internal LinkedListNode<Entry>? Node { get; set; }

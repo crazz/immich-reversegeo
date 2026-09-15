@@ -6,6 +6,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Added adaptive administrative geometry reuse based on polygon size and memory cost, shared by all countries and both sources. Large valid polygons use packed double coordinates and a compatible area scan with accounted distance workspace; smaller eligible polygons retain prepared indexes. Intrinsically unaffordable admissions now preserve unrelated cache entries. Default memory budget, coordinate precision, disk cache formats and location selection rules are unchanged. See the [measurement and accounting guide](./docs/maintainer/ADMINISTRATIVE_GEOMETRY_MEASUREMENT.md).
+
 - Added invocation-owned prepared administrative geometry reuse shared by GADM and Overture. Metadata-first SQLite reads avoid materializing geometry blobs on cache hits; bounded admission, active leases and generation retirement preserve source selection and replacement semantics. Web and Core remain free of the Spatial dependency. Settings, cache formats, volumes, airport matching and Immich writes are unchanged. See [architecture](./docs/website/architecture.md#persistent-data-and-temporary-state) and the [opt-in measurement guide](./docs/maintainer/ADMINISTRATIVE_GEOMETRY_MEASUREMENT.md).
 
 - Redesigned the Web UI with shared graphite styles, system fonts, responsive forms and navigation, and distinct primary/destructive/focus states. Dashboard actions now precede counters and full-width status/activity sections; Lookup presents final output before diagnostics. Existing controls, content, handlers, and worker/database behavior are retained.

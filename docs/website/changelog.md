@@ -10,6 +10,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/i
 
 ## Unreleased
 
+- Large administrative boundaries can now reuse a compact representation with less retained memory. The choice depends on each polygon's size and memory cost, for every country. Boundaries too large to cache no longer discard useful cached geometry. The optimization applies automatically without changing Compose, settings or downloaded caches; first-use work can still cause memory peaks. See [memory and geometry reuse](./architecture.md#persistent-data-and-temporary-state).
+
 - Processing can reuse prepared GADM and Overture boundaries across assets within one worker job, reducing repeated geographic work. Reuse has a shared memory budget and ends with the worker; downloaded caches remain on disk. No Compose, settings or cache migration is needed. See [how reuse affects memory and processing](./architecture.md#persistent-data-and-temporary-state).
 
 - Refreshed the app with a graphite design and layouts that adapt to smaller screens. Dashboard actions are at the top, Lookup shows final values before source details, and long logs wrap for easier reading. Existing controls, settings, and processing behavior are unchanged. See [Using the App](./using-the-app.md).

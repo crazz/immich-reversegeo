@@ -14,6 +14,7 @@ This guide is the source navigation entry point. Exact wire, exit, cancellation 
 | [Worker](../../src/ImmichReverseGeo.Worker/) | Heavy composition, executor, Lookup and cache job handlers, protocol host and direct Run-once host |
 | [Overture](../../src/ImmichReverseGeo.Overture/) | Country and administrative matching, airport infrastructure, downloads and exports using Overture data |
 | [Gadm](../../src/ImmichReverseGeo.Gadm/) | Optional administrative-boundary download, export, cache and lookup services |
+| [Spatial](../../src/ImmichReverseGeo.Spatial/) | Invocation-owned geometry reuse and shared memory admission; selects prepared or compact evaluation by polygon size and cost |
 | [Legacy](../../src/ImmichReverseGeo.Legacy/) | Retained reference implementations, outside the active production composition |
 
 The following arrows are **actual project references**, not process launches or DI registrations:
@@ -28,12 +29,16 @@ flowchart TD
     Worker --> Overture
     Worker --> Gadm
     Overture --> Core
+    Overture --> Spatial
     Gadm --> Core
+    Gadm --> Spatial
 ```
 
 Worker still references the Web library to reuse shared configuration and repository services. Several Worker sources retain `ImmichReverseGeo.Web.*` namespaces. Follow the physical project and its composition root when deciding ownership; a namespace alone does not identify the running process. Worker composition excludes Web presentation and control ownership even though that assembly reference exists.
 
 The reverse edge is forbidden: the Web project references Core, not Worker, Overture or Gadm. Its permitted service dependency closure excludes heavy execution, spatial indexes and native geodata activation. Merely deferring a forbidden factory is insufficient. The [boundary policy](web-control-plane-boundary.md) checks package/project/assembly dependencies, registrations and factories, with runtime sentinels for forbidden initialization.
+
+GADM and Overture receive one `AdministrativeGeometryCache` from heavy composition. Spatial chooses a representation for each polygon from its WKB size and memory budget, independently of country identity. Compact entries keep exact packed coordinates and reserve serialized evaluation workspace; prepared entries retain the existing fast index. Both use the same generation fences and lease-aware eviction. Intrinsically unaffordable admissions leave useful entries intact. See [accounting and measurement](ADMINISTRATIVE_GEOMETRY_MEASUREMENT.md) for formulas, fallback limits and explicit performance checks. Web and Core do not reference Spatial.
 
 Host deliberately references both sides to dispatch them. Publish [Host.csproj](../../src/ImmichReverseGeo.Host/ImmichReverseGeo.Host.csproj) to produce the runnable `ImmichReverseGeo.Web.dll`; the Web project itself is now a library. The [Dockerfile](../../src/ImmichReverseGeo.Web/Dockerfile) packages the complete application and bundled data. Data-export utilities remain separate developer tools.
 
