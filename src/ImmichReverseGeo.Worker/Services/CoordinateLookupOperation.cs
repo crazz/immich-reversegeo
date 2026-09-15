@@ -584,14 +584,18 @@ internal sealed class CoordinateLookupOperation
             }
             else
             {
-                string action = result == OvertureDivisionEnsureResult.StartedDownload
-                    ? "Downloading"
-                    : "Waiting for";
+                string action = result switch
+                {
+                    OvertureDivisionEnsureResult.StartedDownload => "Downloading",
+                    OvertureDivisionEnsureResult.StartedLocalPreparation => "Preparing local",
+                    OvertureDivisionEnsureResult.AwaitedLocalPreparation => "Waiting for local preparation of",
+                    _ => "Waiting for"
+                };
                 await AwaitCacheActivityAsync(
                     reporter,
                     task,
                     $"{action} Overture administrative cache for {iso3}",
-                    ownsTask: result == OvertureDivisionEnsureResult.StartedDownload,
+                    ownsTask: result is OvertureDivisionEnsureResult.StartedDownload or OvertureDivisionEnsureResult.StartedLocalPreparation,
                     cancellationToken).ConfigureAwait(false);
             }
 
@@ -649,14 +653,18 @@ internal sealed class CoordinateLookupOperation
                     _sources.GetOrStartGadmCache(code, cancellationToken);
                 if (result != GadmDivisionEnsureResult.AlreadyReady)
                 {
-                    string action = result == GadmDivisionEnsureResult.StartedDownload
-                        ? "Downloading"
-                        : "Waiting for";
+                    string action = result switch
+                    {
+                        GadmDivisionEnsureResult.StartedDownload => "Downloading",
+                        GadmDivisionEnsureResult.StartedLocalPreparation => "Preparing local",
+                        GadmDivisionEnsureResult.AwaitedLocalPreparation => "Waiting for local preparation of",
+                        _ => "Waiting for"
+                    };
                     await AwaitCacheActivityAsync(
                         reporter,
                         task,
                         $"{action} GADM administrative cache for {code}",
-                        ownsTask: result == GadmDivisionEnsureResult.StartedDownload,
+                        ownsTask: result is GadmDivisionEnsureResult.StartedDownload or GadmDivisionEnsureResult.StartedLocalPreparation,
                         cancellationToken).ConfigureAwait(false);
                 }
 

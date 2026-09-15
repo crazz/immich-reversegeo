@@ -51,6 +51,8 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 - `Include live Overture Places lookup` adds an extra live place search for debugging, but it is slower and not needed for normal use
 - `Prefer cached GADM administrative areas` switches the administrative area part of the lookup to an experimental on-demand GADM cache for that country; country detection still starts with the bundled Overture country data
 
+With GADM selected, Lookup evaluates both requested administrative sources so you can compare their details. Processing only consults the secondary source when the primary has a missing city or state. A complete primary result can therefore need less work during processing than during Lookup.
+
 Lookup starts a temporary isolated worker in both Standard and Web-only mode. While it is checking availability, starting, or running, the coordinate and source options stay locked. The page shows the current lookup step and any active cache preparation. `Cancel` requests a stop and remains in `Cancelling…` until the worker has exited and its output has finished draining.
 
 If processing, another lookup, cache refresh, or coordinated maintenance owns the local work slot, the page reports that it is busy and starts no second worker. If the worker cannot start or stops without a valid result, Lookup shows a short safe failure message. It does not switch to an in-process resolver. Retry only after the previous operation and cleanup have finished and any reported cause is corrected.
@@ -83,6 +85,10 @@ The Data area contains maintenance tools that change downloaded caches or Immich
 Open **Administrative Areas** to inspect downloaded Overture and GADM caches. The table shows each discovered country cache, its current storage status, version or release when available, file size, download time, and last-modified time. It does not scan administrative-area rows to calculate an area count, so opening the page does not load the geographic data.
 
 On narrow screens, scroll the table horizontally to reach every column and the row actions.
+
+When a worker next needs an existing country cache, it may prepare a small search index locally. This uses a temporary copy of that cache, so allow space for one additional cache file plus its index. Only one such copy is prepared at a time within the worker. Logs distinguish local preparation from downloading; the source version and download date remain the same, while file size and modification time can change. New downloads also include the index when supported.
+
+Opening the inventory does not start this preparation. There is no need to clear caches or change Compose. If optional preparation cannot finish, for example because storage is full, the valid original remains usable through the previous lookup path. Check Logs and free space before a later job; the worker avoids retrying the same unchanged cache for every asset.
 
 Use the source and country filters to narrow the list. `Available` means the expected cache schema can be read. `In progress` means Immich ReverseGeo found temporary work for a cache that has not been published yet. `Invalid`, `Unreadable`, or `Unsafe` identifies a cache that should not be used as ready data. If a source is marked `Truncated`, the directory exceeded the inventory safety limit; the page discards that source's partial list instead of presenting it as complete. Refresh the page after cache work finishes to read storage again.
 

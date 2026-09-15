@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Spatial;
 using ImmichReverseGeo.Core.Countries;
 using System.Collections.Concurrent;
 using ImmichReverseGeo.Core.Models;
@@ -659,6 +660,7 @@ public sealed class AdministrativeAreaResolverEventReportingTests
                 );
                 """;
             command.ExecuteNonQuery();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Overture, CancellationToken.None));
         }
         private static void CreateGadm(string root)
         {
@@ -690,6 +692,7 @@ public sealed class AdministrativeAreaResolverEventReportingTests
                 INSERT INTO _meta VALUES ('downloadedAt', '2026-01-01T00:00:00Z');
                 """;
             command.ExecuteNonQuery();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Gadm, CancellationToken.None));
         }
     }
 }

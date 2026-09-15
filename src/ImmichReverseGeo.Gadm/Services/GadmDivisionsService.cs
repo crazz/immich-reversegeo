@@ -222,7 +222,7 @@ public class GadmDivisionsService
         conn.Open();
         ct.ThrowIfCancellationRequested();
         using var transaction = conn.BeginTransaction(deferred: true);
-        var rows = ReadCandidateMetadata(conn, transaction, lat, lon, ct);
+        var rows = ReadCandidateMetadata(conn, transaction, lat, lon, generation, ct);
         if (_spatialCache is not null)
         {
             // Retires the acquired generation if replacement raced with opening the
@@ -299,7 +299,7 @@ public class GadmDivisionsService
     }
 
     private List<CandidateMetadata> ReadCandidateMetadata(
-        SqliteConnection connection, SqliteTransaction transaction, double lat, double lon, CancellationToken ct)
+        SqliteConnection connection, SqliteTransaction transaction, double lat, double lon, GeometryGeneration? generation, CancellationToken ct)
     {
         using var cmd = connection.CreateCommand();
         cmd.Transaction = transaction;
@@ -312,33 +312,51 @@ public class GadmDivisionsService
             """;
         cmd.Parameters.AddWithValue("$lon", lon);
         cmd.Parameters.AddWithValue("$lat", lat);
-        ct.ThrowIfCancellationRequested();
-        using var reader = cmd.ExecuteReader();
-        ct.ThrowIfCancellationRequested();
-        var rows = new List<CandidateMetadata>();
-        while (true)
+        var legacySql = cmd.CommandText;
+        var accelerated = AdministrativeCandidateIndex.TryConfigure(cmd, GeometrySource.Gadm, generation, ct);
+        try
         {
-            _checkpoint?.Invoke(GadmLookupCheckpoint.BeforeCandidateRowRead);
+            return ReadRows();
+        }
+        catch (SqliteException exception) when (accelerated)
+        {
+            AdministrativeCandidateIndex.RethrowIfCritical(exception);
             ct.ThrowIfCancellationRequested();
-            var hasRow = reader.Read();
-            _checkpoint?.Invoke(GadmLookupCheckpoint.AfterCandidateRowRead);
-            ct.ThrowIfCancellationRequested();
-            if (!hasRow)
-            {
-                break;
-            }
-
-            var bboxContains = lon >= reader.GetDouble(6) && lon <= reader.GetDouble(8)
-                && lat >= reader.GetDouble(7) && lat <= reader.GetDouble(9);
-            var bboxArea = Math.Abs((reader.GetDouble(8) - reader.GetDouble(6)) * (reader.GetDouble(9) - reader.GetDouble(7)));
-            rows.Add(new CandidateMetadata(new GadmDivisionResult(
-                reader.GetString(0), reader.GetString(1),
-                reader.IsDBNull(2) ? null : reader.GetString(2),
-                reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
-                bboxContains, false, bboxArea), reader.GetInt64(5)));
+            AdministrativeCandidateIndex.Disable(generation);
+            cmd.CommandText = legacySql;
+            return ReadRows();
         }
 
-        return rows;
+        List<CandidateMetadata> ReadRows()
+        {
+            ct.ThrowIfCancellationRequested();
+            using var reader = cmd.ExecuteReader();
+            ct.ThrowIfCancellationRequested();
+            var rows = new List<CandidateMetadata>();
+            while (true)
+            {
+                _checkpoint?.Invoke(GadmLookupCheckpoint.BeforeCandidateRowRead);
+                ct.ThrowIfCancellationRequested();
+                var hasRow = reader.Read();
+                _checkpoint?.Invoke(GadmLookupCheckpoint.AfterCandidateRowRead);
+                ct.ThrowIfCancellationRequested();
+                if (!hasRow)
+                {
+                    break;
+                }
+
+                var bboxContains = lon >= reader.GetDouble(6) && lon <= reader.GetDouble(8)
+                    && lat >= reader.GetDouble(7) && lat <= reader.GetDouble(9);
+                var bboxArea = Math.Abs((reader.GetDouble(8) - reader.GetDouble(6)) * (reader.GetDouble(9) - reader.GetDouble(7)));
+                rows.Add(new CandidateMetadata(new GadmDivisionResult(
+                    reader.GetString(0), reader.GetString(1),
+                    reader.IsDBNull(2) ? null : reader.GetString(2),
+                    reader.IsDBNull(3) ? null : reader.GetString(3), reader.GetInt32(4),
+                    bboxContains, false, bboxArea), reader.GetInt64(5)));
+            }
+
+            return rows;
+        }
     }
 
     private sealed record CandidateMetadata(GadmDivisionResult Candidate, long BlobLength);

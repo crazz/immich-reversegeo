@@ -6,6 +6,8 @@ icon: material/update
 
 Upgrade the complete Immich ReverseGeo image while keeping the existing `/config` and `/data` volumes. The worker architecture uses the same image for the Web service and its temporary workers. It introduces no Immich schema migration or required conversion of saved ReverseGeo configuration.
 
+Administrative cache search indexes are added automatically when needed, using an offline temporary copy. Allow room for one extra country cache plus its index; no cache reset or Compose change is required. Source data and download dates are preserved. The preceding image can still read the original tables in an indexed cache. See [local cache preparation](./using-the-app.md#administrative-cache-inventory) for fallback behavior when preparation is unavailable.
+
 !!! info "Choose a release that includes these changes"
     The new architecture and deployment modes are currently listed under [Unreleased](./changelog.md#unreleased). Do not assume `latest` already includes them. Use the image reference supplied with the release you intend to install, and keep its version or digest alongside your Compose file.
 

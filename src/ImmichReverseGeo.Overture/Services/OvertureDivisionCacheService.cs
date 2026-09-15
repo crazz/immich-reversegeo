@@ -9,6 +9,7 @@ using DuckDB.NET.Data;
 using ImmichReverseGeo.Core.Models;
 using ImmichReverseGeo.Core.WorkerJobs;
 using Microsoft.Data.Sqlite;
+using ImmichReverseGeo.Spatial;
 using Microsoft.Extensions.Logging;
 
 namespace ImmichReverseGeo.Overture.Services;
@@ -49,6 +50,15 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
     private readonly ConcurrentDictionary<string, MutationFlight> _inflightDownloads = new();
     private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _mutationLocks = new();
+
+    private readonly AdministrativeCandidatePreparation _candidatePreparation = new(
+        GeometrySource.Overture,
+        static (path, readOnly) => new SqliteConnection(new SqliteConnectionStringBuilder
+        {
+            DataSource = path,
+            Mode = readOnly ? SqliteOpenMode.ReadOnly : SqliteOpenMode.ReadWrite,
+            Pooling = false
+        }.ToString()));
 
     public CacheMutationSource Source => CacheMutationSource.Overture;
 
@@ -235,7 +245,8 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
                 operation,
                 iso3,
                 CacheMutationDisposition.AlreadyReady,
-                out CacheMutationSourceResult? ready))
+                out CacheMutationSourceResult? ready)
+            && !_candidatePreparation.IsNeeded(GetDbPath(iso3), cancellationToken))
         {
             await ReportAsync(
                 reporter,
@@ -258,13 +269,19 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
                         iso3,
                         cancellationToken,
                         candidate!,
-                        () => MutateWithCountryLockAsync(
-                            iso3,
-                            forceRefresh: true,
-                            operation,
-                            reporter,
-                            cancellationToken)),
-                    LazyThreadSafetyMode.ExecutionAndPublication));
+                        async () =>
+                        {
+                            candidate!.Disposition = await MutateWithCountryLockAsync(
+                                iso3,
+                                forceRefresh: operation == CacheMutationOperation.Refresh,
+                                operation,
+                                reporter,
+                                cancellationToken).ConfigureAwait(false);
+                        }),
+                    LazyThreadSafetyMode.ExecutionAndPublication))
+            {
+                LocalPreparation = operation == CacheMutationOperation.Ensure && HasData(iso3)
+            };
             MutationFlight winning = _inflightDownloads.GetOrAdd(iso3, candidate);
 
             if (operation == CacheMutationOperation.Refresh
@@ -275,12 +292,21 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
                 continue;
             }
 
-            await winning.Task.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (ReferenceEquals(winning, candidate))
+            {
+                // The owner must drain publication and activity cleanup before
+                // its worker lifetime ends, including on cancellation.
+                await winning.Task.Value.ConfigureAwait(false);
+            }
+            else
+            {
+                await winning.Task.Value.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
             cancellationToken.ThrowIfCancellationRequested();
             if (TryReadWorkerResult(
                     operation,
                     iso3,
-                    CacheMutationDisposition.Published,
+                    winning.Disposition,
                     out CacheMutationSourceResult? published))
             {
                 await ReportAsync(
@@ -304,7 +330,8 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
     public (Task Task, OvertureDivisionEnsureResult Result) GetOrStartDownload(string iso3, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        if (HasData(iso3))
+        var localPreparation = HasData(iso3);
+        if (localPreparation && !_candidatePreparation.IsNeeded(GetDbPath(iso3), ct))
         {
             ct.ThrowIfCancellationRequested();
             return (Task.CompletedTask, OvertureDivisionEnsureResult.AlreadyReady);
@@ -313,20 +340,26 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         MutationFlight? candidate = null;
         candidate = new MutationFlight(
             CacheMutationOperation.Ensure,
-            ProducesStrictMetadata: false,
+            ProducesStrictMetadata: localPreparation,
             new Lazy<Task>(
-                () => RunSourceOperationAsync(
-                    iso3,
-                    ct,
-                    candidate!,
-                    () => _sourceOperation(iso3, ct)),
-                LazyThreadSafetyMode.ExecutionAndPublication));
+                () => RunSourceOperationAsync(iso3, ct, candidate!, async () =>
+                {
+                    if (localPreparation)
+                    {
+                        candidate!.Disposition = await MutateWithCountryLockAsync(
+                            iso3, false, CacheMutationOperation.Ensure, CacheMutationReporters.None, ct).ConfigureAwait(false);
+                    }
+                    else
+                    {
+                        await _sourceOperation(iso3, ct).ConfigureAwait(false);
+                    }
+                }),
+                LazyThreadSafetyMode.ExecutionAndPublication))
+        {
+            LocalPreparation = localPreparation
+        };
         MutationFlight winning = _inflightDownloads.GetOrAdd(iso3, candidate);
-
-        var result = ReferenceEquals(candidate, winning)
-            ? OvertureDivisionEnsureResult.StartedDownload
-            : OvertureDivisionEnsureResult.AwaitedExistingDownload;
-
+        var result = DescribeEnsure(winning, ReferenceEquals(candidate, winning));
         _afterInFlightTaskAcquired();
         var sharedTask = winning.Task.Value;
         ct.ThrowIfCancellationRequested();
@@ -396,7 +429,7 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
             CacheMutationReporters.None,
             ct);
 
-    private async Task MutateWithCountryLockAsync(
+    private async Task<CacheMutationDisposition> MutateWithCountryLockAsync(
         string iso3,
         bool forceRefresh,
         CacheMutationOperation operation,
@@ -409,7 +442,7 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         await mutationLock.WaitAsync(ct).ConfigureAwait(false);
         try
         {
-            await DownloadDataInternalAsync(
+            return await DownloadDataInternalAsync(
                 iso3,
                 forceRefresh,
                 operation,
@@ -422,7 +455,7 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         }
     }
 
-    private async Task DownloadDataInternalAsync(
+    private async Task<CacheMutationDisposition> DownloadDataInternalAsync(
         string iso3,
         bool forceRefresh,
         CacheMutationOperation operation,
@@ -434,7 +467,9 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         if (!forceRefresh && HasData(iso3))
         {
             ct.ThrowIfCancellationRequested();
-            return;
+            return _candidatePreparation.IsNeeded(dbPath, ct)
+                ? await AugmentCacheAsync(iso3, reporter, ct).ConfigureAwait(false)
+                : CacheMutationDisposition.AlreadyReady;
         }
 
         var alpha2 = _iso3ToAlpha2(iso3);
@@ -486,6 +521,7 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
                 throw new InvalidOperationException($"No Overture division rows were downloaded for {iso3}.");
             }
 
+            _candidatePreparation.BuildFile(tmpPath, ct);
             if (!RunValidationOperation(tmpPath)
                 || !HasRequiredCandidateMetadata(tmpPath, alpha2))
             {
@@ -511,10 +547,12 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
                 "Publishing the Overture cache.",
                 ct).ConfigureAwait(false);
             _filePublisher.Publish(tmpPath, dbPath);
+            _candidatePreparation.RememberReady(dbPath);
             await _afterPublication(ct);
             ct.ThrowIfCancellationRequested();
             _readyCaches[iso3] = 0;
             _logger.LogInformation("Overture division download complete for {ISO3}: {Rows} areas", iso3, rowCount);
+            return CacheMutationDisposition.Published;
         }
         catch
         {
@@ -1113,10 +1151,99 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
         throw new InvalidCastException($"Unsupported blob value type '{value.GetType().FullName}' at ordinal {ordinal}.");
     }
 
+    private static OvertureDivisionEnsureResult DescribeEnsure(MutationFlight flight, bool owner) =>
+        flight.LocalPreparation
+            ? owner ? OvertureDivisionEnsureResult.StartedLocalPreparation : OvertureDivisionEnsureResult.AwaitedLocalPreparation
+            : owner ? OvertureDivisionEnsureResult.StartedDownload : OvertureDivisionEnsureResult.AwaitedExistingDownload;
+
+    private async Task<CacheMutationDisposition> AugmentCacheAsync(
+        string iso3, ICacheMutationReporter reporter, CancellationToken ct)
+    {
+        var path = GetDbPath(iso3);
+        var stamp = AdministrativeCandidatePreparation.Stamp(path);
+        var temporary = Path.Combine(Path.GetDirectoryName(path)!, $"{iso3}.{Environment.ProcessId}.{Guid.NewGuid():N}.tmp");
+        await ReportAsync(reporter, CacheMutationProgressStep.PreparingSource, CacheMutationOperation.Ensure,
+            iso3, "Preparing the local Overture candidate index.", ct).ConfigureAwait(false);
+        await using var activity = await reporter.BeginActivityAsync($"Preparing local Overture cache {iso3}", ct).ConfigureAwait(false);
+        ICacheCandidateLease? ownership = null;
+        AdministrativeCandidatePreparation.PreparedCopy? copy = null;
+        var published = false;
+        var cacheIo = true;
+        try
+        {
+            ownership = _candidateOwnership.Acquire(temporary);
+            copy = await _candidatePreparation.PrepareCopyAsync(path, temporary, ct).ConfigureAwait(false);
+            cacheIo = false;
+            await ReportAsync(reporter, CacheMutationProgressStep.ValidatingCandidate, CacheMutationOperation.Ensure,
+                iso3, "Validating the local Overture cache candidate.", ct).ConfigureAwait(false);
+            cacheIo = true;
+            if (!RunValidationOperation(temporary))
+            {
+                throw new InvalidDataException("The augmented Overture cache could not be verified.");
+            }
+
+            await _beforePublication(ct).ConfigureAwait(false);
+            cacheIo = false;
+            await ReportAsync(reporter, CacheMutationProgressStep.Publishing, CacheMutationOperation.Ensure,
+                iso3, "Publishing the local Overture candidate index.", ct).ConfigureAwait(false);
+            cacheIo = true;
+            ct.ThrowIfCancellationRequested();
+            if (!copy.SourceIsCurrent)
+            {
+                throw new IOException("The source cache changed during local preparation.");
+            }
+
+            _filePublisher.Publish(temporary, path);
+            published = true;
+            _candidatePreparation.RememberReady(path);
+            await _afterPublication(ct).ConfigureAwait(false);
+            ct.ThrowIfCancellationRequested();
+        }
+        catch (Exception ex) when (!published && cacheIo && ex is IOException or UnauthorizedAccessException or SqliteException)
+        {
+            if (ex is SqliteException sqlite)
+            {
+                AdministrativeCandidateIndex.RethrowIfCritical(sqlite);
+            }
+            ct.ThrowIfCancellationRequested();
+            _candidatePreparation.RememberFailure(path, stamp);
+        }
+        finally
+        {
+            try
+            {
+                TryDelete(temporary);
+                ownership?.Dispose();
+            }
+            finally
+            {
+                copy?.Dispose();
+            }
+        }
+
+        if (!HasData(iso3))
+        {
+            throw new InvalidOperationException("The Overture cache is no longer usable after local preparation.");
+        }
+
+        if (!published)
+        {
+            _logger.LogInformation("Using the valid Overture cache for {ISO3} without optional candidate acceleration.", iso3);
+        }
+
+        await ReportAsync(reporter, CacheMutationProgressStep.Completed, CacheMutationOperation.Ensure, iso3,
+            published ? "The local Overture candidate index is ready." : "Using the existing Overture cache without optional candidate acceleration.", ct).ConfigureAwait(false);
+        return published ? CacheMutationDisposition.Published : CacheMutationDisposition.AlreadyReady;
+    }
+
     private sealed record MutationFlight(
         CacheMutationOperation Operation,
         bool ProducesStrictMetadata,
-        Lazy<Task> Task);
+        Lazy<Task> Task)
+    {
+        public bool LocalPreparation { get; init; }
+        public CacheMutationDisposition Disposition { get; set; } = CacheMutationDisposition.Published;
+    }
 }
 
 internal sealed class OvertureDivisionCacheTestHooks
@@ -1140,5 +1267,7 @@ public enum OvertureDivisionEnsureResult
 {
     AlreadyReady,
     AwaitedExistingDownload,
-    StartedDownload
+    StartedDownload,
+    StartedLocalPreparation,
+    AwaitedLocalPreparation
 }

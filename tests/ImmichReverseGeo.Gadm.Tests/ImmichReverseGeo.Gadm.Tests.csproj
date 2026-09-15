@@ -20,4 +20,7 @@
     <ProjectReference Include="..\..\src\ImmichReverseGeo.Gadm\ImmichReverseGeo.Gadm.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Compile Include="../AdministrativeCandidates.Shared/LocalCandidatePreparationTests.cs" Link="AdministrativeCandidates/LocalCandidatePreparationTests.cs" />
+  </ItemGroup>
 </Project>

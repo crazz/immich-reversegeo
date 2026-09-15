@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Spatial;
 using ImmichReverseGeo.Core.Countries;
 using System.Collections.Concurrent;
 using System.Reflection;
@@ -18,7 +19,7 @@ namespace ImmichReverseGeo.Tests;
 #pragma warning disable BL0006 // Test-only renderer attaches the real Razor component without changing production seams.
 
 [TestClass]
-public class AdministrativeAreaResolverTerritoryTests
+public partial class AdministrativeAreaResolverTerritoryTests
 {
     private static readonly TimeSpan TestTimeout = TimeSpan.FromSeconds(15);
     [TestMethod]
@@ -47,12 +48,20 @@ public class AdministrativeAreaResolverTerritoryTests
                 Assert.AreEqual(territory.DisplayName, result.CountryName, territory.Label);
                 Assert.AreEqual(territory.Alpha3, result.Iso3, territory.Label);
                 Assert.AreEqual(territory.Alpha2, result.Alpha2, territory.Label);
-                Assert.IsNotNull(result.OvertureResult, territory.Label);
-                Assert.AreEqual("Overture State", result.OvertureResult.State, territory.Label);
-                Assert.AreEqual("Overture City", result.OvertureResult.City, territory.Label);
-                Assert.IsNotNull(result.GadmResult, territory.Label);
-                Assert.AreEqual("GADM State", result.GadmResult.State, territory.Label);
-                Assert.AreEqual("GADM City", result.GadmResult.City, territory.Label);
+                if (preferGadm)
+                {
+                    Assert.IsNull(result.OvertureResult, "A complete GADM result must avoid secondary work.");
+                    Assert.IsNotNull(result.GadmResult, territory.Label);
+                    Assert.AreEqual("GADM State", result.GadmResult.State, territory.Label);
+                    Assert.AreEqual("GADM City", result.GadmResult.City, territory.Label);
+                }
+                else
+                {
+                    Assert.IsNotNull(result.OvertureResult, territory.Label);
+                    Assert.AreEqual("Overture State", result.OvertureResult.State, territory.Label);
+                    Assert.AreEqual("Overture City", result.OvertureResult.City, territory.Label);
+                    Assert.IsNull(result.GadmResult, "A complete Overture result must avoid secondary work.");
+                }
                 Assert.AreEqual(preferGadm ? "GADM State" : "Overture State", result.GeoResult.State, territory.Label);
                 Assert.AreEqual(preferGadm ? "GADM City" : "Overture City", result.GeoResult.City, territory.Label);
                 Assert.AreEqual(territory.DisplayName, result.GeoResult.Country, territory.Label);
@@ -527,6 +536,7 @@ public class AdministrativeAreaResolverTerritoryTests
             INSERT INTO _meta VALUES ('downloadedAt', '2026-08-19T00:00:00Z');
             """;
         command.ExecuteNonQuery();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Overture, CancellationToken.None));
     }
 
     private static void CreateReadyGadmCache(string root, string iso3)
@@ -544,6 +554,7 @@ public class AdministrativeAreaResolverTerritoryTests
             INSERT INTO _meta VALUES ('downloadedAt', '2026-08-19T00:00:00Z');
             """;
         command.ExecuteNonQuery();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Gadm, CancellationToken.None));
     }
 
     private static string GetBundledArtifactPath()

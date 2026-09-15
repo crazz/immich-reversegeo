@@ -91,6 +91,16 @@ Standard supports hourly, every-few-minutes, every-few-hours, daily, weekly, and
 
 When enabled, GADM adds another country-level administrative boundary source for `state` and `city` matching.
 
+The two switches control processing independently:
+
+| Enable GADM | Prefer GADM | Processing order |
+|---|---|---|
+| Off | Either | Overture only |
+| On | Off | Overture first; GADM fills a missing city or state |
+| On | On | GADM first; Overture fills a missing city or state |
+
+When the first source supplies both fields, processing skips the second source and its cache preparation. Country detection still uses bundled Overture data. Airport matching runs afterwards. Lookup keeps the source details requested by its own options, even when the preferred source supplies both fields.
+
 GADM is limited to academic and other non-commercial use. Read the [data-source license guidance](./data-sources.md#optional-gadm-administrative-data) before enabling it, and validate a coordinate in Lookup before bulk processing.
 
 Recommended starting point:

@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Spatial;
 using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Core.WorkerJobs;
 using System.Runtime.ExceptionServices;
@@ -21,6 +22,11 @@ public class OvertureDivisionCacheServiceTests
         string final = Path.Combine(tempDir, "overture-divisions", "CHE.db");
         Directory.CreateDirectory(Path.GetDirectoryName(final)!);
         exporter.Export(final, "CH");
+        using (var connection = new SqliteConnection($"Data Source={final};Pooling=false"))
+        {
+            connection.Open();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Overture, CancellationToken.None));
+        }
         var reporter = new RecordingCacheMutationReporter();
         var service = new OvertureDivisionCacheService(
             NullLogger<OvertureDivisionCacheService>.Instance,
@@ -215,7 +221,7 @@ public class OvertureDivisionCacheServiceTests
     [TestCategory("Change51")]
     [DataRow("wrong-country", OvertureDivisionEnsureResult.StartedDownload)]
     [DataRow("missing-release", OvertureDivisionEnsureResult.StartedDownload)]
-    [DataRow("legacy-no-country", OvertureDivisionEnsureResult.AlreadyReady)]
+    [DataRow("legacy-no-country", OvertureDivisionEnsureResult.StartedLocalPreparation)]
     public async Task LegacyEnsureFacade_UsesSourceValidityWhilePreservingPreCountryMetadataCache(
         string row,
         OvertureDivisionEnsureResult expected)
@@ -261,7 +267,7 @@ public class OvertureDivisionCacheServiceTests
 
             Assert.AreEqual(expected, result, row);
             Assert.AreEqual(
-                expected == OvertureDivisionEnsureResult.AlreadyReady ? 0 : 1,
+                expected == OvertureDivisionEnsureResult.StartedDownload ? 1 : 0,
                 sourceCalls,
                 row + "-source-calls");
         }
@@ -1142,6 +1148,7 @@ public class OvertureDivisionCacheServiceTests
                 INSERT INTO _meta VALUES ('{_metadataKey}', '{_metadataValue}');
                 """;
             command.ExecuteNonQuery();
+            Assert.IsTrue(AdministrativeCandidateIndex.Build(connection, GeometrySource.Overture, CancellationToken.None));
         }
 
         public void Release() => _release.TrySetResult();
