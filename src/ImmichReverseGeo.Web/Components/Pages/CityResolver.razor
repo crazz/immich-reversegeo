@@ -5,7 +5,12 @@
 @inject CountryCodeService CountryCodes
 @inject CityResolverProfileCatalogService CityResolverCatalog
 
-<h2>City Resolver</h2>
+<header class="page-header">
+    <h2>City matching</h2>
+    <div class="btn-row">
+        <button @onclick="Save" class="btn btn-primary">Save City Resolver Settings</button>
+    </div>
+</header>
 <p class="page-desc">Choose how Immich ReverseGeo should prefer broader or tighter city-like divisions, with curated bundled defaults and optional country overrides.</p>
 
 <section class="settings-card">
@@ -223,10 +228,6 @@
         }
     }
 </section>
-
-<div class="btn-row">
-    <button @onclick="Save" class="btn btn-primary">Save City Resolver Settings</button>
-</div>
 
 @code {
     private static readonly IReadOnlyList<string> SupportedSubtypes =

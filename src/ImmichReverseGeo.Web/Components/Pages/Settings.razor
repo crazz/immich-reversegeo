@@ -3,8 +3,14 @@
 @inject ConfigService Config
 @inject ImmichDbRepository Db
 @inject ApplicationCompositionContext Composition
+@inject AppearanceApplier Appearance
 
-<h2>Settings</h2>
+<header class="page-header">
+    <h2>Settings</h2>
+    <div class="btn-row">
+        <button @onclick="Save" class="btn btn-primary">Save All Settings</button>
+    </div>
+</header>
 
 @if (_saved)
 {
@@ -18,6 +24,18 @@
 {
     <div class="alert alert-error">@_dbEnvironmentWarning</div>
 }
+
+<section class="settings-card">
+    <h3>Appearance</h3>
+    <div class="form-group">
+        <label>Appearance</label>
+        <select value="@_appearanceMode" @onchange="OnAppearanceChanged" class="form-control">
+            <option value="@AppearanceModes.Light">Light</option>
+            <option value="@AppearanceModes.Dark">Dark</option>
+            <option value="@AppearanceModes.Auto">Auto</option>
+        </select>
+    </div>
+</section>
 
 <section class="settings-card">
     <details class="settings-disclosure">
@@ -215,18 +233,6 @@
     </div>
 </section>
 
-<section class="settings-card">
-    <h3>City Resolver</h3>
-    <p class="section-intro">Country-specific city matching now has its own dedicated page so the main settings stay focused.</p>
-    <div class="btn-row">
-        <a class="btn btn-secondary" href="/city-resolver">Open City Resolver</a>
-    </div>
-</section>
-
-<div class="btn-row">
-    <button @onclick="Save" class="btn btn-primary">Save All Settings</button>
-</div>
-
 @code {
     private AppConfig _cfg = new();
     private string _dbHost = "", _dbName = "", _dbUser = "", _dbPassword = "";
@@ -236,10 +242,12 @@
     private string? _dbEnvironmentWarning;
     private bool? _connResult;
     private ScheduleEditorState _schedule = new();
+    private string _appearanceMode = AppearanceModes.Auto;
 
     protected override async Task OnInitializedAsync()
     {
         _cfg = await Config.GetConfigAsync();
+        _appearanceMode = AppearanceModes.NormalizeMode(_cfg.Appearance.Mode);
         var db = Config.GetDbSettings();
         _dbHost = db.Host;
         _dbPort = db.Port;
@@ -274,6 +282,26 @@
         {
             _saveError = ex.Message;
         }
+    }
+
+    private Task OnAppearanceChanged(ChangeEventArgs e)
+    {
+        string mode = e.Value?.ToString() ?? AppearanceModes.Auto;
+        return ChangeAppearanceAsync(mode, Config.SaveAppearanceModeAsync);
+    }
+
+    private async Task ChangeAppearanceAsync(string mode, Func<string, Task> persistAsync)
+    {
+        _saveError = null;
+        bool saved = await Appearance.TryChangeModeAsync(mode, persistAsync);
+        _appearanceMode = Appearance.SavedMode;
+        if (saved)
+        {
+            _cfg.Appearance.Mode = Appearance.SavedMode;
+            return;
+        }
+
+        _saveError = Appearance.LastChangeError ?? "Unable to save Appearance.";
     }
 
     private void OnScheduleTimeChanged(ChangeEventArgs e)

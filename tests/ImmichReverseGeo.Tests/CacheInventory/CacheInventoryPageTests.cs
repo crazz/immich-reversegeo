@@ -14,60 +14,6 @@ namespace ImmichReverseGeo.Tests.CacheInventory;
 public sealed class CacheInventoryPageTests
 {
     [TestMethod]
-    public async Task DataSummary_CountsOnlyAvailableInventoryEntries()
-    {
-        using var root = new TemporaryDirectory();
-        var inventory = new FakeInventory(Snapshot());
-        var page = new ImmichReverseGeo.Web.Components.Pages.Data();
-        SetInjected(page, "CacheInventory", inventory);
-        SetInjected(page, "Skipped", new SkippedAssetsRepository(
-            NullLogger<SkippedAssetsRepository>.Instance,
-            new StorageOptions(root.Path, root.Path)));
-        await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
-
-        await renderer.AttachAsync(page);
-        WebStatusRenderingTests.RenderSnapshot rendered = await renderer.ReadAsync();
-
-        StringAssert.Contains(rendered.Text, "1 Overture cache(s), 0 GADM cache(s)");
-        Assert.AreEqual(1, inventory.RefreshCalls);
-    }
-
-    [TestMethod]
-    public async Task DataSummary_RendersSafeIncompleteSourceWarning()
-    {
-        using var root = new TemporaryDirectory();
-        var inventory = new FakeInventory(new CacheInventorySnapshot(
-            3,
-            DateTimeOffset.UnixEpoch,
-            [
-                new CacheInventorySourceSnapshot(
-                    CacheMutationSource.Overture,
-                    CacheInventorySourceStatus.Truncated,
-                    CacheInventoryDiagnosticCode.EnumerationTruncated,
-                    []),
-                new CacheInventorySourceSnapshot(
-                    CacheMutationSource.Gadm,
-                    CacheInventorySourceStatus.Ready,
-                    null,
-                    [])
-            ]));
-        var page = new ImmichReverseGeo.Web.Components.Pages.Data();
-        SetInjected(page, "CacheInventory", inventory);
-        SetInjected(page, "Skipped", new SkippedAssetsRepository(
-            NullLogger<SkippedAssetsRepository>.Instance,
-            new StorageOptions(root.Path, root.Path)));
-        await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
-
-        await renderer.AttachAsync(page);
-        WebStatusRenderingTests.RenderSnapshot rendered = await renderer.ReadAsync();
-
-        StringAssert.Contains(rendered.Text,
-            "Overture cache inventory is incomplete: too many directory entries.");
-        Assert.IsFalse(rendered.Text.Contains(root.Path, StringComparison.Ordinal));
-        Assert.AreEqual(1, inventory.RefreshCalls);
-    }
-
-    [TestMethod]
     public async Task GeoBoundaries_RendersStatusMetadataAndNoAreaCount()
     {
         using var root = new TemporaryDirectory();

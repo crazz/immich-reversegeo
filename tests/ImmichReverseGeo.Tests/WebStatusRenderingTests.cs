@@ -49,12 +49,12 @@ public sealed class WebStatusRenderingTests
         var status = new ProcessAssetsWebStatus(DeploymentMode.Standard);
         var state = new ProcessingState();
         var dashboard = CreateDashboard(status, state);
-        var navigation = CreateNavigation(status);
+        var topBar = CreateTopBar(status);
         await using var dashboardRenderer = new ComponentRenderer();
-        await using var navigationRenderer = new ComponentRenderer();
+        await using var topBarRenderer = new ComponentRenderer();
         await dashboardRenderer.AttachAsync(dashboard);
-        await navigationRenderer.AttachAsync(navigation);
-        await AssertWorkerAsync("Idle", "idle", dashboardRenderer, navigationRenderer);
+        await topBarRenderer.AttachAsync(topBar);
+        await AssertWorkerAsync("Idle", "idle", dashboardRenderer, topBarRenderer);
         RenderSnapshot standard = await dashboardRenderer.ReadAsync();
         StringAssert.Contains(standard.Text, "Standard");
         StringAssert.Contains(standard.Text, "Available");
@@ -67,20 +67,20 @@ public sealed class WebStatusRenderingTests
         await PublishAndRenderAsync(
             () => sink.Admit(request, cancellationAlreadyWon: false),
             dashboardRenderer,
-            navigationRenderer);
-        await AssertWorkerAsync("Starting", "starting", dashboardRenderer, navigationRenderer);
+            topBarRenderer);
+        await AssertWorkerAsync("Starting", "starting", dashboardRenderer, topBarRenderer);
 
         await PublishAndRenderAsync(
             () => sink.ObserveTransport(request, WorkerRunTransportPhase.Accepted),
             dashboardRenderer,
-            navigationRenderer);
-        await AssertWorkerAsync("Running", "running", dashboardRenderer, navigationRenderer);
+            topBarRenderer);
+        await AssertWorkerAsync("Running", "running", dashboardRenderer, topBarRenderer);
 
         await PublishAndRenderAsync(
             () => sink.ObserveCancellation(request),
             dashboardRenderer,
-            navigationRenderer);
-        await AssertWorkerAsync("Cancelling", "cancelling", dashboardRenderer, navigationRenderer);
+            topBarRenderer);
+        await AssertWorkerAsync("Cancelling", "cancelling", dashboardRenderer, topBarRenderer);
 
         await PublishAndRenderAsync(
             () => sink.ObserveFinality(
@@ -88,8 +88,8 @@ public sealed class WebStatusRenderingTests
                 ProcessingRunOutcome.Failed,
                 WorkerRunFailureCategory.Crash),
             dashboardRenderer,
-            navigationRenderer);
-        await AssertWorkerAsync("Failed", "failed", dashboardRenderer, navigationRenderer);
+            topBarRenderer);
+        await AssertWorkerAsync("Failed", "failed", dashboardRenderer, topBarRenderer);
 
         RenderSnapshot failed = await dashboardRenderer.ReadAsync();
         Assert.IsTrue(failed.HasAttribute("role", "alert"));
@@ -129,16 +129,16 @@ public sealed class WebStatusRenderingTests
         long runningRevision = status.Current.Revision;
 
         var dashboard = CreateDashboard(status, new ProcessingState());
-        var navigation = CreateNavigation(status);
+        var topBar = CreateTopBar(status);
         await using var dashboardRenderer = new ComponentRenderer();
-        await using var navigationRenderer = new ComponentRenderer();
+        await using var topBarRenderer = new ComponentRenderer();
         await dashboardRenderer.AttachAsync(dashboard);
-        await navigationRenderer.AttachAsync(navigation);
+        await topBarRenderer.AttachAsync(topBar);
 
         StringAssert.Contains((await dashboardRenderer.ReadAsync()).Text, "Worker: Running");
-        StringAssert.Contains((await navigationRenderer.ReadAsync()).Text, "Worker: Running");
+        StringAssert.Contains((await topBarRenderer.ReadAsync()).Text, "Worker: Running");
         Assert.AreEqual(runningRevision, GetDashboardSnapshot(dashboard).Revision);
-        Assert.AreEqual(runningRevision, GetNavigationSnapshot(navigation).Revision);
+        Assert.AreEqual(runningRevision, GetTopBarSnapshot(topBar).Revision);
     }
 
     [TestMethod]
@@ -148,23 +148,23 @@ public sealed class WebStatusRenderingTests
         // uses the real singleton for process-lifetime reconnect behavior.
         var status = new RacingStatus();
         var dashboard = CreateDashboard(status, new ProcessingState());
-        var navigation = CreateNavigation(status);
+        var topBar = CreateTopBar(status);
         await using var dashboardRenderer = new ComponentRenderer();
-        await using var navigationRenderer = new ComponentRenderer();
+        await using var topBarRenderer = new ComponentRenderer();
 
         await dashboardRenderer.AttachAsync(dashboard);
-        await navigationRenderer.AttachAsync(navigation);
+        await topBarRenderer.AttachAsync(topBar);
         await dashboardRenderer.Dispatcher.InvokeAsync(() => { });
-        await navigationRenderer.Dispatcher.InvokeAsync(() => { });
+        await topBarRenderer.Dispatcher.InvokeAsync(() => { });
 
         StringAssert.Contains((await dashboardRenderer.ReadAsync()).Text, "Worker: Running");
-        StringAssert.Contains((await navigationRenderer.ReadAsync()).Text, "Worker: Running");
+        StringAssert.Contains((await topBarRenderer.ReadAsync()).Text, "Worker: Running");
         Assert.AreEqual(2L, GetDashboardSnapshot(dashboard).Revision);
-        Assert.AreEqual(2L, GetNavigationSnapshot(navigation).Revision);
+        Assert.AreEqual(2L, GetTopBarSnapshot(topBar).Revision);
         Assert.AreEqual(2, status.CurrentReadsAfterSubscription);
 
         dashboard.Dispose();
-        navigation.Dispose();
+        topBar.Dispose();
         Assert.AreEqual(2, status.Disposals);
     }
 
@@ -200,34 +200,48 @@ public sealed class WebStatusRenderingTests
     }
 
     internal static ImmichReverseGeo.Web.Components.Layout.NavMenu CreateNavigation(
+        IProcessAssetsWebStatus? status = null)
+    {
+        _ = status;
+        return new ImmichReverseGeo.Web.Components.Layout.NavMenu();
+    }
+
+    internal static ImmichReverseGeo.Web.Components.Layout.MainLayout CreateTopBar(
         IProcessAssetsWebStatus status)
     {
-        var component = new ImmichReverseGeo.Web.Components.Layout.NavMenu();
+        var component = new ImmichReverseGeo.Web.Components.Layout.MainLayout();
         SetInjected(component, "WorkerStatus", status);
+
+        string configDirectory = Path.Combine(Path.GetTempPath(), "mainlayout-config-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(configDirectory);
+        var config = new ConfigService(NullLogger<ConfigService>.Instance, configDirectory);
+        var applier = new AppearanceApplier(new NoopAppearanceDocument(), new NoopBrowserColorScheme());
+        SetInjected(component, "Config", config);
+        SetInjected(component, "Appearance", applier);
         return component;
     }
 
     private static async Task PublishAndRenderAsync(
         Action publish,
         ComponentRenderer dashboard,
-        ComponentRenderer navigation)
+        ComponentRenderer topBar)
     {
         Task dashboardRender = dashboard.NextRenderAsync();
-        Task navigationRender = navigation.NextRenderAsync();
+        Task topBarRender = topBar.NextRenderAsync();
         publish();
         await Task.WhenAll(
             dashboardRender.WaitAsync(Bound),
-            navigationRender.WaitAsync(Bound));
+            topBarRender.WaitAsync(Bound));
     }
 
     private static async Task AssertWorkerAsync(
         string label,
         string cssClass,
         ComponentRenderer dashboard,
-        ComponentRenderer navigation)
+        ComponentRenderer topBar)
     {
         RenderSnapshot detailed = await dashboard.ReadAsync();
-        RenderSnapshot compact = await navigation.ReadAsync();
+        RenderSnapshot compact = await topBar.ReadAsync();
         StringAssert.Contains(detailed.Text, $"Worker: {label}");
         StringAssert.Contains(compact.Text, $"Worker: {label}");
         Assert.IsTrue(detailed.HasCssClass("status-dot", cssClass));
@@ -241,8 +255,8 @@ public sealed class WebStatusRenderingTests
         return (ProcessAssetsWebStatusSnapshot)GetField(component, "_workerStatus")!;
     }
 
-    private static ProcessAssetsWebStatusSnapshot GetNavigationSnapshot(
-        ImmichReverseGeo.Web.Components.Layout.NavMenu component)
+    private static ProcessAssetsWebStatusSnapshot GetTopBarSnapshot(
+        ImmichReverseGeo.Web.Components.Layout.MainLayout component)
     {
         return (ProcessAssetsWebStatusSnapshot)GetField(component, "_workerStatus")!;
     }
@@ -432,8 +446,8 @@ public sealed class WebStatusRenderingTests
         private TaskCompletionSource? _nextRender;
         private int _componentId;
 
-        internal ComponentRenderer()
-            : base(CreateServices(), NullLoggerFactory.Instance)
+        internal ComponentRenderer(Action<IServiceCollection>? configureServices = null)
+            : base(CreateServices(configureServices), NullLoggerFactory.Instance)
         {
         }
 
@@ -443,10 +457,15 @@ public sealed class WebStatusRenderingTests
 
         internal Task AttachAsync(IComponent component)
         {
+            return AttachAsync(component, ParameterView.Empty);
+        }
+
+        internal Task AttachAsync(IComponent component, ParameterView parameters)
+        {
             return Dispatcher.InvokeAsync(async () =>
             {
                 _componentId = AssignRootComponentId(component);
-                await RenderRootComponentAsync(_componentId, ParameterView.Empty);
+                await RenderRootComponentAsync(_componentId, parameters);
             });
         }
 
@@ -473,9 +492,50 @@ public sealed class WebStatusRenderingTests
             });
         }
 
+        internal Task<RenderSnapshot> ReadFlattenedAsync()
+        {
+            return Dispatcher.InvokeAsync(() =>
+            {
+                var frames = new List<RenderTreeFrame>();
+                AppendSubtree(_componentId, frames);
+                return new RenderSnapshot(frames.ToArray());
+            });
+        }
+
+        private void AppendSubtree(int componentId, List<RenderTreeFrame> frames)
+        {
+            ArrayRange<RenderTreeFrame> tree = GetCurrentRenderTreeFrames(componentId);
+            for (var index = 0; index < tree.Count; index++)
+            {
+                RenderTreeFrame frame = tree.Array[index];
+                frames.Add(frame);
+                if (frame.FrameType == RenderTreeFrameType.Component)
+                {
+                    AppendSubtree(frame.ComponentId, frames);
+                }
+            }
+        }
+
         protected override void HandleException(Exception exception)
         {
             throw exception;
+        }
+
+        // InteractiveServer page components declare a render mode ComponentRenderer cannot
+        // host. Activating them as static render-tree children lets tests compose
+        // MainLayout @Body with real page types for reading-order assertions.
+        protected override IComponentRenderMode? GetComponentRenderMode(IComponent component)
+        {
+            return null;
+        }
+
+        protected override IComponent ResolveComponentForRenderMode(
+            Type componentType,
+            int? parentComponentId,
+            IComponentActivator componentActivator,
+            IComponentRenderMode renderMode)
+        {
+            return componentActivator.CreateInstance(componentType);
         }
 
         protected override Task UpdateDisplayAsync(in RenderBatch renderBatch)
@@ -497,10 +557,11 @@ public sealed class WebStatusRenderingTests
             return Task.CompletedTask;
         }
 
-        private static IServiceProvider CreateServices()
+        private static IServiceProvider CreateServices(Action<IServiceCollection>? configureServices)
         {
             var services = new ServiceCollection();
             services.AddSingleton<NavigationManager>(new TestNavigationManager());
+            configureServices?.Invoke(services);
             return services.BuildServiceProvider();
         }
     }
@@ -516,6 +577,11 @@ public sealed class WebStatusRenderingTests
         {
             Uri = ToAbsoluteUri(uri).ToString();
             NotifyLocationChanged(isInterceptedLink: false);
+        }
+
+        protected override void NavigateToCore(string uri, NavigationOptions options)
+        {
+            NavigateToCore(uri, options.ForceLoad);
         }
     }
 }

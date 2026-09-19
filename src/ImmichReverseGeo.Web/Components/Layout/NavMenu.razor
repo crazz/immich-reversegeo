@@ -1,89 +1,23 @@
 @* src/ImmichReverseGeo.Web/Components/Layout/NavMenu.razor *@
-@using System.Threading
-@using ImmichReverseGeo.Web.Services
-@inject IProcessAssetsWebStatus WorkerStatus
-@implements IDisposable
 
 <nav class="nav-menu">
-    <div class="nav-brand">
-        <div class="nav-brand-header">
-            <img class="nav-logo" src="brand/logo-mark.svg" alt="Immich ReverseGeo" />
-            <span class="nav-title">Immich ReverseGeo
-                <span class="status-dot @_workerStatus.WorkerCssClass" aria-hidden="true"></span>
-            </span>
-        </div>
-        <p class="nav-tagline">Reverse geocoding for your Immich library.</p>
-        <p class="nav-worker-status" role="status" aria-live="polite" aria-atomic="true">
-            Worker: @_workerStatus.WorkerLabel
-        </p>
+    <div class="nav-section">
+        <div class="nav-section-title">Work</div>
+        <NavLink href="/" Match="NavLinkMatch.All">Overview</NavLink>
+        <NavLink href="/lookup">Lookup</NavLink>
+        <NavLink href="/logs">Logs</NavLink>
     </div>
 
     <div class="nav-section">
-        <div class="nav-section-title">Navigation</div>
-        <NavLink href="/" Match="NavLinkMatch.All">Dashboard</NavLink>
-        <div class="nav-subsection">
-            <NavLink href="/data" Match="NavLinkMatch.Prefix">Data</NavLink>
-            <div class="nav-submenu">
-                <NavLink href="/data/reset-geo-data">Reset Immich Geo Data</NavLink>
-                <NavLink href="/data/geoboundaries">Administrative Areas</NavLink>
-            </div>
-        </div>
-        <NavLink href="/lookup">Lookup</NavLink>
-        <div class="nav-subsection">
-            <NavLink href="/settings">Settings</NavLink>
-            <div class="nav-submenu">
-                <NavLink href="/city-resolver">City Resolver</NavLink>
-            </div>
-        </div>
-        <NavLink href="/logs">Logs</NavLink>
+        <div class="nav-section-title">Configure</div>
+        <NavLink href="/settings">Settings</NavLink>
+        <NavLink href="/city-resolver">City matching</NavLink>
+    </div>
+
+    <div class="nav-section">
+        <div class="nav-section-title">Library</div>
+        <NavLink href="/data/geoboundaries">Area caches</NavLink>
+        <NavLink href="/data/reset-geo-data">Reset locations</NavLink>
+        <NavLink href="/data/skip-list">Skip list</NavLink>
     </div>
 </nav>
-
-@code {
-    private ProcessAssetsWebStatusSnapshot _workerStatus = null!;
-    private IDisposable? _subscription;
-    private int _disposed;
-
-    protected override void OnInitialized()
-    {
-        _subscription = WorkerStatus.Subscribe(OnWorkerStatusChanged);
-        ApplyWorkerStatus(WorkerStatus.Current);
-    }
-
-    private void OnWorkerStatusChanged(ProcessAssetsWebStatusSnapshot snapshot)
-    {
-        if (Volatile.Read(ref _disposed) != 0)
-        {
-            return;
-        }
-
-        _ = InvokeAsync(() =>
-        {
-            if (Volatile.Read(ref _disposed) == 0 && ApplyWorkerStatus(snapshot))
-            {
-                StateHasChanged();
-            }
-        });
-    }
-
-    private bool ApplyWorkerStatus(ProcessAssetsWebStatusSnapshot snapshot)
-    {
-        if (_workerStatus is not null && snapshot.Revision <= _workerStatus.Revision)
-        {
-            return false;
-        }
-
-        _workerStatus = snapshot;
-        return true;
-    }
-
-    public void Dispose()
-    {
-        if (Interlocked.Exchange(ref _disposed, 1) != 0)
-        {
-            return;
-        }
-
-        _subscription?.Dispose();
-    }
-}

@@ -5,7 +5,20 @@
 @inject CoordinateLookupPageControllerFactory ControllerFactory
 @inject ConfigService Config
 
-<h2>Coordinate Lookup</h2>
+<header class="page-header">
+    <h2>Lookup</h2>
+    <div class="btn-row">
+        <button class="btn btn-primary" @onclick="RunLookup" disabled="@(!PageState.FormControlsEnabled)">
+            @(PageState.IsActive ? "Looking up…" : "Lookup")
+        </button>
+        @if (PageState.HasAdmittedOperation)
+        {
+            <button class="btn btn-secondary" @onclick="CancelLookup" disabled="@(!PageState.CanCancel)">
+                @(PageState.Phase == CoordinateLookupPagePhase.CancelRequested ? "Cancelling…" : "Cancel")
+            </button>
+        }
+    </div>
+</header>
 <p class="page-desc">Enter coordinates to inspect how the Overture-backed resolver behaves.</p>
 
 <div class="lookup-form">
@@ -30,15 +43,6 @@
             <input id="lon" type="number" step="any" placeholder="8.5492"
                    @bind="_lon" @bind:event="oninput" class="coord-input" disabled="@(!PageState.FormControlsEnabled)" />
         </div>
-        <button class="btn btn-primary" @onclick="RunLookup" disabled="@(!PageState.FormControlsEnabled)">
-            @(PageState.IsActive ? "Looking up…" : "Lookup")
-        </button>
-        @if (PageState.HasAdmittedOperation)
-        {
-            <button class="btn btn-secondary" @onclick="CancelLookup" disabled="@(!PageState.CanCancel)">
-                @(PageState.Phase == CoordinateLookupPagePhase.CancelRequested ? "Cancelling…" : "Cancel")
-            </button>
-        }
     </div>
     <div class="lookup-options-row">
         <label class="checkbox-label">

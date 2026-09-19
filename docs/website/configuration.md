@@ -10,15 +10,19 @@ Immich ReverseGeo reads the optional `IMMICH_REVERSEGEO_MODE` environment variab
 
 The selected value is not saved in `settings.json`. Change it in your Compose environment and recreate the service with `docker compose up -d immich-reversegeo`; a plain container restart does not replace its environment. Standard runs the Web app, manual controls, and internal schedule. Web-only runs the same Web app and keeps manual processing available, but it does not start the internal scheduler. Existing schedule values remain visible and editable in Settings and become active again when you return to Standard mode. See [Deployment Modes](./deployment-modes.md) for the decision table and exact startup rules.
 
-The Dashboard reads this resolved startup mode and shows it as a read-only value. Reloading or reconnecting to the same running Web host shows its current worker status immediately. A host restart resolves the mode again and begins at `Idle`; worker status and retained failures are not saved to configuration or data storage.
+Overview reads this resolved startup mode and shows it as a read-only value. Reloading or reconnecting to the same running Web host shows its current worker status immediately. A host restart resolves the mode again and begins at `Idle`; worker status and retained failures are not saved to configuration or data storage.
 
 Run-once starts no Web server or internal scheduler. It loads the existing settings, makes one globally excluded processing attempt, writes ordinary progress logs, and exits. It does not retry. Use it as a disposable Compose job under cron or another external scheduler; see [Optional Run-once job](./installation.md#optional-run-once-job).
 
-Web-only does not add an automation endpoint. Dashboard processing, Lookup, and cache download/export/refresh use temporary workers in both Web modes. Cache inventory, coordinated deletion, and database maintenance remain Web control operations. An external scheduler can launch the separate Run-once service.
+Web-only does not add an automation endpoint. Overview processing, Lookup, and cache download/export/refresh use temporary workers in both Web modes. Cache inventory, coordinated deletion, and database maintenance remain Web control operations. An external scheduler can launch the separate Run-once service.
 
 <div class="section-intro">
-The Settings page is intentionally small. Most users only need to check the database connection, pick a schedule, and tune how aggressively processing should run. Country-specific city matching now lives on its own City Resolver page.
+The Settings page is intentionally small. Most users only need to check Appearance, the database connection, pick a schedule, and tune how aggressively processing should run. Country-specific city matching lives on its own City matching page in Configure.
 </div>
+
+## Appearance
+
+Settings includes Appearance with Light, Dark, and Auto. The choice is stored with the other operator settings and applies as soon as it saves. Light and Dark set the console palette directly. Auto follows the browser color scheme and updates live when that scheme changes. Appearance does not require Save All Settings.
 
 For manual runs, coordinate testing, and reset tools, see [Using the App](./using-the-app.md).
 
@@ -131,9 +135,9 @@ Examples include:
 
 This is a targeted fallback, not a global scan of every possible territory.
 
-## City Resolver
+## City matching {#city-resolver}
 
-The City Resolver page lets you adjust how the app picks a city name when Overture returns several possible matches.
+The City matching page lets you adjust how the app picks a city name when Overture returns several possible matches.
 
 It gives you:
 
@@ -150,7 +154,7 @@ This keeps the main Settings page simple while still giving you a way to fix cou
 
 ### What it actually changes
 
-The City Resolver only affects the `city` value.
+City matching only affects the `city` value.
 
 It is useful when the app finds the right general area, but chooses the wrong name for your taste. For example:
 
@@ -160,7 +164,7 @@ It is useful when the app finds the right general area, but chooses the wrong na
 
 ### What it does not change
 
-The City Resolver does not download better data or invent missing places.
+City matching does not download better data or invent missing places.
 
 It will not help if:
 
@@ -191,7 +195,7 @@ That is because:
 - the place type is usually more important than the number
 - `admin_level` alone does not solve every case
 
-So the controls on the City Resolver page stay simple:
+So the controls on the City matching page stay simple:
 
 - preferred place type order
 - broader or tighter matching
@@ -260,7 +264,7 @@ All modes should use the same intended config/data volumes. `/data` contains ski
   </div>
   <div class="card">
     <h3>Geo resets are a real change</h3>
-    <p>The Reset Immich Geo Data page under Data can reset reverse geo country, state, and city values for all assets, pasted asset GUIDs, or a selected location value before a rerun, so a database backup is strongly recommended first.</p>
+    <p>The Reset locations page under Library can reset reverse geo country, state, and city values for all assets, pasted asset GUIDs, or a selected location value before a rerun, so a database backup is strongly recommended first.</p>
   </div>
   <div class="card">
     <h3>Country downloads take space</h3>
@@ -278,7 +282,7 @@ All modes should use the same intended config/data volumes. `/data` contains ski
     [Reverse Geocoding Settings](https://docs.immich.app/administration/system-settings/#reverse-geocoding-settings).
 
 !!! warning "Clearing location data is a real metadata change"
-    The Reset Immich Geo Data page does not just reset this app's local state. It can clear existing immich reverse geo `city`, `state`, and `country` fields in the database.
+    The Reset locations page does not just reset this app's local state. It can clear existing immich reverse geo `city`, `state`, and `country` fields in the database.
 
     It does not touch any other immich metadata.
 

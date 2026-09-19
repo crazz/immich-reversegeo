@@ -12,7 +12,7 @@ Choose **Standard** for a Web interface with built-in scheduling, **Web-only** f
 | Web-only | `web-only` | Container port `8080` | None | Available | Temporary workers |
 | Run-once | `run-once` | None | None | No UI | One attempt in the invoking process, then exit |
 
-In both Web modes, Dashboard processing, coordinate Lookup, and cache download/export/refresh use temporary workers. Inventory reads, coordinated cache deletion, and database maintenance stay in the Web service. Web-only keeps your saved schedule visible and editable; it becomes active again when you return to Standard.
+In both Web modes, Overview processing, coordinate Lookup, and cache download/export/refresh use temporary workers. Inventory reads, coordinated cache deletion, and database maintenance stay in the Web service. Web-only keeps your saved schedule visible and editable; it becomes active again when you return to Standard.
 
 ## Select a mode
 
@@ -24,14 +24,14 @@ Mode is read once at startup. It is not saved in `settings.json` or editable thr
 docker compose up -d immich-reversegeo
 ```
 
-`docker compose restart` alone keeps the existing container environment. Check the Dashboard's read-only deployment-mode value after recreation.
+`docker compose restart` alone keeps the existing container environment. Check Overview's read-only deployment-mode value after recreation.
 
 ## Docker and Compose
 
 Use `ghcr.io/crazz/immich-reversegeo:latest` with its normal entrypoint. Follow the complete [Installation example](./installation.md#preferred-setup), which reuses your Immich Compose project, database `.env`, network, and distinct persistent volumes. Choose an image release that includes these modes; see the [changelog](./changelog.md).
 
 - **Standard:** leave the mode variable absent. Publish container port `8080` only to a local or trusted host address.
-- **Web-only:** keep the same service, port and mounts, and add `IMMICH_REVERSEGEO_MODE=web-only` to its environment. Manual processing, Lookup and heavy Data actions remain available.
+- **Web-only:** keep the same service, port and mounts, and add `IMMICH_REVERSEGEO_MODE=web-only` to its environment. Manual processing, Lookup and heavy Area caches actions remain available.
 - **Run-once:** use the dedicated `immich-reversegeo-run-once` service in the example. It sets `IMMICH_REVERSEGEO_MODE=run-once`, has no published ports, and uses `restart: "no"`. Its optional profile keeps an ordinary `docker compose up` from starting a processing attempt.
 
 Start one disposable attempt from the directory containing that Compose file:
@@ -44,7 +44,7 @@ Cron or another scheduler can invoke this same command. Run-once reads the saved
 
 ### Move from built-in to external scheduling
 
-1. Pause new scheduled work and let any active pass finish. Change the Web service to `web-only`, recreate it, and confirm that the Dashboard reports internal scheduling disabled.
+1. Pause new scheduled work and let any active pass finish. Change the Web service to `web-only`, recreate it, and confirm that Overview reports internal scheduling disabled.
 2. Save the desired processing and source settings through that Web UI. Keep the Run-once service on the same image, database environment and config/data volumes.
 3. Run the command above manually once. Inspect its exit code and console output before connecting it to automation; one attempt can process many batches. Its output belongs to that job container and does not populate the separate Web service's Logs page.
 4. Configure the external scheduler to run from the intended Compose directory, retain output and exit status, and decide its own retry/backoff policy. A Busy result means no pass ran, not successful processing.
@@ -53,7 +53,7 @@ Pause that scheduler before cache or database maintenance. Changing the Web mode
 
 ## Worker status and recovery
 
-**Contract-verified:** the Web Dashboard reports these processing-worker states:
+**Contract-verified:** Overview reports these processing-worker states:
 
 | State | Meaning |
 |---|---|
@@ -69,7 +69,7 @@ A startup failure, crash, communication failure, or forced stop ends that reques
 
 Before retrying:
 
-1. Read the Dashboard or action result and the related Logs entries.
+1. Read Overview or the action result and the related Logs entries.
 2. Check the reported cause, such as unavailable database access, storage permissions, or insufficient host memory.
 3. Verify that the previous worker has ended and cleanup has completed. `Failed` can remain visible after cleanup; a terminal result alone is not proof of completed cleanup.
 4. Correct the cause, inspect any saved effects, then explicitly start a new manual or external attempt. Keep other writers stopped during cache deletion or database resets.

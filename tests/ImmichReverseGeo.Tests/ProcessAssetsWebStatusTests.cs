@@ -262,7 +262,8 @@ public sealed class ProcessAssetsWebStatusTests
         foreach (Type page in new[]
         {
             typeof(ImmichReverseGeo.Web.Components.Pages.Lookup),
-            typeof(ImmichReverseGeo.Web.Components.Pages.Data)
+            typeof(ImmichReverseGeo.Web.Components.Pages.Data),
+            typeof(ImmichReverseGeo.Web.Components.Pages.SkipList)
         })
         {
             Assert.IsFalse(page

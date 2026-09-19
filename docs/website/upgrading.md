@@ -56,9 +56,9 @@ Use the complete image with its normal entrypoint. Recreating the service applie
 
 ## 4. Validate before resuming schedules
 
-1. Open the Dashboard. Confirm the deployment mode, scheduler availability and worker status.
+1. Open Overview. Confirm the deployment mode, scheduler availability and worker status.
 2. Check that Settings still shows the expected processing values and that database access works.
-3. Open Administrative Areas and check the expected caches and their storage status.
+3. Open Area caches and check the expected caches and their storage status.
 4. Use Lookup for familiar coordinates, including an airport or optional GADM case if those features matter to your library. Lookup previews results without writing asset metadata; it may prepare a country cache.
 5. When ready to allow writes, start a manual pass and inspect its result in Immich. Batch size limits each portion of work, not the entire pass. Use an isolated test library if you need a strictly bounded write trial.
 6. Check Logs and wait for the worker and cleanup to finish. Investigate a retained Failed status before retrying.

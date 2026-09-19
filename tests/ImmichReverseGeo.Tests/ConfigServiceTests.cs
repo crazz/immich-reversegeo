@@ -30,6 +30,7 @@ public class ConfigServiceTests
         Assert.AreEqual(50, cfg.Processing.BatchSize);
         Assert.IsTrue(cfg.Processing.UseAirportInfrastructure);
         Assert.AreEqual(0, cfg.Processing.CityResolver.CountryOverrides.Count);
+        Assert.AreEqual(AppearanceModes.Auto, cfg.Appearance.Mode);
     }
 
     [TestMethod]
@@ -105,6 +106,7 @@ public class ConfigServiceTests
         Assert.AreEqual(25, loaded.Processing.BatchSize);
         Assert.IsFalse(loaded.Processing.UseAirportInfrastructure);
         Assert.IsTrue(loaded.Processing.VerboseLogging);
+        Assert.AreEqual(AppearanceModes.Auto, loaded.Appearance.Mode);
     }
 
     [TestMethod]

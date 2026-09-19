@@ -45,6 +45,13 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
         logger.LogInformation("Config saved to {Path}", _configPath);
     }
 
+    public async Task SaveAppearanceModeAsync(string mode)
+    {
+        var config = await GetConfigAsync().ConfigureAwait(false);
+        config.Appearance.Mode = AppearanceModes.NormalizeMode(mode);
+        await SaveConfigAsync(config).ConfigureAwait(false);
+    }
+
     public DbSettings GetDbSettings() => new(
         Host: Environment.GetEnvironmentVariable("DB_HOST") ?? "database",
         Port: int.TryParse(Environment.GetEnvironmentVariable("DB_PORT"), out var p) ? p : 5432,
@@ -59,6 +66,12 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
         config.Processing.CityResolver ??= new CityResolverConfig();
         config.Processing.CityResolver.DefaultProfile ??= CityResolverProfile.CreateEmpty();
         config.Processing.CityResolver.CountryOverrides ??= new(StringComparer.OrdinalIgnoreCase);
+        config.Appearance ??= new AppearanceConfig();
+        if (string.IsNullOrWhiteSpace(config.Appearance.Mode))
+        {
+            config.Appearance.Mode = AppearanceModes.Auto;
+        }
+
         return config;
     }
 }

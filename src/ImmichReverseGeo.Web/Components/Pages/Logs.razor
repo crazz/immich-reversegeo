@@ -5,18 +5,19 @@
 @inject IJSRuntime JS
 @implements IDisposable
 
-<h2>Logs</h2>
-
-<div class="log-controls">
-    <label>Filter
-        <select @bind="_levelFilter">
-            <option value="">All</option>
-            <option value="[ERROR]">Errors only</option>
-            <option value="[WARN]">Warnings+</option>
-        </select>
-    </label>
-    <button @onclick="DownloadLog" class="btn btn-secondary">↓ Download</button>
-</div>
+<header class="page-header">
+    <h2>Logs</h2>
+    <div class="btn-row log-controls">
+        <label>Filter
+            <select @bind="_levelFilter">
+                <option value="">All</option>
+                <option value="[ERROR]">Errors only</option>
+                <option value="[WARN]">Warnings+</option>
+            </select>
+        </label>
+        <button @onclick="DownloadLog" class="btn btn-secondary">↓ Download</button>
+    </div>
+</header>
 
 <div class="log-full">
     @foreach (var line in FilteredLog)

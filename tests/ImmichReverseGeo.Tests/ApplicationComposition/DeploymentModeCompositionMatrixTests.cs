@@ -424,21 +424,22 @@ public sealed class DeploymentModeCompositionMatrixTests
             sentinelExternal: true))
         {
             CreateMinimalInventoryDatabase(webOnly.Root, "CHE", "web-only-release");
-            var page = new ImmichReverseGeo.Web.Components.Pages.Data();
-            SetInjected(page, "CacheInventory",
-                webOnly.Provider.GetRequiredService<ICacheInventory>());
+            var page = new ImmichReverseGeo.Web.Components.Pages.SkipList();
             SetInjected(page, "Skipped",
                 webOnly.Provider.GetRequiredService<SkippedAssetsRepository>());
+            SetInjected(page, "Maintenance",
+                webOnly.Provider.GetRequiredService<IDatabaseMaintenanceController>());
             await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
 
             await renderer.AttachAsync(page);
             WebStatusRenderingTests.RenderSnapshot rendered = await renderer.ReadAsync();
 
-            StringAssert.Contains(rendered.Text, "1 Overture cache(s), 0 GADM cache(s)");
+            StringAssert.Contains(rendered.Text, "asset(s) permanently skipped.");
             Assert.AreEqual(0, webOnly.ForbiddenResolutions,
-                "web-only-data-does-not-resolve-heavy-cache-services");
+                "web-only-skip-list-does-not-resolve-heavy-cache-services");
             Assert.AreEqual(0, webOnly.Children.Count,
-                "web-only-data-does-not-launch-processing-child");
+                "web-only-skip-list-does-not-launch-processing-child");
+            await page.DisposeAsync();
         }
 
         await using (var standard = WebFixture.Create(

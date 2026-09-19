@@ -1,6 +1,7 @@
 using System.Reflection;
 using ImmichReverseGeo.Core.ApplicationRole;
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Tests;
 using ImmichReverseGeo.Web.Composition;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.AspNetCore.Components;
@@ -222,6 +223,10 @@ public sealed class WebOnlySettingsTests
                 SetInjected(component, "Config", configService);
                 SetInjected(component, "Db", repository);
                 SetInjected(component, "Composition", provider.GetRequiredService<ApplicationCompositionContext>());
+                SetInjected(
+                    component,
+                    "Appearance",
+                    new AppearanceApplier(new NoopAppearanceDocument(), new NoopBrowserColorScheme()));
                 rendererServices = new ServiceCollection().BuildServiceProvider();
                 renderer = new SettingsRenderer(rendererServices, component);
                 await renderer.AttachAsync(component);

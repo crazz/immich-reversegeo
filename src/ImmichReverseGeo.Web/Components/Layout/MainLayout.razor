@@ -1,7 +1,25 @@
 @* src/ImmichReverseGeo.Web/Components/Layout/MainLayout.razor *@
 @inherits LayoutComponentBase
+@using System.Threading
+@using ImmichReverseGeo.Web.Services
+@inject IProcessAssetsWebStatus WorkerStatus
+@inject ConfigService Config
+@inject AppearanceApplier Appearance
+@implements IAsyncDisposable
+@implements IDisposable
 
 <div class="page">
+    <header class="top-bar">
+        <div class="top-bar-brand">
+            <img class="top-bar-logo" src="brand/logo-mark.svg" alt="" />
+            <span class="top-bar-title">Immich ReverseGeo</span>
+        </div>
+        <p class="top-bar-worker-status" role="status" aria-live="polite" aria-atomic="true">
+            <span class="status-dot @_workerStatus.WorkerCssClass" aria-hidden="true"></span>
+            Worker: @_workerStatus.WorkerLabel
+        </p>
+    </header>
+
     <aside class="sidebar-shell">
         <NavMenu />
     </aside>
@@ -24,3 +42,71 @@
         </footer>
     </main>
 </div>
+
+@code {
+    private ProcessAssetsWebStatusSnapshot _workerStatus = null!;
+    private IDisposable? _subscription;
+    private int _disposed;
+    private bool _appearanceInitialized;
+
+    protected override void OnInitialized()
+    {
+        _subscription = WorkerStatus.Subscribe(OnWorkerStatusChanged);
+        ApplyWorkerStatus(WorkerStatus.Current);
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (!firstRender || _appearanceInitialized)
+        {
+            return;
+        }
+
+        _appearanceInitialized = true;
+        var config = await Config.GetConfigAsync();
+        await Appearance.InitializeAsync(config.Appearance.Mode);
+    }
+
+    private void OnWorkerStatusChanged(ProcessAssetsWebStatusSnapshot snapshot)
+    {
+        if (Volatile.Read(ref _disposed) != 0)
+        {
+            return;
+        }
+
+        _ = InvokeAsync(() =>
+        {
+            if (Volatile.Read(ref _disposed) == 0 && ApplyWorkerStatus(snapshot))
+            {
+                StateHasChanged();
+            }
+        });
+    }
+
+    private bool ApplyWorkerStatus(ProcessAssetsWebStatusSnapshot snapshot)
+    {
+        if (_workerStatus is not null && snapshot.Revision <= _workerStatus.Revision)
+        {
+            return false;
+        }
+
+        _workerStatus = snapshot;
+        return true;
+    }
+
+    public void Dispose()
+    {
+        if (Interlocked.Exchange(ref _disposed, 1) != 0)
+        {
+            return;
+        }
+
+        _subscription?.Dispose();
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        Dispose();
+        await Appearance.DisposeAsync();
+    }
+}

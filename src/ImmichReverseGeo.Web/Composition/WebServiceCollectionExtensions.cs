@@ -58,6 +58,10 @@ internal static class WebServiceCollectionExtensions
         services.AddSharedComposition(context);
         services.AddSingleton(context);
 
+        services.AddScoped<IAppearanceDocument, JsAppearanceDocument>();
+        services.AddScoped<IBrowserColorScheme, JsBrowserColorScheme>();
+        services.AddScoped<AppearanceApplier>();
+
         if (ReferenceEquals(context.DeploymentMode, DeploymentMode.Standard)
             || ReferenceEquals(context.DeploymentMode, DeploymentMode.WebOnly))
         {

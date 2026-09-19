@@ -93,12 +93,12 @@ public sealed class DatabaseMaintenancePageRenderingTests
         Assert.AreEqual(17L, GetField<long>(resetPage, "_generation"));
         Assert.IsTrue(GetField<bool>(resetPage, "_operationActive"));
 
-        var dataPage = new StaticDataPage();
-        SetField(dataPage, "_skipOperationActive", true);
-        SetField(dataPage, "_generation", 23L);
-        await InvokeTaskAsync(dataPage, "ReloadSkippedCountAsync");
-        Assert.AreEqual(23L, GetField<long>(dataPage, "_generation"));
-        Assert.IsTrue(GetField<bool>(dataPage, "_skipOperationActive"));
+        var skipListPage = new StaticSkipListPage();
+        SetField(skipListPage, "_skipOperationActive", true);
+        SetField(skipListPage, "_generation", 23L);
+        await InvokeTaskAsync(skipListPage, "ReloadSkippedCountAsync");
+        Assert.AreEqual(23L, GetField<long>(skipListPage, "_generation"));
+        Assert.IsTrue(GetField<bool>(skipListPage, "_skipOperationActive"));
     }
 
     [TestMethod]
@@ -222,22 +222,22 @@ public sealed class DatabaseMaintenancePageRenderingTests
             ownerAtCountRead = coordinator.Snapshot.ActiveOwner;
             throw new IOException("controlled skipped count reload failure");
         });
-        var dataPage = new StaticDataPage();
-        SetInjected(dataPage, "Maintenance", clearController);
-        SetInjected(dataPage, "Skipped", countReader);
-        SetField(dataPage, "_skippedCount", 5L);
+        var skipListPage = new StaticSkipListPage();
+        SetInjected(skipListPage, "Maintenance", clearController);
+        SetInjected(skipListPage, "Skipped", countReader);
+        SetField(skipListPage, "_skippedCount", 5L);
         await using var dataRenderer = new WebStatusRenderingTests.ComponentRenderer();
-        await dataRenderer.AttachAsync(dataPage);
+        await dataRenderer.AttachAsync(skipListPage);
 
         await InvokeButtonAsync(dataRenderer, "Clear Skip List");
 
         DatabaseMaintenanceResult? clearResult = GetField<DatabaseMaintenanceResult?>(
-            dataPage,
+            skipListPage,
             "_skipClearResult");
         Assert.IsNotNull(clearResult);
         Assert.AreEqual(DatabaseMaintenanceDisposition.Complete, clearResult.Disposition);
-        Assert.AreEqual(5L, GetField<long>(dataPage, "_skippedCount"));
-        Assert.IsNotNull(GetField<string?>(dataPage, "_skipReloadError"));
+        Assert.AreEqual(5L, GetField<long>(skipListPage, "_skippedCount"));
+        Assert.IsNotNull(GetField<string?>(skipListPage, "_skipReloadError"));
         Assert.AreEqual(1, countReader.CallCount);
         Assert.IsTrue(countReadReached);
         Assert.IsNull(ownerAtCountRead);
@@ -279,18 +279,18 @@ public sealed class DatabaseMaintenancePageRenderingTests
             Assert.IsNull(coordinator.Snapshot.ActiveOwner);
             return 0;
         });
-        var dataPage = new StaticDataPage();
-        SetInjected(dataPage, "Maintenance", controller);
-        SetInjected(dataPage, "Skipped", countReader);
-        SetField(dataPage, "_skippedCount", 5L);
+        var skipListPage = new StaticSkipListPage();
+        SetInjected(skipListPage, "Maintenance", controller);
+        SetInjected(skipListPage, "Skipped", countReader);
+        SetField(skipListPage, "_skippedCount", 5L);
         await using var dataRenderer = new WebStatusRenderingTests.ComponentRenderer();
-        await dataRenderer.AttachAsync(dataPage);
+        await dataRenderer.AttachAsync(skipListPage);
 
         await InvokeButtonAsync(dataRenderer, "Clear Skip List");
 
         Assert.AreEqual(1, countReader.CallCount);
-        Assert.AreEqual(0L, GetField<long>(dataPage, "_skippedCount"));
-        Assert.IsNull(GetField<string?>(dataPage, "_skipReloadError"));
+        Assert.AreEqual(0L, GetField<long>(skipListPage, "_skippedCount"));
+        Assert.IsNull(GetField<string?>(skipListPage, "_skipReloadError"));
     }
 
     [TestMethod]
@@ -443,12 +443,12 @@ public sealed class DatabaseMaintenancePageRenderingTests
             new NoOpImmichStore(),
             skipped,
             NullLogger<DatabaseMaintenanceController>.Instance);
-        var dataPage = new StaticDataPage();
-        SetInjected(dataPage, "Maintenance", dataController);
-        SetInjected(dataPage, "Skipped", new RecordingCountReader(static () => 0));
-        SetField(dataPage, "_skippedCount", 2L);
+        var skipListPage = new StaticSkipListPage();
+        SetInjected(skipListPage, "Maintenance", dataController);
+        SetInjected(skipListPage, "Skipped", new RecordingCountReader(static () => 0));
+        SetField(skipListPage, "_skippedCount", 2L);
         await using var dataRenderer = new WebStatusRenderingTests.ComponentRenderer();
-        await dataRenderer.AttachAsync(dataPage);
+        await dataRenderer.AttachAsync(skipListPage);
         Task? clearRun = null;
         Exception? clearFailure = null;
         try
@@ -658,8 +658,8 @@ public sealed class DatabaseMaintenancePageRenderingTests
         protected override Task OnInitializedAsync() => Task.CompletedTask;
     }
 
-    private sealed class StaticDataPage
-        : ImmichReverseGeo.Web.Components.Pages.Data
+    private sealed class StaticSkipListPage
+        : ImmichReverseGeo.Web.Components.Pages.SkipList
     {
         protected override Task OnInitializedAsync() => Task.CompletedTask;
     }

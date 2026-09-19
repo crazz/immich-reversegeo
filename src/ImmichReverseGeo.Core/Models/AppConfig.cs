@@ -8,6 +8,40 @@ public class AppConfig
 {
     public ScheduleConfig Schedule { get; set; } = new();
     public ProcessingConfig Processing { get; set; } = new();
+    public AppearanceConfig Appearance { get; set; } = new();
+}
+
+public class AppearanceConfig
+{
+    public string Mode { get; set; } = AppearanceModes.Auto;
+}
+
+public static class AppearanceModes
+{
+    public const string Light = "light";
+    public const string Dark = "dark";
+    public const string Auto = "auto";
+
+    public static string NormalizeMode(string? mode)
+    {
+        if (string.Equals(mode, Light, StringComparison.OrdinalIgnoreCase))
+        {
+            return Light;
+        }
+
+        if (string.Equals(mode, Dark, StringComparison.OrdinalIgnoreCase))
+        {
+            return Dark;
+        }
+
+        return Auto;
+    }
+}
+
+public static class AppearanceThemes
+{
+    public const string Light = "light";
+    public const string Dark = "dark";
 }
 
 public class ScheduleConfig

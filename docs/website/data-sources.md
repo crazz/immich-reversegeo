@@ -245,7 +245,7 @@ In Standard and Web-only, heavy source work runs in temporary workers while the 
 - larger countries can use hundreds of megabytes of local storage per cached country
 - Lookup runs these source operations in a temporary isolated worker in both Standard and Web-only mode; it does not load the source services in the interactive page or write Immich asset metadata
 
-On the Administrative Areas page, `Re-download` uses a temporary worker to build and validate a complete replacement before publishing it. The current valid cache stays available if download, export, validation, or publication preparation fails, or if you cancel before publication. If cancellation arrives after publication, the new valid cache can remain visible when the page reloads the actual cache status, even though that attempt is reported as cancelled.
+On the Area caches page, `Re-download` uses a temporary worker to build and validate a complete replacement before publishing it. The current valid cache stays available if download, export, validation, or publication preparation fails, or if you cancel before publication. If cancellation arrives after publication, the new valid cache can remain visible when the page reloads the actual cache status, even though that attempt is reported as cancelled.
 
 Processing, Lookup, and cache refreshes share one heavy-work slot in each running Immich ReverseGeo Web process. A `Busy` refresh is not queued; retry after the active operation and its cleanup finish. If the worker is `Unavailable`, resolve the displayed availability problem before retrying.
 

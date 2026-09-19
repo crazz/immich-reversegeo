@@ -570,19 +570,19 @@ public sealed class ChildBackendLifecycleTests
         Assert.AreEqual(lastErrorSecret, fixture.State.LastError);
 
         var dashboard = WebStatusRenderingTests.CreateDashboard(fixture.Status, fixture.State);
-        var navigation = WebStatusRenderingTests.CreateNavigation(fixture.Status);
+        var topBar = WebStatusRenderingTests.CreateTopBar(fixture.Status);
         await using var dashboardRenderer = new WebStatusRenderingTests.ComponentRenderer();
-        await using var navigationRenderer = new WebStatusRenderingTests.ComponentRenderer();
+        await using var topBarRenderer = new WebStatusRenderingTests.ComponentRenderer();
         await dashboardRenderer.AttachAsync(dashboard);
-        await navigationRenderer.AttachAsync(navigation);
+        await topBarRenderer.AttachAsync(topBar);
         string statusCard = (await dashboardRenderer.ReadAsync())
             .ElementTextByCssClass("worker-status-card");
-        string navStatus = (await navigationRenderer.ReadAsync())
-            .ElementTextByCssClass("nav-worker-status");
+        string headerStatus = (await topBarRenderer.ReadAsync())
+            .ElementTextByCssClass("top-bar-worker-status");
 
         StringAssert.Contains(statusCard, "Worker: Failed");
         StringAssert.Contains(statusCard, status.FailureSummary);
-        StringAssert.Contains(navStatus, "Worker: Failed");
+        StringAssert.Contains(headerStatus, "Worker: Failed");
         foreach (string forbidden in new[]
         {
             stderrSecret,
@@ -592,7 +592,7 @@ public sealed class ChildBackendLifecycleTests
         })
         {
             Assert.IsFalse(statusCard.Contains(forbidden, StringComparison.Ordinal));
-            Assert.IsFalse(navStatus.Contains(forbidden, StringComparison.Ordinal));
+            Assert.IsFalse(headerStatus.Contains(forbidden, StringComparison.Ordinal));
             Assert.IsFalse(status.FailureSummary.Contains(forbidden, StringComparison.Ordinal));
         }
     }

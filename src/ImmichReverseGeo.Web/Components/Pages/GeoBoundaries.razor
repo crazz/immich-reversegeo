@@ -6,7 +6,9 @@
 @inject CacheMutationPageControllerFactory CacheMutations
 @inject CacheInventoryDeletionPageControllerFactory CacheDeletions
 
-<h2>Administrative Areas</h2>
+<header class="page-header">
+    <h2>Area caches</h2>
+</header>
 
 @if (_deletionController?.State.Confirmation is { } confirmation)
 {

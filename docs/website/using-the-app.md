@@ -10,22 +10,24 @@ For install-time settings such as database values, schedules, and processing lim
 For a source-by-source explanation of the geographic data behind the app, see [Data Sources](./data-sources.md).
 These pages are available in Standard and Web-only. For external scheduling without a UI, see [Deployment Modes](./deployment-modes.md).
 
-## Dashboard
+The Web console groups destinations as Work (Overview, Lookup, Logs), Configure (Settings, City matching), and Library (Area caches, Reset locations, Skip list). Choose Appearance on Settings (Light, Dark, or Auto) to match the console palette; the choice applies immediately and is saved with your other settings.
 
-Use `Run Now` at the top of the Dashboard to start a manual processing pass immediately.
+## Overview
+
+Use `Run Now` at the top of Overview to start a manual processing pass immediately.
 
 The four counters come first, followed by Service Status and the full-width Recent Activity log. Progress appears while a run is active. On smaller screens, navigation stays above the page and controls wrap onto additional rows.
 
-![Dashboard with synthetic processing data](./assets/images/dashboard.jpg)
+![Overview with synthetic processing data](./assets/images/dashboard.jpg)
 
 - it works even if automatic scheduling is turned off
 - it uses your current Settings values for batch size, delay, parallelism, and airport matching
-- the Dashboard shows live progress, recent activity, and the last completed run
+- Overview shows live progress, recent activity, and the last completed run
 - `Stop` requests cancellation of the current run; `Stopping…` remains visible while it finishes and releases resources
 
 Wait for the run to finish before starting another pass. Work that does not observe cancellation, such as a synchronous native operation, can take longer to stop; after a bounded grace period the app can force-stop the worker's process tree. Stopping does not undo location updates already written.
 
-Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. The Dashboard and Logs continue to show the run while that worker is active.
+Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. Overview and Logs continue to show the run while that worker is active.
 
 During busy runs, progress and activity displays refresh up to ten times per second. Counters can jump over intermediate values. Completion, cancellation, and failure updates appear as soon as the worker result and cleanup allow. This display pacing also applies to Lookup and cache refreshes; it does not discard worker logs or change which assets are processed.
 
@@ -35,7 +37,7 @@ The Service Status card stays visible while database statistics load or when the
 - **Internal scheduling:** whether this Web host permits the built-in scheduler; your saved schedule still controls whether Standard actually runs it
 - **ProcessAssets worker:** `Idle`, `Starting`, `Running`, `Cancelling`, or `Failed`
 
-Web-only disables the built-in scheduler without changing your saved schedule, and manual Dashboard runs remain available. Run-once starts no Web UI, so it has no Service Status card.
+Web-only disables the built-in scheduler without changing your saved schedule, and manual Overview runs remain available. Run-once starts no Web UI, so it has no Service Status card.
 
 `Failed` remains visible so an unexpected worker failure does not immediately look idle. Open Logs for the recorded processing details. The next worker start clears the retained failure; restarting the Web host creates a fresh `Idle` status.
 
@@ -63,9 +65,9 @@ Lookup is always a preview. It may download or read geographic caches, but it do
 
 Optional GADM data is restricted to academic and other non-commercial use; check the [license guidance](./data-sources.md#optional-gadm-administrative-data) before selecting it. Compare the Lookup result before enabling it for bulk processing.
 
-## Data tools
+## Library tools {#data-tools}
 
-The Data area contains maintenance tools that change downloaded caches or Immich reverse geo values.
+Library destinations cover skip-list maintenance, downloaded area caches, and Immich reverse geo resets. Opening `/data` in the console redirects to Skip list at `/data/skip-list`. Area caches and Reset locations keep their own paths.
 
 | Page or action | What it does |
 |---|---|
@@ -80,9 +82,13 @@ The Data area contains maintenance tools that change downloaded caches or Immich
 | `Re-download GADM cache` | Replaces one downloaded GADM country cache with a fresh copy. |
 | `Delete All GADM Caches` | Removes every downloaded GADM cache so they will be fetched again on demand later. |
 
-### Administrative cache inventory
+### Skip list
 
-Open **Administrative Areas** to inspect downloaded Overture and GADM caches. The table shows each discovered country cache, its current storage status, version or release when available, file size, download time, and last-modified time. It does not scan administrative-area rows to calculate an area count, so opening the page does not load the geographic data.
+Open **Skip list** to see how many assets are permanently skipped and to run `Clear Skip List`. Busy, result, and reload-error states stay on that page. Bookmarks to `/data` land here; there is no separate Data hub landing page.
+
+### Area cache inventory {#administrative-cache-inventory}
+
+Open **Area caches** to inspect downloaded Overture and GADM caches. The table shows each discovered country cache, its current storage status, version or release when available, file size, download time, and last-modified time. It does not scan administrative-area rows to calculate an area count, so opening the page does not load the geographic data.
 
 On narrow screens, scroll the table horizontally to reach every column and the row actions.
 
@@ -114,9 +120,9 @@ If download, export, validation, or publication preparation fails, the existing 
 
 ### Resetting Immich location data
 
-The **Reset Immich Geo Data** page only clears `city`, `state`, and `country` in Immich's location records. It does not delete assets, change other metadata, or modify downloaded geographic caches. Make a database backup before resetting a large library.
+The **Reset locations** page only clears `city`, `state`, and `country` in Immich's location records. It does not delete assets, change other metadata, or modify downloaded geographic caches. Make a database backup before resetting a large library.
 
-**Reset All Data** keeps its confirmation step and also clears the complete skip list. **Reset Selected Items** accepts asset GUIDs separated by spaces, commas, semicolons, or lines; duplicates are handled once, malformed values are reported, and at least one valid GUID is required. Its skip-list cleanup includes every valid requested ID, even when an asset already had no location value to clear. **Reset Matching City**, **Reset Matching State**, and **Reset Matching Country** use the exact selected value, consider non-deleted assets, and clean skipped tracking only for records actually cleared. Reset All Data and Reset Selected Items keep their broader existing asset scope. Matching resets need no extra confirmation. The Data-page **Clear Skip List** changes only skipped-asset tracking and also needs no confirmation.
+**Reset All Data** keeps its confirmation step and also clears the complete skip list. **Reset Selected Items** accepts asset GUIDs separated by spaces, commas, semicolons, or lines; duplicates are handled once, malformed values are reported, and at least one valid GUID is required. Its skip-list cleanup includes every valid requested ID, even when an asset already had no location value to clear. **Reset Matching City**, **Reset Matching State**, and **Reset Matching Country** use the exact selected value, consider non-deleted assets, and clean skipped tracking only for records actually cleared. Reset All Data and Reset Selected Items keep their broader existing asset scope. Matching resets need no extra confirmation. Skip list **Clear Skip List** changes only skipped-asset tracking and also needs no confirmation.
 
 Reset work shares the same local slot as processing, Lookup, cache refresh, and cache deletion. A busy request fails immediately and is not queued. Once a reset starts, its controls stay disabled until the database work and result are final; there is no Cancel action. The page then reloads its location choices or skipped count from storage.
 
@@ -126,9 +132,13 @@ This coordination applies within one Standard or Web-only Web process. For stric
 
 ## Logs
 
-Use the Logs page when you want to inspect recent activity outside the Dashboard summary.
+Use the Logs page when you want to inspect recent activity outside the Overview summary.
 
 - filter the in-app log view to all messages, warnings, or errors
 - download the current filtered view as `immich-reversegeo.log`
 
 Long log messages wrap to fit the screen. Wrapping does not change the text or order in the downloaded log.
+
+## City matching
+
+Open **City matching** from Configure when you need bundled city defaults, a global matching profile, or per-country overrides. Settings no longer nests a launch card for that page. See [City matching](./configuration.md#city-resolver) for the matching controls.

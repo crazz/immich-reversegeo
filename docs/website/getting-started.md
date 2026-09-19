@@ -102,11 +102,11 @@ Use the Lookup page to confirm the basics before a full run:
 
 Check Settings before allowing writes: confirm the database, schedule, batch size, parallelism and source choices. Keep automatic scheduling disabled while validating the first results, or start in Web-only when you need the built-in scheduler absent from startup. Optional GADM data is limited to academic and other non-commercial use; read [its license guidance](./data-sources.md#optional-gadm-administrative-data) before enabling it.
 
-Use `Run Now` from the Dashboard when you are ready to update eligible assets. A conservative batch size and parallelism reduce the amount of concurrent work, but **batch size does not cap the entire pass**. A pass can continue through all eligible assets. For a strictly bounded write trial, use an isolated test library. `Stop` requests cancellation; it does not undo updates already saved.
+Use `Run Now` from Overview when you are ready to update eligible assets. A conservative batch size and parallelism reduce the amount of concurrent work, but **batch size does not cap the entire pass**. A pass can continue through all eligible assets. For a strictly bounded write trial, use an isolated test library. `Stop` requests cancellation; it does not undo updates already saved.
 
 Inspect the resulting location names in Immich and the completion details in Logs. Wait for the active worker and cleanup to finish before starting another operation. The [architecture overview](./architecture.md) explains why a temporary worker appears during this work.
 
-To replace existing location names, first validate the desired result in Lookup, then use the appropriate [Reset Immich Geo Data action](./using-the-app.md#resetting-immich-location-data) after taking a backup. Resetting selected asset GUIDs clears only those records, but it does not restrict the next processing pass to those GUIDs; other eligible assets can also be processed.
+To replace existing location names, first validate the desired result in Lookup, then use the appropriate [Reset locations action](./using-the-app.md#resetting-immich-location-data) after taking a backup. Resetting selected asset GUIDs clears only those records, but it does not restrict the next processing pass to those GUIDs; other eligible assets can also be processed.
 
 ## 6. Choose ongoing scheduling
 

@@ -9,7 +9,7 @@
 @implements IDisposable
 
 <header class="page-header">
-    <h2>Dashboard</h2>
+    <h2>Overview</h2>
     <div class="btn-row">
         <button @onclick="RunNow" disabled="@(!_circuitReady || _loadingStats || State.IsRunning || _runPending || _dbError is not null)" class="btn btn-primary">
             @(!_circuitReady ? "Starting UI…" : _loadingStats ? "Checking DB…" : State.IsRunning ? "Running…" : _runPending ? "Starting…" : "Run Now")
