@@ -18,7 +18,7 @@
 }
 @if (_saveError is not null)
 {
-    <div class="alert alert-error">@_saveError</div>
+    <div class="alert alert-error" role="alert">@_saveError</div>
 }
 @if (_dbEnvironmentWarning is not null)
 {
@@ -199,7 +199,11 @@
     <h3>Processing</h3>
     <div class="processing-fields">
         <div class="form-group">
-            <label>Batch Size <input type="number" @bind="_cfg.Processing.BatchSize" /></label>
+            <label>Batch Size <input type="number" min="1" @bind="_cfg.Processing.BatchSize" aria-invalid="@(_batchSizeError is not null ? "true" : null)" aria-describedby="@(_batchSizeError is not null ? "batch-size-error" : null)" /></label>
+            @if (_batchSizeError is not null)
+            {
+                <span id="batch-size-error" class="hint">@_batchSizeError</span>
+            }
         </div>
         <div class="form-group">
             <label>Batch Delay (ms) <input type="number" @bind="_cfg.Processing.BatchDelayMs" /></label>
@@ -239,6 +243,7 @@
     private int _dbPort = 5432;
     private bool _saved;
     private string? _saveError;
+    private string? _batchSizeError;
     private string? _dbEnvironmentWarning;
     private bool? _connResult;
     private ScheduleEditorState _schedule = new();
@@ -268,6 +273,7 @@
     {
         _saved = false;
         _saveError = null;
+        _batchSizeError = null;
         try
         {
             if (_schedule.Mode != ScheduleEditorState.ModeCustom)
@@ -275,12 +281,14 @@
                 _cfg.Schedule.Cron = _schedule.ToCron();
             }
 
-            await Config.SaveConfigAsync(_cfg);
+            var saved = await Config.SaveSettingsAsync(SettingsUpdate.FromConfig(_cfg));
+            saved.ApplyTo(_cfg);
             _saved = true;
         }
         catch (Exception ex)
         {
             _saveError = ex.Message;
+            _batchSizeError = ProcessingConfigurationPolicy.GetBatchSizeError(_cfg.Processing.BatchSize);
         }
     }
 

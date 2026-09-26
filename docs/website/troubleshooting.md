@@ -22,6 +22,28 @@ Standard and Web-only serve container port `8080`. Run-once has no HTTP listener
 
 Keep distinct persistent mounts at `/config` and `/data`. Check that both mount paths are correct, writable, have free space, and allow the image's declared non-root user to read and write them. A readable settings file alone does not prove the cache directory is writable. Correct ownership or access for that user on the mounted roots, then recreate the service and inspect Logs. Keep database credentials in the environment rather than `settings.json`.
 
+## Settings did not confirm a save
+
+After a browser disconnect, reconnect and reload Settings or City matching to confirm the saved values before retrying. A completed save remains saved even if its confirmation never appeared. Each save changes only its own [settings group](./configuration.md#saving-settings); another editor saving that same group later can replace its values.
+
+If a save reports an error, Settings and City matching retain your draft. Appearance retains its last saved choice. Check free space and write access to the `/config` directory as well as read access to `settings.json`: saving needs to create and replace a file in that directory. Correct permissions for the container's user without making the volume publicly writable.
+
+If saving cannot preserve the file's owner, group or access restrictions, it fails before replacing the saved file. The existing settings and restrictions remain intact. Check the configuration directory's inherited access rules and the settings file's ownership and additional access rules with the host administrator.
+
+An unreadable or malformed existing `settings.json` is preserved. Check access and restore a known-good configuration backup, or correct the file while the service is stopped. Only a missing settings file uses first-run defaults. Keep database credentials in the container environment and omit settings contents or credentials from support reports.
+
+## Batch Size must be positive
+
+Open **Settings**, replace a zero or negative **Batch Size** with a positive whole number (for example, `50`), and select **Save All Settings**. Reload the page to confirm the saved value before starting another run. An invalid submission keeps your inputs and leaves saved settings unchanged. Appearance and City matching can still save while you correct Batch Size.
+
+With an invalid saved batch size, a run that finds eligible assets fails before fetching any asset batch and makes no asset updates. Run-once returns exit `5`; correct the setting through a Standard or Web-only instance using the same `/config` volume before launching another job. A run with no eligible assets succeeds without reading processing settings, so that success does not confirm that Batch Size is valid.
+
+## City matching has an unexpected preference
+
+Check the country's **Effective Profile** on City matching and test a known coordinate in **Lookup** before changing preferences. **Inherit** keeps the tie-break from the preceding profiles; an empty subtype order inherits independently. A global explicit tie-break can replace a bundled country preference, and a country explicit tie-break takes priority over the global choice.
+
+To restore inheritance, choose **Inherit**, select **Save City Resolver Settings**, and reload City matching. Remove all subtype entries only if you also want to inherit their order. Run Lookup again with the same coordinate before processing. Preferences can choose among returned areas, but cannot create missing geographic coverage. See [City matching](./configuration.md#city-resolver).
+
 ## Country lookup says no match
 
 Check:

@@ -109,6 +109,33 @@ public sealed class ControlPlanePolicyTests
         }
     }
 
+    [TestMethod]
+    public void SettingsMetadataImports_AllowOnlyReviewedBindingsAtTheExactHelperPath()
+    {
+        string path = Path.Combine(WebControlPlaneGuardTests.FindRoot(), "src", "ImmichReverseGeo.Web", "Services", "SettingsFilePermissions.cs");
+        string source = File.ReadAllText(path);
+        foreach (BoundaryRole role in new[] { BoundaryRole.Standard, BoundaryRole.WebOnly })
+        {
+            Assert.IsNull(ControlPlaneDependencyPolicy.InspectSource(source, path, role));
+            Assert.IsNotNull(ControlPlaneDependencyPolicy.InspectSource(source, "SettingsFilePermissions.cs", role));
+            Assert.IsNotNull(ControlPlaneDependencyPolicy.InspectSource(source, path.Replace("Services", "Components", StringComparison.Ordinal), role));
+            foreach (string poisoned in new[]
+            {
+                source.Replace("\"libc\"", "\"duckdb\"", StringComparison.Ordinal),
+                source.Replace("\"stat64\"", "\"system\"", StringComparison.Ordinal),
+                source.Replace("out MacStatus status", "IntPtr status", StringComparison.Ordinal),
+                source + "[DllImport(\"libc\", EntryPoint = \"system\")] private static extern int Execute(string command);",
+                source + "[DllImportAttribute(\"libc\", EntryPoint = \"system\")] private static extern int Execute(string command);",
+                source + "[LibraryImport(\"libc\", EntryPoint = \"system\")] private static partial int Execute(string command);",
+                source + "NativeLibrary.Load(name);",
+                source + "using ImmichReverseGeo.Spatial;"
+            })
+            {
+                Assert.IsNotNull(ControlPlaneDependencyPolicy.InspectSource(poisoned, path, role));
+            }
+        }
+    }
+
     private interface ILightContract;
     private sealed class Root(ILightContract contract)
     {

@@ -195,10 +195,55 @@ internal static class ControlPlaneDependencyPolicy
 
     internal static bool IsWeb(BoundaryRole role) => role is BoundaryRole.Standard or BoundaryRole.WebOnly;
 
+    private static readonly string[] ReviewedSettingsMetadataImports =
+    [
+        """
+        [DllImport("libc", EntryPoint = "stat64", SetLastError = true)]
+            private static extern int GetMacStatus(string path, out MacStatus status);
+        """,
+        """
+        [DllImport("libc", EntryPoint = "statx", SetLastError = true)]
+            private static extern int GetLinuxStatus(int directory, string path, int flags, uint mask, out LinuxStatus status);
+        """,
+        """
+        [DllImport("libc", EntryPoint = "acl_get_file", SetLastError = true)]
+            private static extern IntPtr GetMacAcl(string path, int type);
+        """,
+        """
+        [DllImport("libc", EntryPoint = "acl_free")]
+            private static extern int FreeMacAcl(IntPtr acl);
+        """,
+        """
+        [DllImport("libc", EntryPoint = "listxattr", SetLastError = true)]
+            private static extern nint ListMacAttributes(string path, [Out] byte[]? buffer, nuint size, int options);
+        """,
+        """
+        [DllImport("libc", EntryPoint = "listxattr", SetLastError = true)]
+            private static extern nint ListLinuxAttributes(string path, [Out] byte[]? buffer, nuint size);
+        """,
+        """
+        [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
+            private static extern nint GetMacAttribute(string path, string name, [Out] byte[]? buffer, nuint size, uint position, int options);
+        """,
+        """
+        [DllImport("libc", EntryPoint = "getxattr", SetLastError = true)]
+            private static extern nint GetLinuxAttribute(string path, string name, [Out] byte[]? buffer, nuint size);
+        """
+    ];
+
     internal static BoundaryDiagnostic? InspectSource(string source, string owner, BoundaryRole role)
     {
         source = source.Replace("[assembly: InternalsVisibleTo(\"ImmichReverseGeo.Worker\")]", "", StringComparison.Ordinal);
-        return Regex.IsMatch(source, @"ImmichReverseGeo\.(Overture|Gadm|Worker|Spatial)\b|\b(DuckDB|NetTopologySuite|GeoJSON\w*)\b|\b(Assembly\.Load|NativeLibrary\.Load|DllImport)\b", RegexOptions.CultureInvariant)
+        if (owner.Replace('\\', '/').EndsWith("/src/ImmichReverseGeo.Web/Services/SettingsFilePermissions.cs", StringComparison.Ordinal))
+        {
+            source = source.Replace("\r\n", "\n", StringComparison.Ordinal);
+            foreach (string declaration in ReviewedSettingsMetadataImports)
+            {
+                source = source.Replace(declaration.Replace("\r\n", "\n", StringComparison.Ordinal), "", StringComparison.Ordinal);
+            }
+        }
+
+        return Regex.IsMatch(source, @"ImmichReverseGeo\.(Overture|Gadm|Worker|Spatial)\b|\b(DuckDB|NetTopologySuite|GeoJSON\w*)\b|\b(Assembly\.Load|NativeLibrary\.Load|DllImport(Attribute)?|LibraryImport(Attribute)?)\b", RegexOptions.CultureInvariant)
             ? Diagnostic("SourceDependency", role, owner, "heavy namespace or opaque activation", owner, "source -> heavy import or activation") : null;
     }
 

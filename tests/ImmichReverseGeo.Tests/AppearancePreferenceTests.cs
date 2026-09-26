@@ -62,7 +62,7 @@ public sealed class AppearancePreferenceTests
     {
         Directory.CreateDirectory(_tempDir);
         var configService = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
-        await configService.SaveConfigAsync(new AppConfig
+        await configService.SeedConfigAsync(new AppConfig
         {
             Appearance = new AppearanceConfig { Mode = AppearanceModes.Light },
             Schedule = new ScheduleConfig { Cron = "15 * * * *", Enabled = true },
@@ -119,7 +119,7 @@ public sealed class AppearancePreferenceTests
         Directory.CreateDirectory(dataDirectory);
 
         var configService = new ConfigService(NullLogger<ConfigService>.Instance, configDir: configDirectory);
-        await configService.SaveConfigAsync(new AppConfig
+        await configService.SeedConfigAsync(new AppConfig
         {
             Appearance = new AppearanceConfig { Mode = AppearanceModes.Light }
         });
@@ -146,6 +146,9 @@ public sealed class AppearancePreferenceTests
 
         await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
         await renderer.AttachAsync(page);
+        var draft = (AppConfig)typeof(ImmichReverseGeo.Web.Components.Pages.Settings)
+            .GetField("_cfg", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.GetValue(page)!;
+        draft.Processing.BatchSize = 117;
 
         await renderer.Dispatcher.InvokeAsync(async () =>
         {
@@ -163,6 +166,9 @@ public sealed class AppearancePreferenceTests
         Assert.AreEqual(AppearanceModes.Light, GetAppearanceSelection(page));
         Assert.IsTrue(rendered.HasCssClass("alert", "alert-error"));
         StringAssert.Contains(rendered.Text, "cannot write settings");
+        Assert.IsTrue(rendered.HasAttribute("role", "alert"));
+        Assert.AreEqual(117, draft.Processing.BatchSize);
+        Assert.AreEqual(AppearanceModes.Light, (await configService.GetConfigAsync()).Appearance.Mode);
     }
 
     [TestMethod]

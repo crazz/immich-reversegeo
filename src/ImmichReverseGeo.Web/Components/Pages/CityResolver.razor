@@ -16,6 +16,7 @@
 <section class="settings-card">
     <h3>How To Use This</h3>
     <p class="section-intro">Start with Lookup first. Check which country matched, which cached division candidates came back, and whether the wrong result is actually fixable with subtype order or tie-break rules.</p>
+    <p class="hint">Inherit keeps the tie-break preference from the preceding profiles. An empty subtype order inherits separately. Check the effective profile and a known coordinate in Lookup before changing preferences. Preferences choose among available areas; they cannot create missing geographic coverage.</p>
     <div class="btn-row">
         <a class="btn btn-secondary" href="/lookup">Open Lookup</a>
         <a class="btn btn-secondary" href="https://immich-reversegeo.github.io/configuration/#city-resolver" target="_blank" rel="noopener">Open Docs</a>
@@ -30,7 +31,7 @@
 }
 @if (_saveError is not null)
 {
-    <div class="alert alert-error">@_saveError</div>
+    <div class="alert alert-error" role="alert">@_saveError</div>
 }
 
 <section class="settings-card">
@@ -46,7 +47,7 @@
 
 <section class="settings-card">
     <h3>Global Override</h3>
-    <p class="section-intro">Only turn this on if you want to change the default behavior for countries without a specific override.</p>
+    <p class="section-intro">Use this to change preferences across countries. A country override can replace each explicit global preference.</p>
 
     <div class="form-group">
         <label><input type="checkbox" @bind="_useDefaultOverride" /> Customize the global default profile</label>
@@ -63,32 +64,33 @@
             </div>
 
             <div class="form-group">
-                <label>Tie-break mode</label>
-                <select class="form-control" @bind="_defaultTieBreakMode">
-                    <option value="@CityResolverTieBreakModes.SmallestArea">Prefer tighter area</option>
-                    <option value="@CityResolverTieBreakModes.LargestArea">Prefer broader area</option>
+                <label for="global-tie-break">Tie-break mode</label>
+                <select id="global-tie-break" class="form-control" @bind="_defaultOverride.TieBreak">
+                    <option value="@CityResolverTieBreakPreference.Inherit">Inherit</option>
+                    <option value="@CityResolverTieBreakPreference.Tighter">Prefer tighter area</option>
+                    <option value="@CityResolverTieBreakPreference.Broader">Prefer broader area</option>
                 </select>
             </div>
 
             <div class="form-group">
                 <label>Preferred subtype order</label>
                 <div class="resolver-subtype-list">
-                    @if (_defaultSubtypeOrder.Count == 0)
+                    @if (_defaultOverride.PreferredSubtypes.Count == 0)
                     {
                         <div class="resolver-subtype-item resolver-subtype-empty">No subtype override set.</div>
                     }
                     else
                     {
-                        @foreach (var subtype in _defaultSubtypeOrder.ToList())
+                        @foreach (var subtype in _defaultOverride.PreferredSubtypes.ToList())
                         {
-                            var index = _defaultSubtypeOrder.IndexOf(subtype);
+                            var index = _defaultOverride.PreferredSubtypes.IndexOf(subtype);
                             <div class="resolver-subtype-item">
                                 <span class="resolver-subtype-rank">@(index + 1)</span>
                                 <span class="resolver-subtype-name">@SubtypeLabel(subtype)</span>
                                 <div class="resolver-subtype-actions">
-                                    <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(_defaultSubtypeOrder, subtype, -1)" disabled="@(index == 0)">Up</button>
-                                    <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(_defaultSubtypeOrder, subtype, 1)" disabled="@(index == _defaultSubtypeOrder.Count - 1)">Down</button>
-                                    <button type="button" class="btn btn-danger" @onclick="() => RemoveSubtype(_defaultSubtypeOrder, subtype)">Remove</button>
+                                    <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(_defaultOverride.PreferredSubtypes, subtype, -1)" disabled="@(index == 0)">Up</button>
+                                    <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(_defaultOverride.PreferredSubtypes, subtype, 1)" disabled="@(index == _defaultOverride.PreferredSubtypes.Count - 1)">Down</button>
+                                    <button type="button" class="btn btn-danger" @onclick="() => RemoveSubtype(_defaultOverride.PreferredSubtypes, subtype)">Remove</button>
                                 </div>
                             </div>
                         }
@@ -98,7 +100,7 @@
                 <div class="resolver-add-row">
                     <select class="form-control" @bind="_defaultPendingSubtype">
                         <option value="">Add subtype...</option>
-                        @foreach (var subtype in GetAvailableSubtypeOptions(_defaultSubtypeOrder))
+                        @foreach (var subtype in GetAvailableSubtypeOptions(_defaultOverride.PreferredSubtypes))
                         {
                             <option value="@subtype">@SubtypeLabel(subtype)</option>
                         }
@@ -175,32 +177,33 @@
                 </div>
 
                 <div class="form-group">
-                    <label>Tie-break mode</label>
-                    <select class="form-control" @bind="editor.TieBreakMode">
-                        <option value="@CityResolverTieBreakModes.SmallestArea">Prefer tighter area</option>
-                        <option value="@CityResolverTieBreakModes.LargestArea">Prefer broader area</option>
+                    <label for="country-tie-break-@editor.Country.Iso3">Tie-break mode</label>
+                    <select id="country-tie-break-@editor.Country.Iso3" class="form-control" @bind="editor.Profile.TieBreak">
+                        <option value="@CityResolverTieBreakPreference.Inherit">Inherit</option>
+                        <option value="@CityResolverTieBreakPreference.Tighter">Prefer tighter area</option>
+                        <option value="@CityResolverTieBreakPreference.Broader">Prefer broader area</option>
                     </select>
                 </div>
 
                 <div class="form-group">
                     <label>Preferred subtype order</label>
                     <div class="resolver-subtype-list">
-                        @if (editor.PreferredSubtypes.Count == 0)
+                        @if (editor.Profile.PreferredSubtypes.Count == 0)
                         {
                             <div class="resolver-subtype-item resolver-subtype-empty">No subtype override set.</div>
                         }
                         else
                         {
-                            @foreach (var subtype in editor.PreferredSubtypes.ToList())
+                            @foreach (var subtype in editor.Profile.PreferredSubtypes.ToList())
                             {
-                                var index = editor.PreferredSubtypes.IndexOf(subtype);
+                                var index = editor.Profile.PreferredSubtypes.IndexOf(subtype);
                                 <div class="resolver-subtype-item">
                                     <span class="resolver-subtype-rank">@(index + 1)</span>
                                     <span class="resolver-subtype-name">@SubtypeLabel(subtype)</span>
                                     <div class="resolver-subtype-actions">
-                                        <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(editor.PreferredSubtypes, subtype, -1)" disabled="@(index == 0)">Up</button>
-                                        <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(editor.PreferredSubtypes, subtype, 1)" disabled="@(index == editor.PreferredSubtypes.Count - 1)">Down</button>
-                                        <button type="button" class="btn btn-danger" @onclick="() => RemoveSubtype(editor.PreferredSubtypes, subtype)">Remove</button>
+                                        <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(editor.Profile.PreferredSubtypes, subtype, -1)" disabled="@(index == 0)">Up</button>
+                                        <button type="button" class="btn btn-secondary" @onclick="() => MoveSubtype(editor.Profile.PreferredSubtypes, subtype, 1)" disabled="@(index == editor.Profile.PreferredSubtypes.Count - 1)">Down</button>
+                                        <button type="button" class="btn btn-danger" @onclick="() => RemoveSubtype(editor.Profile.PreferredSubtypes, subtype)">Remove</button>
                                     </div>
                                 </div>
                             }
@@ -210,7 +213,7 @@
                     <div class="resolver-add-row">
                         <select class="form-control" @bind="editor.PendingSubtype">
                             <option value="">Add subtype...</option>
-                            @foreach (var subtype in GetAvailableSubtypeOptions(editor.PreferredSubtypes))
+                            @foreach (var subtype in GetAvailableSubtypeOptions(editor.Profile.PreferredSubtypes))
                             {
                                 <option value="@subtype">@SubtypeLabel(subtype)</option>
                             }
@@ -222,7 +225,7 @@
                 <div class="schedule-summary">
                     <div class="schedule-summary-label">Effective Profile</div>
                     @RenderProfileSummary(effectiveProfile, "Resolver behavior")
-                    <div class="schedule-summary-detail">This includes the bundled global profile, bundled country profile, and your override for @editor.Country.Iso3.</div>
+                    <div class="schedule-summary-detail">This includes the bundled global profile, bundled country profile, your global override, and your override for @editor.Country.Iso3.</div>
                 </div>
             </details>
         }
@@ -250,8 +253,7 @@
     private CityResolverProfile _bundledDefaultProfile = new();
     private List<KnownCountryOption> _knownCountries = [];
     private bool _useDefaultOverride;
-    private List<string> _defaultSubtypeOrder = [];
-    private string _defaultTieBreakMode = CityResolverTieBreakModes.SmallestArea;
+    private CityResolverProfileOverride _defaultOverride = new();
     private string _defaultPendingSubtype = string.Empty;
     private string _newCountryInput = string.Empty;
     private string? _countryInputError;
@@ -267,10 +269,7 @@
 
         var defaultOverride = _cfg.Processing.CityResolver.DefaultProfile;
         _useDefaultOverride = defaultOverride.PreferredSubtypes.Count > 0 || !string.IsNullOrWhiteSpace(defaultOverride.TieBreakMode);
-        _defaultSubtypeOrder = _useDefaultOverride ? [.. NormalizeEditableSubtypes(defaultOverride.PreferredSubtypes)] : [];
-        _defaultTieBreakMode = _useDefaultOverride
-            ? NormalizeEditableTieBreak(defaultOverride.TieBreakMode)
-            : CityResolverTieBreakModes.SmallestArea;
+        _defaultOverride = CityResolverProfileOverride.FromProfile(defaultOverride);
 
         _countryEditors = _cfg.Processing.CityResolver.CountryOverrides
             .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
@@ -282,12 +281,12 @@
 
     private void AddDefaultSubtype()
     {
-        AddSubtype(_defaultSubtypeOrder, _defaultPendingSubtype, () => _defaultPendingSubtype = string.Empty);
+        AddSubtype(_defaultOverride.PreferredSubtypes, _defaultPendingSubtype, () => _defaultPendingSubtype = string.Empty);
     }
 
     private void AddCountrySubtype(CountryOverrideEditor editor)
     {
-        AddSubtype(editor.PreferredSubtypes, editor.PendingSubtype, () => editor.PendingSubtype = string.Empty);
+        AddSubtype(editor.Profile.PreferredSubtypes, editor.PendingSubtype, () => editor.PendingSubtype = string.Empty);
     }
 
     private static void AddSubtype(List<string> orderedSubtypes, string pendingSubtype, Action clearPending)
@@ -341,12 +340,9 @@
             return;
         }
 
-        var startingProfile = CityResolverCatalog.GetProfile(BuildCityResolverConfig(), country.Iso3);
         _countryEditors.Add(new CountryOverrideEditor
         {
-            Country = country,
-            PreferredSubtypes = [.. startingProfile.PreferredSubtypes],
-            TieBreakMode = startingProfile.TieBreakMode
+            Country = country
         });
         _countryEditors = _countryEditors
             .OrderBy(editor => editor.Country.DisplayName, StringComparer.OrdinalIgnoreCase)
@@ -380,7 +376,7 @@
             return _bundledDefaultProfile;
         }
 
-        var profileOverride = BuildProfile(_defaultSubtypeOrder, _defaultTieBreakMode, allowEmpty: true);
+        var profileOverride = _defaultOverride.ToProfile();
         return _bundledDefaultProfile.ApplyOverride(profileOverride).Normalize();
     }
 
@@ -396,8 +392,8 @@
 
         try
         {
-            _cfg.Processing.CityResolver = BuildCityResolverConfig();
-            await Config.SaveConfigAsync(_cfg);
+            var saved = await Config.SaveCityResolverSettingsAsync(new CityResolverSettingsUpdate(BuildCityResolverConfig()));
+            _cfg.Processing.CityResolver = saved.ToConfig();
             _saved = true;
         }
         catch (Exception ex)
@@ -411,41 +407,16 @@
         var config = new CityResolverConfig
         {
             DefaultProfile = _useDefaultOverride
-                ? BuildProfile(_defaultSubtypeOrder, _defaultTieBreakMode, allowEmpty: true)
+                ? _defaultOverride.ToProfile()
                 : CityResolverProfile.CreateEmpty()
         };
 
         foreach (var editor in _countryEditors)
         {
-            config.CountryOverrides[editor.Country.Iso3] = BuildProfile(editor.PreferredSubtypes, editor.TieBreakMode, allowEmpty: true);
+            config.CountryOverrides[editor.Country.Iso3] = editor.Profile.ToProfile();
         }
 
         return config;
-    }
-
-    private static CityResolverProfile BuildProfile(List<string> orderedSubtypes, string tieBreakMode, bool allowEmpty)
-    {
-        if (allowEmpty && orderedSubtypes.Count == 0 && string.IsNullOrWhiteSpace(tieBreakMode))
-        {
-            return CityResolverProfile.CreateEmpty();
-        }
-
-        if (allowEmpty && orderedSubtypes.Count == 0)
-        {
-            return new CityResolverProfile
-            {
-                PreferredSubtypes = [],
-                TieBreakMode = string.Equals(tieBreakMode, CityResolverTieBreakModes.LargestArea, StringComparison.OrdinalIgnoreCase)
-                    ? CityResolverTieBreakModes.LargestArea
-                    : string.Empty
-            };
-        }
-
-        return new CityResolverProfile
-        {
-            PreferredSubtypes = [.. orderedSubtypes],
-            TieBreakMode = tieBreakMode
-        };
     }
 
     private static RenderFragment RenderProfileSummary(CityResolverProfile profile, string heading) => builder =>
@@ -576,31 +547,14 @@
         return new CountryOverrideEditor
         {
             Country = country,
-            PreferredSubtypes = [.. NormalizeEditableSubtypes(profile.PreferredSubtypes)],
-            TieBreakMode = NormalizeEditableTieBreak(profile.TieBreakMode)
+            Profile = CityResolverProfileOverride.FromProfile(profile)
         };
-    }
-
-    private static IEnumerable<string> NormalizeEditableSubtypes(IEnumerable<string> subtypes)
-    {
-        return subtypes
-            .Where(subtype => !string.IsNullOrWhiteSpace(subtype))
-            .Select(subtype => subtype.Trim().ToLowerInvariant())
-            .Distinct(StringComparer.OrdinalIgnoreCase);
-    }
-
-    private static string NormalizeEditableTieBreak(string? tieBreakMode)
-    {
-        return string.Equals(tieBreakMode, CityResolverTieBreakModes.LargestArea, StringComparison.OrdinalIgnoreCase)
-            ? CityResolverTieBreakModes.LargestArea
-            : CityResolverTieBreakModes.SmallestArea;
     }
 
     private sealed class CountryOverrideEditor
     {
         public required KnownCountryOption Country { get; init; }
-        public List<string> PreferredSubtypes { get; set; } = [];
-        public string TieBreakMode { get; set; } = CityResolverTieBreakModes.SmallestArea;
+        public CityResolverProfileOverride Profile { get; set; } = new();
         public string PendingSubtype { get; set; } = string.Empty;
     }
 }

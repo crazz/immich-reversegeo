@@ -21,11 +21,13 @@ The four counters come first, followed by Service Status and the full-width Rece
 ![Overview with synthetic processing data](./assets/images/dashboard.jpg)
 
 - it works even if automatic scheduling is turned off
-- it uses your current Settings values for batch size, delay, parallelism, and airport matching
+- it takes one snapshot of saved Settings after finding eligible assets; later saves apply to a subsequent pass
 - Overview shows live progress, recent activity, and the last completed run
 - `Stop` requests cancellation of the current run; `Stopping…` remains visible while it finishes and releases resources
 
 Wait for the run to finish before starting another pass. Work that does not observe cancellation, such as a synchronous native operation, can take longer to stop; after a bounded grace period the app can force-stop the worker's process tree. Stopping does not undo location updates already written.
+
+If a run reports an invalid Batch Size, open Settings, enter a positive whole number, and select **Save All Settings** before retrying. A non-empty run rejects zero or negative batch sizes before fetching or processing assets. See [Batch size](./configuration.md#batch-size) for the correction workflow.
 
 Each processing run uses a temporary worker started from the same Immich ReverseGeo application image. Overview and Logs continue to show the run while that worker is active.
 
@@ -142,3 +144,5 @@ Long log messages wrap to fit the screen. Wrapping does not change the text or o
 ## City matching
 
 Open **City matching** from Configure when you need bundled city defaults, a global matching profile, or per-country overrides. Settings no longer nests a launch card for that page. See [City matching](./configuration.md#city-resolver) for the matching controls.
+
+Before changing preferences, compare the country's **Effective Profile** with a known coordinate in Lookup. Tie-break choices are **Inherit**, **Prefer tighter area**, and **Prefer broader area**; an empty subtype order inherits separately. Select **Save City Resolver Settings**, reload to check the saved choices, and repeat the coordinate in Lookup before processing. These preferences select among available areas and cannot create missing geographic coverage.

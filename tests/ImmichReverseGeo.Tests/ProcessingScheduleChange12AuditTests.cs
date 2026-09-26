@@ -535,7 +535,7 @@ public sealed class ProcessingScheduleChange12AuditTests
             var configService = new ConfigService(NullLogger<ConfigService>.Instance, directory);
             var appConfig = Enabled("17 5 * * 2");
             appConfig.Processing.BatchSize = 777;
-            await configService.SaveConfigAsync(appConfig).WaitAsync(Bound);
+            await configService.SeedConfigAsync(appConfig).WaitAsync(Bound);
             var scheduleConfiguration = (IProcessingScheduleConfiguration)configService;
             var snapshot = await scheduleConfiguration.GetSnapshotAsync().WaitAsync(Bound);
             Assert.AreSame(configService, scheduleConfiguration);
@@ -834,7 +834,7 @@ public sealed class ProcessingScheduleChange12AuditTests
         try
         {
             var service = new ConfigService(NullLogger<ConfigService>.Instance, directory);
-            await service.SaveConfigAsync(Enabled(cron)).WaitAsync(Bound);
+            await service.SeedConfigAsync(Enabled(cron)).WaitAsync(Bound);
             var loaded = await service.GetConfigAsync().WaitAsync(Bound);
             Assert.IsTrue(loaded.Schedule.Enabled);
             Assert.AreEqual(cron, loaded.Schedule.Cron);

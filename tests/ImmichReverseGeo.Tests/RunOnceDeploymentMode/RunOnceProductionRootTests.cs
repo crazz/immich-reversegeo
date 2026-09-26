@@ -21,6 +21,45 @@ public sealed class RunOnceProductionRootTests
     private static readonly TimeSpan Bound = TimeSpan.FromSeconds(10);
 
     [TestMethod]
+    [DataRow(0)]
+    [DataRow(-1)]
+    public async Task ProductionRoot_NonPositiveBatchSizeFailsRequiredConfigurationBeforeAnyAssetWork(int batchSize)
+    {
+        using var root = new TemporaryRunOnceRoot();
+        Directory.CreateDirectory(root.ConfigDirectory);
+        string document = $$"""{"processing":{"batchSize":{{batchSize}}},"credential-canary":"must-not-escape"}""";
+        await File.WriteAllTextAsync(Path.Combine(root.ConfigDirectory, "settings.json"), document);
+        var outcomes = new WorkerProcessExitOutcomeAccumulator();
+        var stdout = new StringWriter();
+        var stderr = new StringWriter();
+        var fixture = new ExecutorFixture().EnableCount(1).EnableSnapshots();
+        var session = new RecordingRunLockSession();
+        IHost host = BuildProductionHost(
+            root, outcomes, stdout, stderr, fixture, session, retainProductionConfiguration: true);
+        var configuration = (IProcessingRunConfiguration)host.Services.GetRequiredService<ConfigService>();
+        var validation = await Assert.ThrowsExactlyAsync<InvalidOperationException>(configuration.GetConfigAsync);
+        Assert.AreEqual("Batch Size must be positive.", validation.Message);
+        Assert.IsFalse(validation.ToString().Contains("must-not-escape", StringComparison.Ordinal));
+
+        int exitCode = await RunOnceApplication.RunHostAsync(host, outcomes).WaitAsync(Bound);
+
+        Assert.AreEqual(WorkerProcessExitCodes.InfrastructureFailure, exitCode);
+        Assert.AreEqual(0, fixture.BatchCalls);
+        Assert.AreEqual(0, fixture.Resolutions.Count);
+        Assert.AreEqual(0, fixture.WriteAttempts);
+        Assert.AreEqual(0, fixture.SkippedInsertAttempts);
+        Assert.AreEqual(0, fixture.AirportCalls.Count);
+        Assert.AreEqual(0, fixture.Delays.Count);
+        Assert.AreEqual(1, fixture.CountCalls);
+        Assert.AreEqual(1, fixture.SkippedCalls);
+        Assert.AreEqual(1, session.Commands.Count(command => command == ProcessingRunLockCommand.Release));
+        Assert.AreEqual(1, CountOccurrences(stderr.ToString(), "Run failed:"));
+        StringAssert.Contains(stderr.ToString(), "processed=0 updated=0 skipped=0 failed=0");
+        Assert.IsFalse((stdout.ToString() + stderr).Contains("must-not-escape", StringComparison.Ordinal));
+        Assert.AreEqual(document, await File.ReadAllTextAsync(Path.Combine(root.ConfigDirectory, "settings.json")));
+    }
+
+    [TestMethod]
     public async Task ProductionRoot_ActualExecutorReporterAndPostgresqlLockCompleteAuthoritativeNoWork()
     {
         using var root = new TemporaryRunOnceRoot();

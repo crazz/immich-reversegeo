@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 
@@ -22,6 +23,7 @@ public sealed class AppearanceApplier : IAsyncDisposable
 {
     private readonly IAppearanceDocument _document;
     private readonly IBrowserColorScheme _browser;
+    private readonly SemaphoreSlim _changeGate = new(1, 1);
     private IDisposable? _schemeSubscription;
     private bool _sessionModeCommitted;
 
@@ -52,27 +54,35 @@ public sealed class AppearanceApplier : IAsyncDisposable
 
     public async Task<bool> TryChangeModeAsync(string mode, Func<string, Task> persistAsync)
     {
-        LastChangeError = null;
-        string normalized = AppearanceModes.NormalizeMode(mode);
-
-        // Resolve Auto against the browser scheme before applying; do not apply until persist succeeds.
-        await _browser.EnsureReadyAsync().ConfigureAwait(false);
-
+        await _changeGate.WaitAsync().ConfigureAwait(false);
         try
         {
-            await persistAsync(normalized).ConfigureAwait(false);
-        }
-        catch (Exception ex)
-        {
-            LastChangeError = ex.Message;
-            return false;
-        }
+            LastChangeError = null;
+            string normalized = AppearanceModes.NormalizeMode(mode);
 
-        SavedMode = normalized;
-        _sessionModeCommitted = true;
-        await ApplyCurrentModeAsync().ConfigureAwait(false);
-        SyncSchemeSubscription();
-        return true;
+            // Resolve Auto against the browser scheme before applying; do not apply until persist succeeds.
+            await _browser.EnsureReadyAsync().ConfigureAwait(false);
+
+            try
+            {
+                await persistAsync(normalized).ConfigureAwait(false);
+            }
+            catch (Exception ex)
+            {
+                LastChangeError = ex.Message;
+                return false;
+            }
+
+            SavedMode = normalized;
+            _sessionModeCommitted = true;
+            await ApplyCurrentModeAsync().ConfigureAwait(false);
+            SyncSchemeSubscription();
+            return true;
+        }
+        finally
+        {
+            _changeGate.Release();
+        }
     }
 
     public ValueTask DisposeAsync()

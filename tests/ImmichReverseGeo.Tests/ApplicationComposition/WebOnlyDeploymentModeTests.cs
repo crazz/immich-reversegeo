@@ -555,7 +555,7 @@ public sealed class WebOnlyDeploymentModeTests
             if (initial is not null)
             {
                 var config = new ConfigService(NullLogger<ConfigService>.Instance, Path.Combine(root, "config"));
-                await config.SaveConfigAsync(initial);
+                await config.SeedConfigAsync(initial);
             }
 
             return CreateBuilderCore(DeploymentMode.WebOnly, build: true, includeRuntimeFiles, later, root);

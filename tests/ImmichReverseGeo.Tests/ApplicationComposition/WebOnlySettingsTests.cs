@@ -214,7 +214,7 @@ public sealed class WebOnlySettingsTests
 
                 provider = services.BuildServiceProvider(new ServiceProviderOptions { ValidateScopes = true });
                 var configService = provider.GetRequiredService<ConfigService>();
-                await configService.SaveConfigAsync(config);
+                await configService.SeedConfigAsync(config);
                 var settingsPath = Path.Combine(configDirectory, "settings.json");
                 var initialSettingsJson = await File.ReadAllTextAsync(settingsPath);
                 dataSource = NpgsqlDataSource.Create("Host=127.0.0.1;Port=1;Database=immich;Username=immich;Password=not-used;Pooling=false;Timeout=1;Command Timeout=1");

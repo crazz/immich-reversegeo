@@ -1,4 +1,5 @@
 using ImmichReverseGeo.Core.Models;
+using ImmichReverseGeo.Core.Processing;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Extensions.Logging.Abstractions;
 
@@ -22,6 +23,72 @@ public class ConfigServiceTests
     }
 
     [TestMethod]
+    [DataRow(0)]
+    [DataRow(-1)]
+    [DataRow(int.MinValue)]
+    public async Task NonPositiveBatchSize_ProducesSafePassFailureWithoutAssetDispositions(int batchSize)
+    {
+        Directory.CreateDirectory(_tempDir);
+        string document = $$"""{"processing":{"batchSize":{{batchSize}}},"private-canary":"not-for-output"}""";
+        await File.WriteAllTextAsync(Path.Combine(_tempDir, "settings.json"), document);
+        var service = new ConfigService(NullLogger<ConfigService>.Instance, _tempDir);
+        var fixture = new ExecutorFixture().EnableReporter().EnableCount(1).EnableSnapshots();
+        fixture.ConfigBehavior = ((IProcessingRunConfiguration)service).GetConfigAsync;
+
+        var result = await fixture.Executor.ExecuteAsync(fixture.Request, fixture.Reporter, CancellationToken.None)
+            .WaitAsync(ExecutorFixture.Bound);
+
+        fixture.AssertTerminal(result);
+        Assert.AreEqual(ProcessingRunOutcome.Failed, result.Outcome);
+        Assert.AreEqual("Batch Size must be positive.", result.FailureMessage);
+        ExecutorAssertions.Counts(result, 0, 0, 0, 0);
+        Assert.AreEqual(1, fixture.ConfigCalls);
+        Assert.AreEqual(0, fixture.BatchCalls);
+        Assert.AreEqual(0, fixture.Resolutions.Count);
+        Assert.AreEqual(0, fixture.WriteAttempts);
+        Assert.AreEqual(0, fixture.SkippedInsertAttempts);
+        Assert.AreEqual(0, fixture.Delays.Count);
+        Assert.AreEqual(0, fixture.Reporter.Events.OfType<ProgressChanged>().Count());
+        var terminal = fixture.Reporter.Events.OfType<RunFinished>().Single();
+        Assert.AreSame(result, terminal.Result);
+        Assert.AreEqual("Batch Size must be positive.", terminal.Result.FailureMessage);
+        var fatal = fixture.Logger.Entries.Single();
+        Assert.IsFalse(fatal.Exception!.ToString().Contains("not-for-output", StringComparison.Ordinal));
+        Assert.AreEqual(document, await File.ReadAllTextAsync(Path.Combine(_tempDir, "settings.json")));
+    }
+
+    [TestMethod]
+    [DataRow(0)]
+    [DataRow(-1)]
+    public async Task PositiveBatchSize_WithNonPositiveDelayRetainsSettingsAndProcessesWithoutDelay(int delay)
+    {
+        var service = new ConfigService(NullLogger<ConfigService>.Instance, _tempDir);
+        var update = SettingsUpdate.FromConfig(new AppConfig()) with
+        {
+            BatchSize = 1,
+            BatchDelayMs = delay,
+            MaxDegreeOfParallelism = 0,
+            UseAirportInfrastructure = false
+        };
+        await service.SaveSettingsAsync(update);
+        var fixture = new ExecutorFixture().EnableReporter().EnableCount(1).EnableSnapshots()
+            .EnablePages().EnableAdmin().EnableWrite();
+        fixture.ConfigBehavior = ((IProcessingRunConfiguration)service).GetConfigAsync;
+        fixture.SetPages([ExecutorFixture.Asset(1)], []);
+
+        var result = await fixture.Executor.ExecuteAsync(fixture.Request, fixture.Reporter, CancellationToken.None)
+            .WaitAsync(ExecutorFixture.Bound);
+
+        ExecutorAssertions.Completed(result, 1, 1, 0, 0);
+        Assert.AreEqual(0, fixture.Delays.Count);
+        CollectionAssert.AreEqual(new[] { 1, 1 }, fixture.BatchSizes.ToArray());
+        var saved = await service.GetConfigAsync();
+        Assert.AreEqual(1, saved.Processing.BatchSize);
+        Assert.AreEqual(delay, saved.Processing.BatchDelayMs);
+        Assert.AreEqual(0, saved.Processing.MaxDegreeOfParallelism);
+    }
+
+    [TestMethod]
     public async Task GetConfig_NoFile_ReturnsDefaults()
     {
         var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
@@ -40,7 +107,7 @@ public class ConfigServiceTests
         var cfg = await svc.GetConfigAsync();
         cfg.Processing.BatchSize = 99;
         cfg.Processing.UseAirportInfrastructure = false;
-        await svc.SaveConfigAsync(cfg);
+        await svc.SeedConfigAsync(cfg);
 
         var svc2 = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
         var loaded = await svc2.GetConfigAsync();
@@ -50,25 +117,34 @@ public class ConfigServiceTests
 
     [TestMethod]
     [DoNotParallelize]
-    public async Task SaveConfig_WithDeploymentModeEnvironmentValue_DoesNotPersistIt()
+    public async Task SaveGroups_WithEnvironmentCredentialsAndDeploymentMode_DoNotPersistThem()
     {
-        const string deploymentMode = "web-only";
-        var previousValue = Environment.GetEnvironmentVariable("IMMICH_REVERSEGEO_MODE");
-
+        string[] names = ["IMMICH_REVERSEGEO_MODE", "DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE_NAME"];
+        var previous = names.ToDictionary(name => name, Environment.GetEnvironmentVariable);
         try
         {
-            Environment.SetEnvironmentVariable("IMMICH_REVERSEGEO_MODE", deploymentMode);
+            foreach (string name in names)
+            {
+                Environment.SetEnvironmentVariable(name, "environment-only-" + name);
+            }
+
             var service = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+            await service.SeedConfigAsync(new AppConfig());
 
-            await service.SaveConfigAsync(new AppConfig());
-
-            var settings = await File.ReadAllTextAsync(Path.Combine(_tempDir, "settings.json"));
+            string settings = await File.ReadAllTextAsync(Path.Combine(_tempDir, "settings.json"));
             Assert.IsFalse(settings.Contains("deploymentMode", StringComparison.OrdinalIgnoreCase));
-            Assert.IsFalse(settings.Contains(deploymentMode, StringComparison.Ordinal));
+            foreach (string name in names)
+            {
+                Assert.IsFalse(settings.Contains(name, StringComparison.OrdinalIgnoreCase));
+                Assert.IsFalse(settings.Contains("environment-only-" + name, StringComparison.Ordinal));
+            }
         }
         finally
         {
-            Environment.SetEnvironmentVariable("IMMICH_REVERSEGEO_MODE", previousValue);
+            foreach (var entry in previous)
+            {
+                Environment.SetEnvironmentVariable(entry.Key, entry.Value);
+            }
         }
     }
 
@@ -95,12 +171,16 @@ public class ConfigServiceTests
             }
             """);
 
+        byte[] original = await File.ReadAllBytesAsync(settingsPath);
         var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
 
         var loaded = await svc.GetConfigAsync();
 
         Assert.IsNotNull(loaded.Processing.CityResolver);
         Assert.IsNotNull(loaded.Processing.CityResolver.DefaultProfile);
+        Assert.AreEqual(0, loaded.Processing.CityResolver.DefaultProfile.PreferredSubtypes.Count);
+        Assert.AreEqual(string.Empty, loaded.Processing.CityResolver.DefaultProfile.TieBreakMode);
+        CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(settingsPath));
         Assert.IsNotNull(loaded.Processing.CityResolver.CountryOverrides);
         Assert.AreEqual(0, loaded.Processing.CityResolver.CountryOverrides.Count);
         Assert.AreEqual(25, loaded.Processing.BatchSize);

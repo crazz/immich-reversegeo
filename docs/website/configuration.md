@@ -20,6 +20,20 @@ Web-only does not add an automation endpoint. Overview processing, Lookup, and c
 The Settings page is intentionally small. Most users only need to check Appearance, the database connection, pick a schedule, and tune how aggressively processing should run. Country-specific city matching lives on its own City matching page in Configure.
 </div>
 
+## Saving settings
+
+Settings are saved in three independent groups:
+
+- **Save All Settings** saves the schedule and processing options on Settings.
+- **Save City Resolver Settings** saves global and country preferences on City matching.
+- **Appearance** saves immediately when you select Light, Dark, or Auto.
+
+Saving one group preserves newer saved values in the other two groups, even from an older open page. If two editors save the same group, the later successful publication to the settings file wins. The order of browser confirmations does not decide which values remain saved; there is no conflict warning between editors of the same group.
+
+If a save fails, Settings and City matching keep your entered values so you can correct them or retry. Appearance keeps its last saved choice. If your browser disconnects before confirming a save, reconnect and reload the relevant page to check its saved values before retrying. A lost confirmation does not undo a completed save.
+
+These guarantees apply to saves through one running Web instance. Coordinate separate writers or manual file edits yourself. Keep the Docker configuration volume and its normal backup workflow described under [Data layout](#data-layout).
+
 ## Appearance
 
 Settings includes Appearance with Light, Dark, and Auto. The choice is stored with the other operator settings and applies as soon as it saves. Light and Dark set the console palette directly. Auto follows the browser color scheme and updates live when that scheme changes. Appearance does not require Save All Settings.
@@ -91,6 +105,14 @@ Standard supports hourly, every-few-minutes, every-few-hours, daily, weekly, and
   </div>
 </div>
 
+### Batch size
+
+**Batch Size must be a positive whole number**, such as the default `50`. Save All Settings rejects zero or negative values, saves none of the submitted edits, and keeps your inputs available for correction.
+
+If an older settings file contains an invalid batch size, Settings shows that value unchanged. Enter a positive replacement, select **Save All Settings**, then reload Settings to confirm it. Appearance and City matching can still save independently while that correction is pending; they preserve the invalid batch size.
+
+A processing pass with eligible assets rejects an invalid saved batch size before fetching or processing any asset batch. Run-once returns configuration-failure exit `5`. A pass with no eligible assets completes successfully without reading processing settings. Each non-empty pass uses one saved settings snapshot, so later saves apply to a subsequent pass.
+
 ### GADM administrative areas
 
 When enabled, GADM adds another country-level administrative boundary source for `state` and `city` matching.
@@ -146,9 +168,7 @@ It gives you:
 - country-specific overrides
 - a searchable country picker
 - simple up/down controls to change the order of preferred place types from the official Overture list
-- a choice between:
-  - prefer the tighter match
-  - prefer the broader match
+- independent tie-break choices: Inherit, Prefer tighter area, or Prefer broader area
 
 This keeps the main Settings page simple while still giving you a way to fix countries where the default city result is not what you want.
 
@@ -182,8 +202,8 @@ So before changing anything, use Lookup first and make sure the place you want i
    - if the wrong kind of place won, change the preferred order
    - if two similar places are competing, try broader or tighter matching
    - if an airport name is winning, turn off airport matching first
-4. Add a country override only after you know the data supports the result you want.
-5. Run Lookup again and confirm the final output before processing your library.
+4. Open City matching and compare the country's **Effective Profile** with the Lookup result before changing preferences. Add a country override only after you know the data supports the result you want.
+5. Select **Save City Resolver Settings**, reload City matching to confirm the saved choices, then run Lookup again with the same known coordinate before processing your library.
 
 ### About `admin_level`
 
@@ -198,7 +218,7 @@ That is because:
 So the controls on the City matching page stay simple:
 
 - preferred place type order
-- broader or tighter matching
+- inherited, broader, or tighter matching
 
 ### Bundled defaults vs your overrides
 
@@ -209,7 +229,11 @@ The app ships with built-in default rules. Your own settings sit on top of them:
 - your optional global override
 - your optional country override
 
-That means you only need to change the countries you care about.
+Each field inherits separately. **Inherit** keeps the tie-break preference from the preceding profiles; **Prefer tighter area** and **Prefer broader area** set an explicit preference, even when you leave the subtype order empty. An empty subtype order inherits the preceding order, so you can change just the tie-break or just the order.
+
+A global subtype-only override leaves each country's bundled tie-break intact. For example, France continues to prefer broader areas unless you explicitly choose a different tie-break globally or for France. An explicit country preference takes priority over an explicit global preference. Select **Inherit** to return a tie-break to the preceding profile; remove all subtype entries to inherit their order again.
+
+The effective profile previews these combined choices. Saving and reloading retains which fields inherit and which are explicit. These preferences select among available administrative data; they cannot create missing geographic coverage.
 
 ### Want to improve the bundled defaults for everyone?
 

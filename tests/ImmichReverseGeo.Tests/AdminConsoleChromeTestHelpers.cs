@@ -541,6 +541,13 @@ internal sealed class AdminConsoleCityMatchingFixture : IDisposable
         return new AdminConsoleCityMatchingFixture(root);
     }
 
+    public ConfigService CreateConfigService() =>
+        new(NullLogger<ConfigService>.Instance, Path.Combine(_root, "config"));
+
+    public CityResolverProfileCatalogService CreateCatalog() =>
+        new(NullLogger<CityResolverProfileCatalogService>.Instance,
+            new StorageOptions(Path.Combine(_root, "data"), Path.Combine(_root, "bundled")));
+
     public ImmichReverseGeo.Web.Components.Pages.CityResolver CreatePage()
     {
         var page = new ImmichReverseGeo.Web.Components.Pages.CityResolver();
@@ -610,7 +617,7 @@ internal sealed class AdminConsoleSettingsPageFixture : IAsyncDisposable
             configDirectory,
             DeploymentMode.Standard);
         var config = new ConfigService(NullLogger<ConfigService>.Instance, configDirectory);
-        await config.SaveConfigAsync(new AppConfig());
+        await config.SeedConfigAsync(new AppConfig());
         var dataSource = NpgsqlDataSource.Create(
             "Host=127.0.0.1;Port=1;Database=immich;Username=immich;Password=not-used;Pooling=false;Timeout=1;Command Timeout=1");
         var page = new ImmichReverseGeo.Web.Components.Pages.Settings();
