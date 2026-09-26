@@ -110,6 +110,28 @@ public static class OverturePlacesLogic
         "bus_stop"
     ];
 
+    // Preserve landmark inclusions and warehouse exclusions for documented primary
+    // category renames: docs.overturemaps.org/taxonomy/2026-09-23.0/taxonomy_to_legacy_categories.csv.
+    // Apply these aliases only to primary categories, not broader basic categories.
+    private static readonly Dictionary<string, string> LegacyPrimaryCategoryAliases = new(StringComparer.OrdinalIgnoreCase)
+    {
+        ["anglican_or_episcopal_place_of_worship"] = "anglican_church",
+        ["baptist_place_of_worship"] = "baptist_church",
+        ["roman_catholic_place_of_worship"] = "catholic_church",
+        ["christian_place_of_worship"] = "church_cathedral",
+        ["protestant_place_of_worship"] = "evangelical_church",
+        ["pentecostal_place_of_worship"] = "pentecostal_church",
+        ["buddhist_place_of_worship"] = "buddhist_temple",
+        ["hindu_place_of_worship"] = "hindu_temple",
+        ["muslim_place_of_worship"] = "mosque",
+        ["sikh_place_of_worship"] = "sikh_temple",
+        ["jewish_place_of_worship"] = "synagogue",
+        ["place_of_worship"] = "temple",
+        ["performing_arts_venue"] = "theaters_and_performance_venues",
+        ["arts_and_entertainment"] = "attractions_and_activities",
+        ["b2b_storage"] = "b2b_storage_and_warehouses"
+    };
+
     public static string BuildQuery(
         double lat,
         double lon,
@@ -124,11 +146,13 @@ public static class OverturePlacesLogic
             ? string.Empty
             : $"  AND lower(addresses[1].country) = '{alpha2.ToLowerInvariant()}'\n";
 
+        // Eligibility and distance are evaluated after reading. A raw row limit
+        // can hide nearby landmarks behind unrelated places in dense areas.
         return $"""
             SELECT
                 id,
                 COALESCE(names.common['en'], names.primary) AS name,
-                categories.primary AS primary_category,
+                taxonomy.primary AS primary_category,
                 basic_category,
                 confidence,
                 ST_Y(geometry) AS latitude,
@@ -143,7 +167,7 @@ public static class OverturePlacesLogic
             WHERE names.primary IS NOT NULL
               AND bbox.xmin BETWEEN {minLon.ToString(CultureInfo.InvariantCulture)} AND {maxLon.ToString(CultureInfo.InvariantCulture)}
               AND bbox.ymin BETWEEN {minLat.ToString(CultureInfo.InvariantCulture)} AND {maxLat.ToString(CultureInfo.InvariantCulture)}
-            {countryClause}LIMIT {QueryLimit}
+            {countryClause}
             """;
     }
 
@@ -226,7 +250,8 @@ public static class OverturePlacesLogic
             return false;
         }
 
-        var categoryText = $"{candidate.Category} {candidate.BasicCategory}".ToLowerInvariant();
+        LegacyPrimaryCategoryAliases.TryGetValue(candidate.Category ?? string.Empty, out var legacyCategory);
+        var categoryText = $"{candidate.Category} {candidate.BasicCategory} {legacyCategory}".ToLowerInvariant();
         if (string.IsNullOrWhiteSpace(categoryText))
         {
             return false;

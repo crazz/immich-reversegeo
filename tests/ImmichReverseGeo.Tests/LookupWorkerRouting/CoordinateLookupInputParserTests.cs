@@ -33,7 +33,22 @@ public sealed class CoordinateLookupInputParserTests
     [DataRow("")]
     [DataRow("not coordinates")]
     [DataRow("47 only")]
+    [DataRow("N٤٧ E٨")]
+    [DataRow("٤٧N ٨E")]
+    [DataRow("٤٧° ٢٧' ٥٢.٩٢\" N ٨° ٣٢' ٥٧.١٢\" E")]
     public void TryParse_RejectsMalformedText(string input)
+    {
+        Assert.IsFalse(CoordinateLookupInputParser.TryParse(input, out _, out _));
+    }
+
+    [TestMethod]
+    [DataRow("٤7N 8E")]
+    [DataRow("N47 E8٥")]
+    [DataRow("lat=47 lon=8٥")]
+    [DataRow("٤7° 0' 0\" N 8° 0' 0\" E")]
+    [DataRow("\U0001D7DC7N 8E")]
+    [DataRow("N47 E8\U0001D7DD")]
+    public void TryParse_RejectsMixedDigitCoordinatesBeforeMatching(string input)
     {
         Assert.IsFalse(CoordinateLookupInputParser.TryParse(input, out _, out _));
     }

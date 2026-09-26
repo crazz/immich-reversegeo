@@ -125,6 +125,29 @@ public sealed class SettingsSaveIntegrityTests
     }
 
     [TestMethod]
+    [DataRow("60 * * * *")]
+    [DataRow("*/0 * * * *")]
+    [DataRow("0 24 * * *")]
+    [DataRow("٠ ٢ * * *")]
+    public async Task InvalidSavedSchedule_UnrelatedProcessingSavePreservesOriginalCron(string cron)
+    {
+        await _service.SeedConfigAsync(new AppConfig
+        {
+            Schedule = new ScheduleConfig { Enabled = true, Cron = cron }
+        });
+        var settings = await CreateSettingsPageAsync();
+        GetField<AppConfig>(settings, "_cfg").Processing.BatchSize = 73;
+
+        await SaveAsync(settings);
+
+        var reloaded = await new ConfigService(NullLogger<ConfigService>.Instance, _directory).GetConfigAsync();
+        Assert.AreEqual(cron, reloaded.Schedule.Cron);
+        Assert.IsTrue(reloaded.Schedule.Enabled);
+        Assert.AreEqual(73, reloaded.Processing.BatchSize);
+        Assert.IsTrue(GetField<bool>(settings, "_saved"));
+    }
+
+    [TestMethod]
     public async Task OlderCityMatchingPage_SavesCountryOverrideWithoutRevertingNewerSettings()
     {
         var settings = await CreateSettingsPageAsync();

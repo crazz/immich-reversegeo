@@ -159,6 +159,52 @@ public sealed class SharedCompositionTests
     }
 
     [TestMethod]
+    [DoNotParallelize]
+    [DataRow("testuser", "testdb", "secret;Username=unexpected")]
+    [DataRow("testuser", "testdb", "semi;colon=with\"quotes' and spaces")]
+    [DataRow("test;user", "test;database", "secret")]
+    public void SharedRegistration_PreservesConnectionValuesContainingDelimiters(
+        string username, string database, string password)
+    {
+        var values = new Dictionary<string, string>
+        {
+            ["DB_HOST"] = "localhost",
+            ["DB_PORT"] = "5433",
+            ["DB_USERNAME"] = username,
+            ["DB_PASSWORD"] = password,
+            ["DB_DATABASE_NAME"] = database
+        };
+        var original = values.Keys.ToDictionary(name => name, Environment.GetEnvironmentVariable);
+        try
+        {
+            foreach (var (name, value) in values)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+
+            var services = new ServiceCollection();
+            services.AddSharedComposition(ApplicationCompositionContext.Create(
+                CompositionEnvironment.Development, "/composition/quoted-values", null, null));
+            using var provider = services.BuildServiceProvider();
+            var dataSource = provider.GetRequiredService<NpgsqlDataSource>();
+            var actual = new NpgsqlConnectionStringBuilder(dataSource.ConnectionString);
+
+            Assert.AreEqual(values["DB_HOST"], actual.Host);
+            Assert.AreEqual(5433, actual.Port);
+            Assert.AreEqual(values["DB_USERNAME"], actual.Username);
+            Assert.AreEqual(values["DB_DATABASE_NAME"], actual.Database);
+            Assert.AreEqual(GssEncryptionMode.Disable, actual.GssEncryptionMode);
+        }
+        finally
+        {
+            foreach (var (name, value) in original)
+            {
+                Environment.SetEnvironmentVariable(name, value);
+            }
+        }
+    }
+
+    [TestMethod]
     public void ProviderBuild_DoesNotMaterializeCountryCodeService()
     {
         var fixtureRoot = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));

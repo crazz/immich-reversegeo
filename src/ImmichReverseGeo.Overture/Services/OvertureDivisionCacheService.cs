@@ -48,7 +48,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
     private readonly ICacheFilePublisher _filePublisher;
     private readonly ICacheCandidateOwnership _candidateOwnership;
     private readonly ConcurrentDictionary<string, MutationFlight> _inflightDownloads = new();
-    private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
     private readonly ConcurrentDictionary<string, SemaphoreSlim> _mutationLocks = new();
 
     private readonly AdministrativeCandidatePreparation _candidatePreparation = new(
@@ -174,10 +173,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
             {
                 var status = _statusReader(file);
                 result[iso3] = status;
-                if (status.RowCount > 0)
-                {
-                    _readyCaches[iso3] = 0;
-                }
             }
             catch (OutOfMemoryException)
             {
@@ -200,17 +195,7 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
             return false;
         }
 
-        var hasData = TryReadUsableExistingCache(iso3, out _);
-        if (hasData)
-        {
-            _readyCaches[iso3] = 0;
-        }
-        else
-        {
-            _readyCaches.TryRemove(iso3, out _);
-        }
-
-        return hasData;
+        return TryReadUsableExistingCache(iso3, out _);
     }
 
     public async ValueTask<CacheMutationSourceResult> ExecuteAsync(
@@ -550,7 +535,6 @@ public class OvertureDivisionCacheService : ICacheMutationSourceOperation
             _candidatePreparation.RememberReady(dbPath);
             await _afterPublication(ct);
             ct.ThrowIfCancellationRequested();
-            _readyCaches[iso3] = 0;
             _logger.LogInformation("Overture division download complete for {ISO3}: {Rows} areas", iso3, rowCount);
             return CacheMutationDisposition.Published;
         }

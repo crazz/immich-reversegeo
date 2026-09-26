@@ -216,30 +216,38 @@ public sealed class CacheDeletionPageControllerTests
                 await releaseReload.Task;
             });
 
-        Task attempt = ConfirmDeleteAsync(
-            controller,
-            new CacheDeletionTarget(CacheMutationSource.Overture, "CHE"));
-        Assert.AreEqual(CacheDeletionPagePhase.Deleting, controller.State.Phase);
-        Assert.IsTrue(controller.State.ControlsDisabled);
-
         CacheDeletionOperationResult finalized = Completed(Target(
             CacheMutationSource.Overture,
             "CHE",
             CacheDeletionTargetDisposition.Deleted));
-        command.TrySetResult(finalized);
-        await reloadStarted.Task.WaitAsync(Bound);
+        try
+        {
+            Task attempt = ConfirmDeleteAsync(
+                controller,
+                new CacheDeletionTarget(CacheMutationSource.Overture, "CHE"));
+            Assert.AreEqual(CacheDeletionPagePhase.Deleting, controller.State.Phase);
+            Assert.IsTrue(controller.State.ControlsDisabled);
 
-        Assert.AreEqual(CacheDeletionPagePhase.Reloading, controller.State.Phase);
-        Assert.IsTrue(controller.State.ControlsDisabled);
-        Assert.AreSame(finalized, controller.State.Result);
-        Assert.IsFalse(attempt.IsCompleted);
+            command.TrySetResult(finalized);
+            await reloadStarted.Task.WaitAsync(Bound);
 
-        releaseReload.TrySetResult();
-        await attempt.WaitAsync(Bound);
+            Assert.AreEqual(CacheDeletionPagePhase.Reloading, controller.State.Phase);
+            Assert.IsTrue(controller.State.ControlsDisabled);
+            Assert.AreSame(finalized, controller.State.Result);
+            Assert.IsFalse(attempt.IsCompleted);
 
-        Assert.AreEqual(CacheDeletionPagePhase.Completed, controller.State.Phase);
-        Assert.IsFalse(controller.State.ControlsDisabled);
-        Assert.AreSame(finalized, controller.State.Result);
+            releaseReload.TrySetResult();
+            await attempt.WaitAsync(Bound);
+
+            Assert.AreEqual(CacheDeletionPagePhase.Completed, controller.State.Phase);
+            Assert.IsFalse(controller.State.ControlsDisabled);
+            Assert.AreSame(finalized, controller.State.Result);
+        }
+        finally
+        {
+            command.TrySetResult(finalized);
+            releaseReload.TrySetResult();
+        }
     }
 
     [TestMethod]
@@ -311,7 +319,7 @@ public sealed class CacheDeletionPageControllerTests
             TaskCreationOptions.RunContinuationsAsynchronously);
         var reloads = 0;
         var renders = 0;
-        var controller = CreateController(
+        await using var controller = CreateController(
             delete: _ =>
             {
                 commandStarted.TrySetResult();
@@ -328,22 +336,30 @@ public sealed class CacheDeletionPageControllerTests
                 return Task.CompletedTask;
             });
 
-        Task attempt = ConfirmDeleteAsync(
-            controller,
-            new CacheDeletionTarget(CacheMutationSource.Overture, "CHE"));
-        await commandStarted.Task.WaitAsync(Bound);
-        int rendersBeforeDisposal = renders;
-        Task disposal = controller.DisposeAsync().AsTask();
-        Assert.IsFalse(disposal.IsCompleted);
-
-        command.TrySetResult(Completed(Target(
+        CacheDeletionOperationResult finalized = Completed(Target(
             CacheMutationSource.Overture,
             "CHE",
-            CacheDeletionTargetDisposition.Deleted)));
-        await Task.WhenAll(attempt, disposal).WaitAsync(Bound);
+            CacheDeletionTargetDisposition.Deleted));
+        try
+        {
+            Task attempt = ConfirmDeleteAsync(
+                controller,
+                new CacheDeletionTarget(CacheMutationSource.Overture, "CHE"));
+            await commandStarted.Task.WaitAsync(Bound);
+            int rendersBeforeDisposal = renders;
+            Task disposal = controller.DisposeAsync().AsTask();
+            Assert.IsFalse(disposal.IsCompleted);
 
-        Assert.AreEqual(0, reloads);
-        Assert.AreEqual(rendersBeforeDisposal, renders);
+            command.TrySetResult(finalized);
+            await Task.WhenAll(attempt, disposal).WaitAsync(Bound);
+
+            Assert.AreEqual(0, reloads);
+            Assert.AreEqual(rendersBeforeDisposal, renders);
+        }
+        finally
+        {
+            command.TrySetResult(finalized);
+        }
     }
 
     private static CacheDeletionPageController CreateController(

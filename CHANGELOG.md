@@ -6,6 +6,7 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Updated live Overture Places queries for the September 2026 schema and documented category renames. Removed the raw Places row cap that could hide nearby landmarks behind unrelated results in dense areas; geographic bounds, confidence thresholds and ranking are retained. Added local Parquet coverage for both schemas, late-arriving landmarks and category compatibility. See the [public release summary](docs/website/changelog.md#unreleased).
 - Processing now evaluates the configured primary administrative source first and consults the enabled secondary source only for a null city or state. GADM enable/prefer settings, territory precedence, airport rules and individual Immich writes are preserved; Lookup retains all requested source diagnostics.
 - Added optional persistent administrative candidate metadata and R-tree bounds, with exact double filtering, characterized legacy scan-order compatibility and whole-query fallback. Existing country caches are augmented offline through a bounded temporary-copy publication; source rows/WKB/version/download dates remain intact. Ordinary optional preparation failures retain usable legacy caches. Owned Overture mutations now drain cleanup before returning cancellation. No Compose changes or larger geometry budget are required. See [cache preparation](./docs/website/using-the-app.md#administrative-cache-inventory).
 

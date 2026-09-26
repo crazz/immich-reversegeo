@@ -14,6 +14,31 @@ namespace ImmichReverseGeo.Tests;
 public sealed class AdminConsoleChromeTests
 {
     [TestMethod]
+    [DataRow("", true, true, true)]
+    [DataRow("[WARN]", false, true, true)]
+    [DataRow("[ERROR]", false, false, true)]
+    public async Task Logs_FilterPreservesSelectedSeverityAndHigher(
+        string filter, bool includeInformation, bool includeWarning, bool includeError)
+    {
+        var state = new ProcessingState();
+        state.AppendLog("Information message");
+        state.AppendLog("[WARN] Warning message");
+        state.AppendLog("[ERROR] Error message");
+        var page = new ImmichReverseGeo.Web.Components.Pages.Logs();
+        const BindingFlags flags = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic;
+        page.GetType().GetProperty("State", flags)!.SetValue(page, state);
+        page.GetType().GetField("_levelFilter", flags)!.SetValue(page, filter);
+        await using var renderer = new WebStatusRenderingTests.ComponentRenderer();
+        await renderer.AttachAsync(page);
+
+        var rendered = await renderer.ReadFlattenedAsync();
+
+        Assert.AreEqual(includeInformation, rendered.Text.Contains("Information message", StringComparison.Ordinal));
+        Assert.AreEqual(includeWarning, rendered.Text.Contains("Warning message", StringComparison.Ordinal));
+        Assert.AreEqual(includeError, rendered.Text.Contains("Error message", StringComparison.Ordinal));
+    }
+
+    [TestMethod]
     public async Task Operator_ScansTheRailOnAWideScreen()
     {
         var status = new ProcessAssetsWebStatus(DeploymentMode.Standard);

@@ -1,5 +1,6 @@
 using System;
 using System.Globalization;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace ImmichReverseGeo.Web.Services;
@@ -12,6 +13,14 @@ internal static partial class CoordinateLookupInputParser
         if (string.IsNullOrWhiteSpace(input))
         {
             return false;
+        }
+
+        foreach (Rune character in input.EnumerateRunes())
+        {
+            if (!character.IsAscii && Rune.IsDigit(character))
+            {
+                return false;
+            }
         }
 
         string text = SeparatorRegex().Replace(input.Trim(), " ");
@@ -92,18 +101,18 @@ internal static partial class CoordinateLookupInputParser
     private static partial Regex WhitespaceRegex();
 
     [GeneratedRegex(
-        @"(\d+)[°d\s]\s*(\d+)['']\s*(\d+(?:\.\d+)?)['""s]?\s*([NSns])\s+" +
-        @"(\d+)[°d\s]\s*(\d+)['']\s*(\d+(?:\.\d+)?)['""s]?\s*([EWew])")]
+        @"([0-9]+)[°d\s]\s*([0-9]+)['']\s*([0-9]+(?:\.[0-9]+)?)['""s]?\s*([NSns])\s+" +
+        @"([0-9]+)[°d\s]\s*([0-9]+)['']\s*([0-9]+(?:\.[0-9]+)?)['""s]?\s*([EWew])")]
     private static partial Regex DmsRegex();
 
-    [GeneratedRegex(@"([NSns])\s*(\d+(?:\.\d+)?)\s+([EWew])\s*(\d+(?:\.\d+)?)")]
+    [GeneratedRegex(@"([NSns])\s*([0-9]+(?:\.[0-9]+)?)\s+([EWew])\s*([0-9]+(?:\.[0-9]+)?)")]
     private static partial Regex DirectionPrefixRegex();
 
-    [GeneratedRegex(@"(\d+(?:\.\d+)?)\s*([NSns])\s+(\d+(?:\.\d+)?)\s*([EWew])")]
+    [GeneratedRegex(@"([0-9]+(?:\.[0-9]+)?)\s*([NSns])\s+([0-9]+(?:\.[0-9]+)?)\s*([EWew])")]
     private static partial Regex DirectionSuffixRegex();
 
     [GeneratedRegex(
-        @"lat\s*=\s*(-?\d+(?:\.\d+)?)\s+lon\s*=\s*(-?\d+(?:\.\d+)?)",
+        @"lat\s*=\s*(-?[0-9]+(?:\.[0-9]+)?)\s+lon\s*=\s*(-?[0-9]+(?:\.[0-9]+)?)",
         RegexOptions.IgnoreCase)]
     private static partial Regex NamedRegex();
 }

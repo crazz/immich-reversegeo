@@ -600,11 +600,12 @@ internal sealed class CoordinateLookupOperation
             }
 
             cancellationToken.ThrowIfCancellationRequested();
+            bool hasData = _sources.HasOvertureCache(iso3);
             return new CacheOutcome(
-                _sources.HasOvertureCache(iso3),
+                hasData,
                 [new CoordinateLookupCacheStatus(
                     iso3,
-                    _sources.HasOvertureCache(iso3)
+                    hasData
                         ? CoordinateLookupSourceState.Ready
                         : CoordinateLookupSourceState.Unavailable,
                     null)],

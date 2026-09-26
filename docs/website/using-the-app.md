@@ -47,6 +47,8 @@ See the [worker state table](./deployment-modes.md#worker-status-and-recovery) f
 
 ## Lookup
 
+Use digits `0`–`9` when pasting coordinates; other digit formats are rejected.
+
 Use the Lookup page when you want to test a coordinate before running a full processing pass.
 
 - paste or type coordinates to see how the resolver behaves for that point
@@ -136,7 +138,7 @@ This coordination applies within one Standard or Web-only Web process. For stric
 
 Use the Logs page when you want to inspect recent activity outside the Overview summary.
 
-- filter the in-app log view to all messages, warnings, or errors
+- filter the in-app log view to all messages, warnings and errors (`Warnings+`), or errors only
 - download the current filtered view as `immich-reversegeo.log`
 
 Long log messages wrap to fit the screen. Wrapping does not change the text or order in the downloaded log.

@@ -513,9 +513,8 @@
     "Dependencies": [
       "ImmichReverseGeo.Core.Models.DbSettings",
       "ImmichReverseGeo.Web.Services.ConfigService",
-      "Npgsql.NpgsqlDataSourceBuilder",
-      "System.Int32",
-      "System.Runtime.CompilerServices.DefaultInterpolatedStringHandler"
+      "Npgsql.NpgsqlConnectionStringBuilder",
+      "Npgsql.NpgsqlDataSourceBuilder"
     ]
   }
 ]

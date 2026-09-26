@@ -33,7 +33,8 @@
     private IEnumerable<string> FilteredLog =>
         string.IsNullOrEmpty(_levelFilter)
             ? State.GetRecentLog()
-            : State.GetRecentLog().Where(l => l.Contains(_levelFilter));
+            : State.GetRecentLog().Where(line => line.Contains(_levelFilter)
+                || (_levelFilter == "[WARN]" && line.Contains("[ERROR]")));
 
     protected override void OnInitialized() => State.OnChanged += Refresh;
     public void Dispose()

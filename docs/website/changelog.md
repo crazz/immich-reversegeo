@@ -10,6 +10,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/crazz/i
 
 ## Unreleased
 
+- Fixed optional live Overture Places searches after the September 2026 data update, including missed landmarks in busy areas. See [Lookup](./using-the-app.md#lookup) to check a coordinate and compare the results.
 - Processing skips an unnecessary secondary administrative lookup once the preferred source has both city and state. Your GADM switches still control which source is used first; Lookup continues to show the requested source comparisons. See [GADM settings](./configuration.md#gadm-administrative-areas).
 - Downloaded country caches can now use a small disk search index without increasing the geometry memory budget. Existing caches are prepared locally when needed, preserving their geodata and download dates. Allow temporary space for one additional country cache; no cache reset or Compose change is needed. If optional preparation fails, a valid existing cache remains usable. See [cache preparation](./using-the-app.md#administrative-cache-inventory).
 

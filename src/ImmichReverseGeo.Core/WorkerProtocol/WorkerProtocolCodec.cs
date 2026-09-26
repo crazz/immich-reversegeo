@@ -501,18 +501,6 @@ public static class WorkerProtocolCodec
         return element.ValueKind == JsonValueKind.String && TryCanonicalGuid(element.GetString(), out value);
     }
 
-    private static bool TryProcessingRunTrigger(string value, out ProcessingRunTrigger trigger)
-    {
-        trigger = value switch
-        {
-            "manual" => ProcessingRunTrigger.Manual,
-            "scheduled" => ProcessingRunTrigger.Scheduled,
-            "run-once" => ProcessingRunTrigger.RunOnce,
-            _ => default
-        };
-        return WorkerProtocolConversions.IsTrigger(value);
-    }
-
     private static bool TryGuid(JsonElement element, string name, out Guid value)
     {
         value = Guid.Empty;

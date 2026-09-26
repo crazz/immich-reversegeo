@@ -46,7 +46,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
     private readonly Action _afterInFlightTaskAcquired;
     private readonly Action _afterSharedMutationObserved;
     private readonly ConcurrentDictionary<string, InflightMutation> _inflightMutations = new();
-    private readonly ConcurrentDictionary<string, byte> _readyCaches = new();
 
     private readonly AdministrativeCandidatePreparation _candidatePreparation = new(
         GeometrySource.Gadm,
@@ -226,10 +225,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
             {
                 var status = _statusOperation(file);
                 result[iso3] = status;
-                if (status.RowCount > 0)
-                {
-                    _readyCaches[iso3] = 0;
-                }
             }
             catch (OutOfMemoryException)
             {
@@ -253,19 +248,9 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
         }
 
         string path = GetDbPath(iso3);
-        var hasData = RunHasRowsOperation(path, "gadm_area")
+        return RunHasRowsOperation(path, "gadm_area")
             && RunValidationOperation(path)
             && EncodedCountryMatches(path, iso3);
-        if (hasData)
-        {
-            _readyCaches[iso3] = 0;
-        }
-        else
-        {
-            _readyCaches.TryRemove(iso3, out _);
-        }
-
-        return hasData;
     }
 
     public async ValueTask<CacheMutationSourceResult> ExecuteAsync(
@@ -649,7 +634,6 @@ public class GadmDivisionCacheService : ICacheMutationSourceOperation
             _candidatePreparation.RememberReady(dbPath);
             await _afterPublicationOperation(ct);
             ct.ThrowIfCancellationRequested();
-            _readyCaches[iso3] = 0;
             _logger.LogInformation("GADM division download complete for {ISO3} via {GadmCode}: {Rows} areas", iso3, gadmCode, rowCount);
 
             if (!TryReadWorkerResult(

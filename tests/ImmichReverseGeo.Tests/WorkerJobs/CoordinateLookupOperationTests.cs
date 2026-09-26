@@ -63,6 +63,37 @@ public sealed class CoordinateLookupOperationTests
     }
 
     [TestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task ExecuteAsync_UsesOneCacheReadinessSnapshotForQueryAndDiagnostics(bool initiallyReady)
+    {
+        var readinessChecks = 0;
+        var sources = new RecordingSources
+        {
+            Country = BundledCountryLookupResult.Matched("USA", "United States", "US", "country-us"),
+            Overture = OvertureDiagnostics(),
+            OvertureCacheReadiness = _ => ++readinessChecks == 1 ? initiallyReady : !initiallyReady
+        };
+        var operation = new CoordinateLookupOperation(
+            sources,
+            new FixedTimeProvider(Started.AddSeconds(1)));
+
+        CoordinateLookupResult result = await operation.ExecuteAsync(
+            Request(),
+            Started,
+            new RecordingReporter(),
+            CancellationToken.None);
+
+        var expectedState = initiallyReady
+            ? CoordinateLookupSourceState.Ready
+            : CoordinateLookupSourceState.Unavailable;
+        Assert.AreEqual(expectedState, result.OvertureDivisions.State);
+        Assert.AreEqual(expectedState, result.OvertureDivisions.Caches.Single().State);
+        Assert.AreEqual(initiallyReady ? 1 : 0, sources.OvertureQueryCalls);
+        Assert.AreEqual(1, readinessChecks);
+    }
+
+    [TestMethod]
     public async Task ExecuteAsync_NoCountryStartsNoCacheOrOptionalSourceWork()
     {
         var sources = new RecordingSources
@@ -1211,6 +1242,7 @@ public sealed class CoordinateLookupOperationTests
         internal Func<CancellationToken, (Task Task, OvertureDivisionEnsureResult Result)>?
             StartOvertureCache { get; init; }
         internal OvertureDivisionCacheService? ActualOvertureCache { get; init; }
+        internal Func<string, bool>? OvertureCacheReadiness { get; init; }
         internal Func<CancellationToken, Task<OvertureInfrastructureLookupDiagnostics>>?
             AirportOperation { get; init; }
 
@@ -1266,7 +1298,7 @@ public sealed class CoordinateLookupOperationTests
         }
 
         public bool HasOvertureCache(string iso3) =>
-            ActualOvertureCache?.HasData(iso3) ?? true;
+            OvertureCacheReadiness?.Invoke(iso3) ?? ActualOvertureCache?.HasData(iso3) ?? true;
 
         public Task<OvertureDivisionLookupDiagnostics> FindOvertureDivisionsAsync(
             double latitude,

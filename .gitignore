@@ -6,6 +6,8 @@
 .vscode/
 .DS_Store
 /config/
+/localdata/
+/.planning/
 /src/ImmichReverseGeo.Web/localdata/
 **/.playwright-mcp/
 **/TestResults/

@@ -68,9 +68,8 @@ internal enum ScheduledTriggerResult
     AcceptedAfterTerminal
 }
 
-// Change 12 is implemented directly by ProcessingBackgroundService to avoid a DI back-edge.
-// Block 13 replaces this temporary owner while preserving Scheduled identity, accepted-after-terminal
-// completion, contention, hosted-token, clock/wait, config-reevaluation, and next-run visibility semantics.
+// ProcessingRunCoordinator owns scheduled admission and terminal completion.
+// The schedule loop delegates through this contract to share manual-run exclusion and cleanup.
 internal interface IScheduledRunTrigger
 {
     Task<ScheduledTriggerResult> TriggerScheduledAsync(CancellationToken stoppingToken);

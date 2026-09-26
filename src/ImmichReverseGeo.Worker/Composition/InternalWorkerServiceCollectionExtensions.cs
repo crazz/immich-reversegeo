@@ -17,7 +17,7 @@ using Npgsql;
 namespace ImmichReverseGeo.Web.Composition;
 
 /// <summary>
-/// Registers the builder-neutral execution graph consumed by the future internal-worker host.
+/// Registers the execution graph shared by internal-worker and run-once hosts.
 /// </summary>
 internal static class InternalWorkerServiceCollectionExtensions
 {

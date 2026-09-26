@@ -609,7 +609,10 @@ public sealed class AdministrativeAreaResolverEventReportingTests
             var gadm = CreateGadmCache(root, GSource);
             var storage = new StorageOptions(root, root); var places = new OverturePlacesService(NullLogger<OverturePlacesService>.Instance, root, root); var divisions = new OvertureDivisionsService(NullLogger<OvertureDivisionsService>.Instance, places, root, root, alpha => catalog.FindByAlpha2(alpha)?.Alpha3);
             var resolver = new AdministrativeAreaResolverService(NullLogger<AdministrativeAreaResolverService>.Instance, new CityResolverProfileCatalogService(NullLogger<CityResolverProfileCatalogService>.Instance, storage), divisions, overture, new GadmDivisionsService(NullLogger<GadmDivisionsService>.Instance, root), gadm);
-            await Task.CompletedTask; return new(root, source, overture, gadm, resolver, oe, ge, ro, rg, reporter, signals);
+            // Cold country geometry loading must finish before another fixture's
+            // source gate starts its watchdog in the concurrent activity tests.
+            await divisions.FindBundledCountryAsync(38.9, -77.0);
+            return new(root, source, overture, gadm, resolver, oe, ge, ro, rg, reporter, signals);
         }
 
         public async Task<IProcessingRunEventSession> OpenSessionAsync() { var request = new ProcessingRunRequest(Guid.NewGuid(), ProcessingRunTrigger.Manual); var session = await Reporter.OpenRunAsync(request, DateTimeOffset.UtcNow); await session.DetermineEligibilityAsync(0); return session; }

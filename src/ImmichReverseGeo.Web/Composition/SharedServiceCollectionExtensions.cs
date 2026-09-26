@@ -9,7 +9,7 @@ namespace ImmichReverseGeo.Web.Composition;
 internal static class SharedServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers the non-Web services shared by the Web and future internal-worker roots.
+    /// Registers lightweight services shared by Web, internal-worker, and run-once hosts.
     /// </summary>
     internal static IServiceCollection AddSharedComposition(
         this IServiceCollection services,
@@ -31,8 +31,16 @@ internal static class SharedServiceCollectionExtensions
         services.AddSingleton<NpgsqlDataSource>(sp =>
         {
             var db = sp.GetRequiredService<ConfigService>().GetDbSettings();
-            var connectionString = $"Host={db.Host};Port={db.Port};Username={db.Username};Password={db.Password};Database={db.Database};GSS Encryption Mode=Disable";
-            var builder = new NpgsqlDataSourceBuilder(connectionString);
+            var connectionString = new NpgsqlConnectionStringBuilder
+            {
+                Host = db.Host,
+                Port = db.Port,
+                Username = db.Username,
+                Password = db.Password,
+                Database = db.Database,
+                GssEncryptionMode = GssEncryptionMode.Disable
+            };
+            var builder = new NpgsqlDataSourceBuilder(connectionString.ConnectionString);
             return builder.Build();
         });
 

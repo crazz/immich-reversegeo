@@ -54,6 +54,8 @@ The app reads:
 
 These values are required because the app reads and updates immich data directly.
 
+Database values are treated literally, including passwords containing semicolons or quotation marks. Preserve those characters when setting your container environment.
+
 <div class="step-grid">
   <div class="step-card">
     <h3>Read-only by design</h3>
@@ -78,7 +80,7 @@ The Settings page lets you control:
 - whether split-territory GADM fallback families should be tried
 - whether every asset is written to the log
 
-Most users should stay on the preset schedule options. Manual runs from the dashboard still work even when automatic scheduling is disabled.
+Most users should stay on the preset schedule options. Manual runs from the dashboard still work even when automatic scheduling is disabled. Saved schedules with invalid values stay in the custom editor and are preserved when you save other settings.
 
 Standard supports hourly, every-few-minutes, every-few-hours, daily, weekly, and custom-cron schedules. Each due check asks whether any currently eligible asset exists across the full eligibility range before admitting a worker. It does not count the work or reserve those assets. See [NAS and HDD scheduling](./deployment-modes.md#nas-and-hdd-scheduling) for disk-activity tradeoffs. Web-only ignores the saved schedule while retaining its values.
 
