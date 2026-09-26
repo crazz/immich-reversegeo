@@ -38,6 +38,36 @@ jobs:
       - name: Test
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --no-build --filter "TestCategory!=Integration&TestCategory!=Performance"
 
+  settings-integrity:
+    name: Operator settings integrity (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        # Linux runs these tests in the full default suite above.
+        os: [windows-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test settings saving, permissions, and city inheritance
+        run: npm run agent:test -- --filter "FullyQualifiedName~SettingsFilePermissionTests|FullyQualifiedName~SettingsSaveIntegrityTests|FullyQualifiedName~ConfigServiceTests|FullyQualifiedName~AppearancePreferenceTests|FullyQualifiedName~CityResolverEditingTests"
+
+      - name: Upload settings test logs
+        if: always()
+        uses: actions/upload-artifact@v6
+        with:
+          name: settings-integrity-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: _out/agent-tests/
+          if-no-files-found: error
+          retention-days: 7
+
   # Block 68 memory soak remains separately invoked, outside required PR CI.
   docker-mode-integration:
     name: Docker Mode Integration
