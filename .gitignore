@@ -14,3 +14,5 @@
 _out/
 reversegeo/
 .playwright-cli/
+
+/.local/immich-db/
