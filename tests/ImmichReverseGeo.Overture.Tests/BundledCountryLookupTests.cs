@@ -102,15 +102,46 @@ public class BundledCountryLookupTests
     }
 
     [TestMethod]
-    public async Task PointOutsideBoundingBox_IsRescuedByTolerance()
+    [DataRow(0.00005, "AAA")]
+    [DataRow(0.00025, null)]
+    public async Task PointOutsideBoundingBox_ResolvesOnlyWithinTolerance(double offset, string? expectedIso3)
     {
         var root = CreateFixture();
         try
         {
-            var service = CreateService(root);
+            var result = await CreateService(root).FindBundledCountryAsync(PointLat, 9.0 - offset);
 
-            // The expanded query envelope includes a country just beyond its source bounds.
-            var result = await service.FindBundledCountryAsync(PointLat, 9.0 - 0.00005);
+            Assert.AreEqual(expectedIso3, result.Iso3);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task ExactCountryMatch_WinsOverSmallerToleranceOnlyNeighbour()
+    {
+        var root = CreateFixture();
+        try
+        {
+            var factory = new GeometryFactory(new PrecisionModel(), 4326);
+            var nearby = factory.CreatePolygon([
+                new Coordinate(8.99985, 49.99994),
+                new Coordinate(8.99994, 49.99985),
+                new Coordinate(9.00003, 49.99994),
+                new Coordinate(8.99994, 50.00003),
+                new Coordinate(8.99985, 49.99994)
+            ]);
+            using (var conn = new SqliteConnection($"Data Source={Path.Combine(root, "defaults", "overture-country-divisions.db")}"))
+            {
+                conn.Open();
+                InsertCountry(conn, new WKBWriter(), "nearby", "Nearby", "SP", "SPP", nearby);
+            }
+
+            // AA covers this boundary point exactly. The smaller neighbour's bounding box
+            // also contains it, but its geometry only intersects the tolerance rectangle.
+            var result = await CreateService(root).FindBundledCountryAsync(PointLat, 9.0);
 
             Assert.AreEqual("AAA", result.Iso3);
         }

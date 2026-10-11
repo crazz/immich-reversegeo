@@ -16,6 +16,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 - Older custom country databases remain readable without modification. Incorrect identities in newer-format databases produce a clear mapping error.
 - Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.
 
+- Apply the existing small country-boundary tolerance to points just outside a country polygon's bounding box, while keeping exact country matches preferred.
+
 - Keep overlapping area choices consistent when otherwise equal matches arrive in a different order.
 
 - Lookup now explains whether no country boundary matched or a matched boundary has an unresolved country code.

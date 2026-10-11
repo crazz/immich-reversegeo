@@ -12,6 +12,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 - Prefer supported dependency boundaries over overlapping sovereign countries in bundled country lookup.
 - Add territory-resolution and downstream Overture/GADM routing tests, plus country-index size, memory, initialization, and warm-lookup performance budgets.
 
+- Query the bundled country spatial index using the existing tolerance envelope so nearby points outside source bounding boxes can resolve. Preserve prepared-geometry exact matching before tolerance and actual bounding-box containment ranking.
+
 - Make equal Overture division candidates deterministic: rank known administrative levels before missing levels and use ordinal source IDs for otherwise equal candidates. Preserve containment, subtype, territorial, and bounding-box-area priorities.
 
 - Return structured bundled-country lookup outcomes and source IDs; distinguish spatial misses from unresolved identities in Lookup and processing progress. Preserve the shipped database and existing spatial selection.
