@@ -6,6 +6,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Enhance the country exporter to include dependencies, canonical catalog identities, and source traceability. Validate generated artifacts and shared coordinate coverage before replacement, and add a read-only validation mode. This tooling change does not replace shipped country data or change runtime resolution.
+
 - Use the web project Version as the release version source and stamp app artifacts with the source SHA, include bundled runtime geodata, validate package contents and SQLite headers, emit SHA-256 checksums and signed provenance through official GitHub actions, and enforce strict release docs builds.
 - Add a portable country identity catalog with explicit display names, Alpha-2/Alpha-3 mappings, and source aliases. CountryCodeService uses the catalog for country options; retain legacy flat mapping-file support. Geographic boundaries and containment selection are unchanged.
 
