@@ -1718,6 +1718,7 @@ input[type="text"].env-readonly {
 }
 
 /* Reconnect dialog: shared styles stay in this global stylesheet. */
+.components-reconnect-rejected-visible,
 .components-reconnect-first-attempt-visible,
 .components-reconnect-repeated-attempt-visible,
 .components-reconnect-failed-visible,
@@ -1727,6 +1728,7 @@ input[type="text"].env-readonly {
     display: none;
 }
 
+#components-reconnect-modal.components-reconnect-rejected .components-reconnect-rejected-visible,
 #components-reconnect-modal.components-reconnect-show .components-reconnect-first-attempt-visible,
 #components-reconnect-modal.components-reconnect-show .components-rejoining-animation,
 #components-reconnect-modal.components-reconnect-paused .components-pause-visible,
