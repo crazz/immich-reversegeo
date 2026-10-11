@@ -1,5 +1,27 @@
 # Release Checklist
 
+## Prepare and verify candidate artifacts
+
+- Start from a reviewed candidate commit and keep unrelated work separate.
+- Set `Version` in `src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj` to the intended SemVer in the candidate PR and update both changelogs together. The development version is `0.0.0-dev`. Run the Release workflow on that reviewed branch or tag; `release_name` only labels artifacts and cannot change the app version.
+- The workflow stamps the app's version and full source SHA, runs tests and strict docs validation, includes bundled geodata, and checks required files, SQLite headers, and ZIP integrity. A release tag must match the project version. Official `actions/attest` signs the ZIP digests and their build provenance; `actions/upload-artifact` stores the packages. Python is needed only for Zensical.
+- Download the web, docs, and verification artifacts from the same successful run into one directory. Compare `release-build.json` with the independently reviewed candidate SHA and project version. Run `sha256sum -c SHA256SUMS` from that directory. These checksums cover the actual inner ZIPs; upload-artifact's reported digest covers its outer artifact archive. The app ZIP includes the same `release-build.json` and the verification artifact includes the signed `attestation.json` bundle.
+- Keep checksums beside the ZIPs in a draft release. If the source commit changes after review or merge, regenerate the artifacts and replace the draft assets and checksums together.
+- Candidate packaging does not publish a GitHub release, create a tag, or promote Docker images. Complete the existing publishing checks below separately. Docker remains the recommended end-user installation path.
+
+Verify each downloaded ZIP with GitHub CLI, using the expected source commit and ref from your candidate review (replace the placeholders):
+
+```bash
+gh attestation verify immich-reversegeo-web.zip --repo immich-reversegeo/immich-reversegeo \
+  --source-digest <expected-sha> --source-ref refs/heads/<candidate-branch> \
+  --signer-workflow immich-reversegeo/immich-reversegeo/.github/workflows/release.yml
+gh attestation verify immich-reversegeo-docs.zip --repo immich-reversegeo/immich-reversegeo \
+  --source-digest <expected-sha> --source-ref refs/heads/<candidate-branch> \
+  --signer-workflow immich-reversegeo/immich-reversegeo/.github/workflows/release.yml
+```
+
+For a tag run, use `refs/tags/<tag>` instead. Add `--bundle attestation.json` to verify the downloaded bundle rather than fetching attestations. Provenance verifies the build source and artifact identity; it does not prove runtime behavior or database correctness. ZIPs are workflow artifacts and no GitHub release is created. Signing permissions are scoped to the Release job; app CI retains its existing permissions.
+
 ## GitHub
 
 - Push `master`
