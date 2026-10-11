@@ -1,23 +1,30 @@
 @page "/settings"
 @rendermode InteractiveServer
 @inject ConfigService Config
+@inject IJSRuntime JS
+@using System.IO
+@using System.Text.Json
 @inject ImmichDbRepository Db
 
+<PageTitle>Settings - Immich ReverseGeo</PageTitle>
+<NavigationLock ConfirmExternalNavigation="@HasChanges" OnBeforeInternalNavigation="ConfirmNavigation" />
 <h2>Settings</h2>
 
-@if (_saved)
+@if (_loadError is not null)
 {
-    <div class="alert alert-success">Settings saved.</div>
+    <div class="alert alert-error" role="alert">@_loadError</div>
+    <button class="btn btn-secondary" @onclick="LoadSettings">Retry loading settings</button>
 }
-@if (_saveError is not null)
+else if (!_saveState.IsLoaded)
 {
-    <div class="alert alert-error">@_saveError</div>
+    <p role="status">Loading settings...</p>
 }
-@if (_dbEnvironmentWarning is not null)
+else
 {
-    <div class="alert alert-error">@_dbEnvironmentWarning</div>
+@if (_saveState.Error is not null)
+{
+    <div class="alert alert-error" role="alert">@_saveState.Error</div>
 }
-
 <section class="settings-card">
     <details class="settings-disclosure">
         <summary>Database Connection Details</summary>
@@ -44,14 +51,19 @@
             <input type="password" value="@_dbPassword" class="form-control env-readonly" readonly aria-readonly="true" />
         </div>
         <div class="btn-row">
-            <button @onclick="TestConnection" class="btn btn-secondary">Test Connection</button>
+            <button @onclick="TestConnection" class="btn btn-secondary" disabled="@_testingConnection">@(_testingConnection ? "Testing..." : "Test Connection")</button>
             @if (_connResult.HasValue)
             {
                 <span class="@(_connResult.Value ? "ok" : "fail")">
                     @(_connResult.Value ? "✓ Connected" : "✗ Failed")
                 </span>
             }
+            @if (_connectionError is not null)
+            {
+                <span class="fail" role="alert">@_connectionError</span>
+            }
         </div>
+        <p class="hint">Testing checks the environment-backed connection. It does not save settings.</p>
     </details>
 </section>
 
@@ -215,55 +227,108 @@
 </section>
 
 <div class="btn-row">
-    <button @onclick="Save" class="btn btn-primary">Save All Settings</button>
+    <span role="status">@(_saveState.IsSaving ? "Saving..." : HasChanges ? "Unsaved changes" : "All changes saved")</span>
+    <button @onclick="Save" class="btn btn-primary" disabled="@(_saveState.IsSaving || !HasChanges)">@(_saveState.IsSaving ? "Saving..." : "Save changes")</button>
 </div>
+
+}
 
 @code {
     private AppConfig _cfg = new();
     private string _dbHost = "", _dbName = "", _dbUser = "", _dbPassword = "";
     private int _dbPort = 5432;
-    private bool _saved;
-    private string? _saveError;
-    private string? _dbEnvironmentWarning;
+    private readonly SettingsSaveState _saveState = new();
+    private string? _loadError;
+    private bool HasChanges => _saveState.HasChanges(BuildSaveConfig());
+    private bool _testingConnection;
+    private string? _connectionError;
     private bool? _connResult;
     private ScheduleEditorState _schedule = new();
 
-    protected override async Task OnInitializedAsync()
-    {
-        _cfg = await Config.GetConfigAsync();
-        var db = Config.GetDbSettings();
-        _dbHost = db.Host;
-        _dbPort = db.Port;
-        _dbName = db.Database;
-        _dbUser = db.Username;
-        _dbEnvironmentWarning = string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable("DB_HOST"))
-            ? "DB_HOST is not present in the current process environment, so the app is using the default host value 'database'. If you expected a different value from Visual Studio, restart Visual Studio after changing the environment variable."
-            : null;
-        _schedule = ScheduleEditorState.FromCron(_cfg.Schedule.Cron);
-    }
+    protected override Task OnInitializedAsync() => LoadSettings();
 
+    private async Task LoadSettings()
+    {
+        _loadError = null;
+        try
+        {
+            _cfg = await Config.GetConfigAsync();
+            var db = Config.GetDbSettings();
+            _dbHost = db.Host;
+            _dbPort = db.Port;
+            _dbName = db.Database;
+            _dbUser = db.Username;
+            _schedule = ScheduleEditorState.FromCron(_cfg.Schedule.Cron);
+            _saveState.Load(BuildSaveConfig());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _loadError = "Settings could not be loaded. Check settings.json and its permissions, then retry. The file has been left unchanged.";
+        }
+    }
     private async Task TestConnection()
     {
-        _connResult = await Db.TestConnectionAsync();
+        if (_testingConnection)
+        {
+            return;
+        }
+        _testingConnection = true;
+        _connResult = null;
+        _connectionError = null;
+        try
+        {
+            _connResult = await Db.TestConnectionAsync();
+        }
+        catch (Exception)
+        {
+            _connectionError = "Connection test failed. Check the database settings and retry.";
+        }
+        finally
+        {
+            _testingConnection = false;
+        }
     }
 
     private async Task Save()
     {
-        _saved = false;
-        _saveError = null;
+        var snapshot = _saveState.BeginSave(BuildSaveConfig());
+        if (snapshot is null)
+        {
+            return;
+        }
+
         try
         {
-            if (_schedule.Mode != ScheduleEditorState.ModeCustom)
+            await Config.UpdateConfigAsync(latest =>
             {
-                _cfg.Schedule.Cron = _schedule.ToCron();
-            }
-
-            await Config.SaveConfigAsync(_cfg);
-            _saved = true;
+                var cityResolver = latest.Processing.CityResolver;
+                latest.Schedule = snapshot.Schedule;
+                latest.Processing = snapshot.Processing;
+                latest.Processing.CityResolver = cityResolver;
+            });
+            _saveState.CompleteSave();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            _saveError = ex.Message;
+            _saveState.FailSave("Could not save settings. Your edits are still here; check the config volume and try again.");
+        }
+    }
+
+    private AppConfig BuildSaveConfig()
+    {
+        var snapshot = JsonSerializer.Deserialize<AppConfig>(JsonSerializer.Serialize(_cfg))!;
+        if (_schedule.Mode != ScheduleEditorState.ModeCustom)
+        {
+            snapshot.Schedule.Cron = _schedule.ToCron();
+        }
+        return snapshot;
+    }
+
+    private async Task ConfirmNavigation(LocationChangingContext context)
+    {
+        if (HasChanges && !await JS.InvokeAsync<bool>("confirm", "You have unsaved settings. Leave this page and discard them?"))
+        {
+            context.PreventNavigation();
         }
     }
 
