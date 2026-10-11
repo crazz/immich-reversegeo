@@ -108,7 +108,9 @@ What it does not fix by itself:
 
 ### Split-territory fallback families
 
-The optional GADM territory fallback setting lets the app try a small related country family when a sovereign or mainland code may be too coarse.
+The optional GADM territory fallback setting lets the app try related territory packages or a shared country download. For Hong Kong and Macao, GADM stores administrative boundaries in its China download. The app uses matching boundaries for state and city names while keeping Hong Kong or Macao as the country. These shared-data lookups require a geometry match and skip unnamed subdivisions; a bounding box alone is not enough.
+
+Test the coordinate in Lookup first; its GADM investigation uses the shared download automatically. For processing, enable GADM and leave **Try related or shared GADM country packages** checked. The first lookup can download the larger China package; Hong Kong and Macao share the resulting cache. This cannot supply subdivisions missing from GADM or repair an unresolved initial country match.
 
 Examples include:
 
