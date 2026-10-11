@@ -1,3 +1,94 @@
+/* Match the built-in palette selector so the accessible brand colours win. */
+[data-md-color-scheme="default"][data-md-color-primary] {
+  color-scheme: light;
+  --md-default-bg-color: #faf9f6;
+  --md-default-fg-color: #22283a;
+  --md-default-fg-color--light: #51596b;
+  --md-default-fg-color--lighter: #687183;
+  --md-default-fg-color--lightest: #d4d7de;
+  --md-primary-fg-color: #faf9f6;
+  --md-primary-bg-color: #22283a;
+  --md-primary-bg-color--light: #51596b;
+  --md-accent-fg-color: #943d13;
+  --md-typeset-a-color: #943d13;
+  --md-code-bg-color: #f0ede7;
+  --md-code-fg-color: #30384a;
+  --reversegeo-surface: #ffffff;
+  --reversegeo-surface-hover: #f2efe9;
+  --reversegeo-border: #d4cfc5;
+  --reversegeo-control-border: #888d98;
+  --reversegeo-action-bg: #943d13;
+  --reversegeo-action-fg: #ffffff;
+  --reversegeo-action-hover: #75300f;
+}
+
+[data-md-color-scheme="slate"][data-md-color-primary] {
+  color-scheme: dark;
+  --md-default-bg-color: #13131f;
+  --md-default-fg-color: #f0f1ff;
+  --md-default-fg-color--light: #b4b7d9;
+  --md-default-fg-color--lighter: #9ca0c6;
+  --md-default-fg-color--lightest: #35415d;
+  --md-primary-fg-color: #13131f;
+  --md-primary-bg-color: #f0f1ff;
+  --md-primary-bg-color--light: #b4b7d9;
+  --md-accent-fg-color: #ffbf80;
+  --md-typeset-a-color: #ffbf80;
+  --md-code-bg-color: #1a1a2e;
+  --md-code-fg-color: #f0f1ff;
+  --reversegeo-surface: #1a1a2e;
+  --reversegeo-surface-hover: #20203a;
+  --reversegeo-border: #35415d;
+  --reversegeo-control-border: #707e9b;
+  --reversegeo-action-bg: #ffbf80;
+  --reversegeo-action-fg: #13131f;
+  --reversegeo-action-hover: #ffd4aa;
+}
+
+.md-header, .md-tabs {
+  background: var(--md-default-bg-color);
+  color: var(--md-default-fg-color);
+  border-bottom: 1px solid var(--reversegeo-border);
+}
+
+.md-typeset .md-button {
+  color: var(--md-typeset-a-color);
+  border: 1px solid var(--reversegeo-control-border);
+  background: var(--reversegeo-surface);
+}
+
+.md-typeset .md-button:hover,
+.md-typeset .md-button:focus-visible {
+  color: var(--md-typeset-a-color);
+  border-color: var(--md-typeset-a-color);
+  background: var(--reversegeo-surface-hover);
+}
+
+.md-typeset .md-button--primary {
+  color: var(--reversegeo-action-fg);
+  background: var(--reversegeo-action-bg);
+  border-color: var(--reversegeo-action-bg);
+}
+
+.md-typeset .md-button--primary:hover,
+.md-typeset .md-button--primary:focus-visible {
+  color: var(--reversegeo-action-fg);
+  background: var(--reversegeo-action-hover);
+  border-color: var(--reversegeo-action-hover);
+}
+
+.md-typeset a:focus-visible {
+  outline: 3px solid var(--md-typeset-a-color);
+  outline-offset: 3px;
+}
+
+.md-typeset p a:not(.md-button),
+.md-typeset li a:not(.md-button),
+.hero-lead a {
+  text-decoration: underline;
+  text-underline-offset: 0.15em;
+}
+
 .md-content h1 {
   margin-bottom: 0.4rem;
 }
@@ -49,9 +140,8 @@
 .card {
   padding: 1rem 1.1rem;
   border-radius: 1rem;
-  border: 1px solid color-mix(in srgb, var(--md-accent-fg-color) 25%, transparent);
-  background:
-    linear-gradient(180deg, color-mix(in srgb, var(--md-accent-fg-color) 7%, var(--md-default-bg-color)) 0%, var(--md-default-bg-color) 100%);
+  border: 1px solid var(--reversegeo-border);
+  background: var(--reversegeo-surface);
 }
 
 .card h3 {
@@ -69,15 +159,17 @@
   display: block;
   padding: 0.95rem 1rem;
   border-radius: 1rem;
-  border: 1px solid color-mix(in srgb, var(--md-accent-fg-color) 22%, transparent);
-  background: color-mix(in srgb, var(--md-accent-fg-color) 6%, var(--md-default-bg-color));
-  color: inherit;
+  border: 1px solid var(--reversegeo-control-border);
+  background: var(--reversegeo-surface);
+  color: var(--md-typeset-a-color);
   text-decoration: none;
   font-weight: 600;
 }
 
-.quick-link:hover {
-  background: color-mix(in srgb, var(--md-accent-fg-color) 10%, var(--md-default-bg-color));
+.quick-link:hover,
+.quick-link:focus-visible {
+  background: var(--reversegeo-surface-hover);
+  border-color: var(--md-typeset-a-color);
 }
 
 .section-intro {
@@ -94,8 +186,8 @@
 .step-card {
   padding: 1rem 1.1rem;
   border-radius: 1rem;
-  border: 1px solid color-mix(in srgb, var(--md-accent-fg-color) 20%, transparent);
-  background: color-mix(in srgb, var(--md-accent-fg-color) 4%, var(--md-default-bg-color));
+  border: 1px solid var(--reversegeo-control-border);
+  background: var(--reversegeo-surface);
 }
 
 .step-card h3 {
@@ -117,6 +209,6 @@
 .doc-screenshot {
   display: block;
   width: 100%;
-  border: 1px solid var(--md-default-fg-color--lightest);
+  border: 1px solid var(--reversegeo-border);
   border-radius: 0.6rem;
 }

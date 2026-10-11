@@ -38,6 +38,9 @@ jobs:
       - name: Build
         run: dotnet build immich-reversegeo.slnx --configuration Release --no-restore
 
+      - name: Compile local Immich database harness
+        run: dotnet build tests/LiveImmichDb/LiveImmichDb.csproj --configuration Release
+
       - name: Test
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --no-build --filter "TestCategory!=Integration&TestCategory!=Performance"
 
