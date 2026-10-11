@@ -1,4 +1,5 @@
 ---
+description: "User-facing release notes for Immich ReverseGeo."
 icon: material/history
 ---
 
@@ -13,8 +14,11 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 - Country detection now keeps supported territories as their own country identity instead of replacing them with the administering country.
 - Fixed the reported Hong Kong coordinates and expanded built-in coverage for Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.
+- Improved downloaded administrative coverage for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen. Affected older caches refresh automatically when needed; other country caches remain usable.
 
 - Fixed the app stopping while waiting for an infrequent custom schedule, such as an annual run.
+- Docker releases now have version tags for controlled upgrades. GitHub's designated latest stable release updates `latest`; older release retries and prereleases do not automatically change it. `edge` continues to follow development builds.
+- Development images now publish only after their build and automated checks pass.
 
 - You can now reuse Immich's `DB_HOSTNAME` setting to connect to an external database. Existing `DB_HOST` settings continue to work and take precedence when nonblank.
 - Dashboard and Logs now show dates and times in your browser's timezone. Downloaded logs remain in UTC with full dates.

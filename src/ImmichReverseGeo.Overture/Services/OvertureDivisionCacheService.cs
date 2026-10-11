@@ -59,7 +59,7 @@ public class OvertureDivisionCacheService
                 var release = ReadMetaValue(conn, "release");
                 var fileSizeBytes = new FileInfo(file).Length;
                 result[iso3] = new OvertureDivisionStatus(count, downloadedAt, release, fileSizeBytes);
-                if (count > 0)
+                if (count > 0 && HasCurrentSourceCoverage(conn, iso3))
                 {
                     _readyCaches[iso3] = 0;
                 }
@@ -86,7 +86,7 @@ public class OvertureDivisionCacheService
             return true;
         }
 
-        var hasRows = HasRows(GetDbPath(iso3), "division_area");
+        var hasRows = HasCurrentRows(GetDbPath(iso3), iso3);
         if (hasRows)
         {
             _readyCaches[iso3] = 0;
@@ -225,7 +225,7 @@ public class OvertureDivisionCacheService
                 bbox.xmax AS bbox_xmax,
                 bbox.ymax AS bbox_ymax
             FROM read_parquet('{releaseUrl}', filename = true, hive_partitioning = 1)
-            WHERE lower(country) = '{alpha2.ToLowerInvariant()}'
+            WHERE {OvertureCountrySourceCodes.BuildCountryFilter(alpha2)}
             ";
         using var reader = selectCmd.ExecuteReader();
 
@@ -265,9 +265,11 @@ public class OvertureDivisionCacheService
             meta.CommandText = @"
                 INSERT INTO _meta VALUES ('downloadedAt', $at);
                 INSERT INTO _meta VALUES ('release', $release);
+                INSERT INTO _meta VALUES ('sourceCountries', $sourceCountries);
                 ";
             meta.Parameters.AddWithValue("$at", DateTime.UtcNow.ToString("O"));
             meta.Parameters.AddWithValue("$release", release);
+            meta.Parameters.AddWithValue("$sourceCountries", OvertureCountrySourceCodes.GetCoverageSignature(alpha2));
             meta.ExecuteNonQuery();
         }
 
@@ -344,7 +346,7 @@ public class OvertureDivisionCacheService
         return Path.Combine(_dataDir, "overture-divisions", $"{iso3}.db");
     }
 
-    private static bool HasRows(string path, string tableName)
+    private bool HasCurrentRows(string path, string iso3)
     {
         if (!File.Exists(path))
         {
@@ -356,13 +358,30 @@ public class OvertureDivisionCacheService
             using var conn = new SqliteConnection($"Data Source={path};Pooling=false");
             conn.Open();
             using var cmd = conn.CreateCommand();
-            cmd.CommandText = $"SELECT COUNT(*) FROM {tableName}";
-            return (long)cmd.ExecuteScalar()! > 0;
+            cmd.CommandText = "SELECT COUNT(*) FROM division_area";
+            return (long)cmd.ExecuteScalar()! > 0 && HasCurrentSourceCoverage(conn, iso3);
         }
         catch
         {
             return false;
         }
+    }
+
+    private bool HasCurrentSourceCoverage(SqliteConnection conn, string iso3)
+    {
+        var alpha2 = _iso3ToAlpha2(iso3);
+        if (alpha2 is null)
+        {
+            return false;
+        }
+
+        // Keep existing ordinary-country caches usable; only expanded source sets need a refresh.
+        if (OvertureCountrySourceCodes.GetCodes(alpha2).Count == 1)
+        {
+            return true;
+        }
+
+        return ReadMetaValue(conn, "sourceCountries") == OvertureCountrySourceCodes.GetCoverageSignature(alpha2);
     }
 
     private static bool IsValidDb(string path)

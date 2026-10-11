@@ -143,3 +143,7 @@ On Linux or macOS, create the environment with `python3` and use `_out/docs-venv
 Build from the repository root: Compose snippets come from the checked-out source, including in PR previews. Strict validation rejects broken internal links and anchors. When upgrading Zensical, update the pinned requirement and verify a clean strict build.
 
 If you add or rename public docs pages, update [`mkdocs.yml`](./mkdocs.yml) too.
+
+Reader features use content tabs, collapsible details, and selectively enlarged screenshots. Mark app screenshots with `.doc-screenshot .on-glb`; leave logos outside the lightbox. Keep screenshots free of credentials and personal library data.
+
+Public pages should have concise `description` front matter for link previews. The `social` and `llmstxt` features are provided by Zensical; generated cards and Markdown exports stay under `_out/website`. Add new guides to the `llmstxt.sections` list in `mkdocs.yml` when they should be exported and offer Copy as Markdown.

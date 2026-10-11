@@ -10,8 +10,11 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 - Fixed offline country detection for Hong Kong and added validated distinct-territory coverage for Macao, Greenland, the Faroe Islands, the Crown Dependencies, selected US and UK territories, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Added structured country-bootstrap outcomes that distinguish spatial misses from identity mapping failures, plus deterministic dependency-over-sovereign selection.
 - Added shared territory fixtures, artifact validation, downstream Overture/GADM routing tests, and country-index size, memory, initialization, and warm-lookup performance budgets.
+- Include Overture source aliases CP, XE, XS, and XJ in their canonical FRA, BES, and SJM administrative caches. Store the exported source-code set in cache metadata and refresh only affected older caches; retain ordinary-country caches and keep the old file until a replacement succeeds.
 
 - Fixed scheduler startup failures for cron expressions whose next run is beyond the timer-supported delay range. Scheduled waits now use cancellable intervals of at most one day and recheck the UTC deadline before starting processing.
+- Publish full Docker version tags on GitHub release publication, promote the built digest to `latest` only for GitHub's designated latest stable release through a serialized queue, and retain `edge`, SHA tags, and the explicit manual promotion option. Validate prerelease identifiers including consecutive and trailing hyphens.
+- Publish master Docker images through a reusable workflow only after CI build, test, and Docker build checks succeed for the same commit. Each successful master push publishes edge and SHA tags.
 
 - Added `DB_HOSTNAME` support for shared Immich environment settings, retaining nonblank `DB_HOST` precedence and the `database` default when both values are unset or blank.
 - Display dashboard and log timestamps in the browser's timezone. Preserve structured UTC log timestamps and include dates in UTC log downloads.

@@ -16,6 +16,9 @@ jobs:
         with:
           lfs: true
 
+      - name: Test Docker publishing rules
+        run: node --test .github/scripts/docker-publishing.test.cjs
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:
@@ -32,3 +35,12 @@ jobs:
 
       - name: Build Docker image
         run: docker build -f src/ImmichReverseGeo.Web/Dockerfile -t immich-reversegeo:test .
+
+  publish:
+    name: Publish validated master image
+    needs: app
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/docker-publish.yml

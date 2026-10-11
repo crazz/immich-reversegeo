@@ -1,4 +1,5 @@
 ---
+description: "Use the Dashboard, Lookup, data maintenance tools, and logs in Immich ReverseGeo."
 icon: material/application-outline
 ---
 
@@ -20,6 +21,8 @@ Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 - the Dashboard shows live progress, recent activity, and the last completed run
 - `Cancel` stops the current run
 
+Processing selects GPS-tagged assets only when both city and country are missing (stored as `NULL`). To correct existing location names, back up the database and use a targeted reset from [Data tools](#data-tools) before reprocessing.
+
 Run completion and activity timestamps use your browser's local timezone, shown beside each time. This does not change the processing schedule.
 
 ## Lookup
@@ -31,6 +34,10 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 - `Include bundled airport infrastructure lookup` lets you test with or without airport matching for that lookup
 - `Include live Overture Places lookup` adds an extra live place search for debugging, but it is slower and not needed for normal use
 - `Prefer cached GADM administrative areas` switches the administrative area part of the lookup to an experimental on-demand GADM cache for that country; country detection still starts with the bundled Overture country data
+
+![Coordinate Lookup input](assets/screenshots/lookup.png){ .doc-screenshot .on-glb }
+
+Click the screenshot to enlarge it. Lookup previews do not update Immich assets.
 
 ## Data tools
 

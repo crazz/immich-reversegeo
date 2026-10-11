@@ -4,8 +4,14 @@
 
 - Push `master`
 - Confirm CI passes
+- Confirm CI's publishing job succeeds. Each master push publishes `edge` and SHA tags only after the same commit passes build, test, and Docker build checks; failed or cancelled checks skip publishing.
 - Confirm Pages deploy passes
 - Confirm the docs site renders correctly
+- Update both changelogs and publish a GitHub release with a `vMAJOR.MINOR.PATCH` tag pointing to the validated commit. This starts the Docker publishing workflow; pushing a tag alone does not publish a versioned image.
+- For a prerelease, use a tag such as `v1.2.3-rc.1` and mark the GitHub release as a prerelease. It publishes full version tags without moving `latest`.
+- Choose which stable release GitHub designates as latest. Confirm the publishing workflow succeeds and inspect the image tags: the full version with and without `v`, the SHA tag, and `latest` when this is GitHub's latest stable release. `edge` remains the master build channel.
+- Automatic `latest` promotion runs separately from the build, in a shared queue, and checks GitHub's latest release immediately before promoting the built digest. Superseded release runs skip promotion. If the GitHub lookup or registry promotion fails, the version tags remain published; rerun the failed promotion job.
+- The existing manual `publish_latest` workflow input remains an explicit override. Use it only when intentionally promoting a validated build to `latest`.
 - Confirm the published container image can be pulled and started
 
 ## Runtime

@@ -1,4 +1,5 @@
 ---
+description: "Install Immich ReverseGeo alongside Immich with separate settings and data volumes and private UI access."
 icon: material/docker
 ---
 
@@ -16,30 +17,42 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
     Official guide:
     [Backup and Restore | Immich](https://docs.immich.app/administration/backup-and-restore/)
 
-## Preferred setup
+## Choose your Compose setup
 
-- Add the service to your existing Immich `docker-compose.yml`.
-- Reuse the same `.env` file that already contains your Immich database settings.
-- Keep `/config` and `/data` persisted with Docker volumes.
-- No extra Docker network configuration is needed when the service lives in the same compose project as Immich.
+=== "Existing Immich stack (recommended)"
 
-Reference file:
-[docker-compose.yml](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/docker-compose.yml)
+    Add the service and volume declarations below to your existing Immich Compose file. Reuse its `.env` file and default network. Keep `/config` and `/data` persisted separately.
 
-Copy/paste snippet:
+    ```yaml title="docker-compose.yml"
+    --8<-- "docker-compose.yml"
+    ```
 
-```yaml title="docker-compose.yml"
---8<-- "docker-compose.yml"
-```
+    Start only Immich ReverseGeo:
 
-This service expects:
+    ```bash
+    docker compose up -d immich-reversegeo
+    ```
 
-- the same database connection values Immich already uses
-- to run in the same compose project and Docker network as Immich
-- a persistent `/config` volume for settings
-- a persistent `/data` volume for downloaded Overture data and runtime state
-- a free host port for the web UI, with `8080` as the default example
-- about 2 GB of memory, set by `mem_limit` in the snippet above
+=== "Separate Compose stack"
+
+    Save the same service snippet in a separate directory and provide an `.env` file with your Immich database connection values. Join the existing Immich network by adding this section to that Compose file:
+
+    ```yaml
+    networks:
+      default:
+        external: true
+        name: immich_default
+    ```
+
+    Replace `immich_default` with your actual Immich network name. The database hostname must be reachable on that network. You can inspect available networks with `docker network ls`.
+
+    ```bash
+    docker compose up -d immich-reversegeo
+    ```
+
+Reference file: [docker-compose.yml](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/docker-compose.yml).
+
+Both setups need about 2 GB of memory, as set by `mem_limit` in the service snippet.
 
 !!! note "Why the memory limit is there"
     The bundled country boundary data is held in memory while processing runs and uses several hundred
@@ -49,7 +62,7 @@ This service expects:
     Do not lower it much below `2g`. A limit under the working set makes the container fail
     immediately instead of running. Raising it is fine.
 
-Typical variables come from the shared `.env` file:
+Both setups need the database connection values from Immich:
 
 ```env
 DB_HOSTNAME=database
@@ -57,17 +70,23 @@ DB_PORT=5432
 DB_USERNAME=postgres
 DB_PASSWORD=...
 DB_DATABASE_NAME=immich
-DATA_DIR=/data
-CONFIG_DIR=/config
 ```
 
-Use `DB_HOSTNAME` from Immich's `.env` file, including when connecting to an external database. Existing `DB_HOST` settings remain supported and take precedence if both are set. If neither has a nonblank value, the host defaults to `database`.
+Use `DB_HOSTNAME` from Immich's `.env` file, including when connecting to an external database. A nonblank `DB_HOST` takes precedence over `DB_HOSTNAME` for existing installations. If `DB_HOST` is empty or contains only spaces, the app uses `DB_HOSTNAME`. If neither has a nonblank value, the host defaults to `database`.
 
-Then start the stack:
+The example publishes the UI on host port `8080`. Change the left side of the port mapping if it is already in use. Do not expose the UI publicly; see the private-access options below.
 
-```bash
-docker compose up -d
-```
+## Image versions
+
+`latest` normally follows GitHub's designated latest stable release after its image is successfully published. Maintainers can explicitly promote another validated build using the manual publishing option. Use a published version tag to control upgrades, for example `ghcr.io/immich-reversegeo/immich-reversegeo:1.2.3`. This is an example; choose an available version from [GitHub Releases](https://github.com/immich-reversegeo/immich-reversegeo/releases).
+
+- Releases tagged `v1.2.3` publish both `1.2.3` and `v1.2.3` image tags.
+- Other stable releases retain their version tags without changing `latest`. Rerunning an older release does not automatically move `latest` backwards.
+- Prereleases publish their full version tags, such as `1.2.3-rc.1`, without updating `latest`.
+- `edge` follows development builds from `master` after the build, tests, and Docker build checks pass.
+- `sha-...` tags identify builds by commit.
+
+After changing the image version in your Compose file, run `docker compose pull immich-reversegeo` and `docker compose up -d immich-reversegeo`. Keep your existing `/config` and `/data` volumes.
 
 ## VPS and firewall notes
 

@@ -1,4 +1,5 @@
 ---
+description: "How Immich ReverseGeo handles library metadata, local settings, and geographic data downloads."
 icon: material/shield-lock-outline
 ---
 
