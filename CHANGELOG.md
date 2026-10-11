@@ -7,6 +7,7 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 ## Unreleased
 
 - Follow the system colour preference on the Zensical website until a theme is chosen, improve light/dark link and button contrast, and use solid theme-aware cards and visible keyboard focus.
+- Reworked optional live Places lookup as Nearby Places investigation: bounded distance-ordered suggestions and an excluded preview, with shared eligibility diagnostics, existence-confidence wording, and reliable JSON source attribution. Filter useful candidates and the true search radius before applying result limits; keep the airport and administrative processing paths unchanged.
 
 - Include Overture source aliases CP, XE, XS, and XJ in their canonical FRA, BES, and SJM administrative caches. Store the exported source-code set in cache metadata and refresh only affected older caches; retain ordinary-country caches and keep the old file until a replacement succeeds.
 

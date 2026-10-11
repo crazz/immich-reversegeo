@@ -12,6 +12,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 ## Unreleased
 
 - Make the website easier to read in light and dark mode. Follow your system theme by default and remember your choice when you switch modes.
+- Lookup now shows Nearby Places as an investigation tool, with several suggestions, distances, categories, sources, and reasons for inclusion or exclusion. Nearby places do not change the location written to Immich.
 
 - Improved downloaded administrative coverage for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen. Affected older caches refresh automatically when needed; other country caches remain usable.
 

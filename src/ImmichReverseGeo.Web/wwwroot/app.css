@@ -1624,6 +1624,16 @@ input[type="text"].env-readonly {
     background: linear-gradient(135deg, var(--bg-surface), rgba(255, 212, 124, 0.03));
 }
 
+.nearby-places-card {
+    grid-column: 1 / -1;
+}
+
+.nearby-places-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
+    gap: 0.75rem;
+}
+
 .result-card.final-card {
     grid-column: 1 / -1;
     border-color: rgba(124, 135, 255, 0.3);

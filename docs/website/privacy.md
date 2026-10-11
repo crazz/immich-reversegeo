@@ -15,6 +15,6 @@ Operationally:
 
 The app UI uses local system fonts and does not request fonts from an external provider.
 
-Live Overture Places diagnostics on the Lookup page may contact Overture-hosted public data sources when enabled.
+The optional Nearby Places investigation tool on the Lookup page may contact Overture-hosted public data sources when enabled.
 
 You are responsible for how and where you deploy the service.
