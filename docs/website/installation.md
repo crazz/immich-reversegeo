@@ -71,9 +71,10 @@ docker compose up -d
 
 ## Image versions
 
-Use `latest` for the most recently published stable release, or replace it with a published version tag to control upgrades, for example `ghcr.io/immich-reversegeo/immich-reversegeo:1.2.3`. This is an example; choose an available version from [GitHub Releases](https://github.com/immich-reversegeo/immich-reversegeo/releases).
+`latest` normally follows GitHub's designated latest stable release after its image is successfully published. Maintainers can explicitly promote another validated build using the manual publishing option. Use a published version tag to control upgrades, for example `ghcr.io/immich-reversegeo/immich-reversegeo:1.2.3`. This is an example; choose an available version from [GitHub Releases](https://github.com/immich-reversegeo/immich-reversegeo/releases).
 
 - Releases tagged `v1.2.3` publish both `1.2.3` and `v1.2.3` image tags.
+- Other stable releases retain their version tags without changing `latest`. Rerunning an older release does not automatically move `latest` backwards.
 - Prereleases publish their full version tags, such as `1.2.3-rc.1`, without updating `latest`.
 - `edge` follows development builds from `master`.
 - `sha-...` tags identify builds by commit.
