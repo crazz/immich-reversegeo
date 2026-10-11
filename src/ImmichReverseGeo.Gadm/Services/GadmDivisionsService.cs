@@ -14,6 +14,11 @@ namespace ImmichReverseGeo.Gadm.Services;
 
 public class GadmDivisionsService
 {
+    /// <summary>
+    /// Tolerance, in degrees (~16m), for treating a point just outside a boundary as inside it.
+    /// </summary>
+    private const double BoundaryToleranceDegrees = 0.00015;
+
     private static readonly WKBReader WkbReader = new();
     private static readonly GeometryFactory GeometryFactory = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
 
@@ -218,11 +223,30 @@ public class GadmDivisionsService
         try
         {
             var geometry = WkbReader.Read(wkb);
-            return geometry.Covers(point) || geometry.Distance(point) <= 0.00015;
+            if (geometry.Covers(point))
+            {
+                return true;
+            }
+
+            // A rectangle argument routes through NTS's short-circuiting RectangleIntersects
+            // instead of DistanceOp, which computes an exact minimum distance and so copies
+            // every boundary ring into a fresh Coordinate[] before it can reject the point.
+            return geometry.Intersects(BuildToleranceRectangle(point));
         }
         catch
         {
             return false;
         }
     }
+
+    /// <summary>
+    /// Builds a small axis-aligned rectangle around <paramref name="point"/> for tolerance tests.
+    /// A box tolerance is marginally more permissive than a radial one (~7m at the diagonal of a
+    /// ~16m box), which is immaterial for a boundary-snapping heuristic.
+    /// </summary>
+    private static Geometry BuildToleranceRectangle(Point point) => point.Factory.ToGeometry(new Envelope(
+        point.X - BoundaryToleranceDegrees,
+        point.X + BoundaryToleranceDegrees,
+        point.Y - BoundaryToleranceDegrees,
+        point.Y + BoundaryToleranceDegrees));
 }
