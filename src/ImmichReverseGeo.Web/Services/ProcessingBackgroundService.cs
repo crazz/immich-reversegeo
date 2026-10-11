@@ -63,7 +63,7 @@ public class ProcessingBackgroundService(
             if (delay > TimeSpan.Zero)
             {
                 state.AppendLog($"Next run scheduled at {next.Value:u}");
-                await Task.Delay(delay, stoppingToken);
+                await ScheduledRunWaiter.WaitUntilAsync(next.Value, TimeProvider.System, stoppingToken);
             }
 
             if (!stoppingToken.IsCancellationRequested)
