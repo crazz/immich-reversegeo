@@ -126,8 +126,8 @@ public static class OverturePlacesLogic
 
         var latSql = lat.ToString(CultureInfo.InvariantCulture);
         var lonSql = lon.ToString(CultureInfo.InvariantCulture);
-        var included = string.Join(" OR ", IncludedCategoryTerms.Select(term => $"contains(category_text, '{term}')"));
-        var excluded = string.Join(" OR ", ExcludedCategoryTerms.Select(term => $"contains(category_text, '{term}')"));
+        var included = string.Join(" OR ", IncludedCategoryTerms.Select(term => $"contains(category_text, '_{term}_')"));
+        var excluded = string.Join(" OR ", ExcludedCategoryTerms.Select(term => $"contains(category_text, '_{term}_')"));
         return $"""
             WITH nearby AS (
                 SELECT
@@ -152,7 +152,7 @@ public static class OverturePlacesLogic
                         pow(sin(radians(latitude - {latSql}) / 2), 2)
                         + cos(radians({latSql})) * cos(radians(latitude))
                         * pow(sin(radians(longitude - {lonSql}) / 2), 2))))) AS distance_metres,
-                    lower(COALESCE(primary_category, '') || ' ' || COALESCE(basic_category, '')) AS category_text
+                    '_' || lower(COALESCE(primary_category, '')) || '_ _' || lower(COALESCE(basic_category, '')) || '_' AS category_text
                 FROM nearby
             ), classified AS (
                 SELECT *, CASE
@@ -258,13 +258,14 @@ public static class OverturePlacesLogic
             return "Excluded: existence confidence is below 0.90 or invalid.";
         }
 
-        var categoryText = $"{candidate.Category} {candidate.BasicCategory}".ToLowerInvariant();
-        if (!IncludedCategoryTerms.Any(categoryText.Contains))
+        // Overture category identifiers use snake_case; pad each identifier to match complete terms.
+        var categoryText = $"_{candidate.Category}_ _{candidate.BasicCategory}_".ToLowerInvariant();
+        if (!IncludedCategoryTerms.Any(term => categoryText.Contains($"_{term}_", StringComparison.Ordinal)))
         {
             return "Excluded: category is outside the useful-place filter.";
         }
 
-        return ExcludedCategoryTerms.Any(categoryText.Contains)
+        return ExcludedCategoryTerms.Any(term => categoryText.Contains($"_{term}_", StringComparison.Ordinal))
             ? "Excluded: category is routine business or transport detail."
             : null;
     }

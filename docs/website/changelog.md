@@ -11,6 +11,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 ## Unreleased
 
+- Nearby Places filters now avoid unrelated sports and transport businesses that previously matched part of a category name.
+
 - Make the website easier to read in light and dark mode. Follow your system theme by default and remember your choice when you switch modes.
 - Lookup now shows Nearby Places as an investigation tool, with several suggestions, distances, categories, sources, and reasons for inclusion or exclusion. Nearby places do not change the location written to Immich.
 
