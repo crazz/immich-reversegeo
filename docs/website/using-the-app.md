@@ -9,6 +9,8 @@ This page covers the day-to-day UI for Immich ReverseGeo after setup is complete
 For install-time settings such as database values, schedules, and processing limits, see [Configuration](./configuration.md).
 For a source-by-source explanation of the geographic data behind the app, see [Data Sources](./data-sources.md).
 
+The sidebar keeps the main tools available and includes **Help & setup** for the public guides. Browser tab titles identify the current tool.
+
 ## Dashboard
 
 Use `Run Now` on the Dashboard to start a manual processing pass immediately.
