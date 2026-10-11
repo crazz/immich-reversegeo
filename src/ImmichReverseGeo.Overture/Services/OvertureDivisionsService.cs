@@ -117,8 +117,8 @@ public class OvertureDivisionsService
         bool exactCoverage,
         Func<BundledCountryArea, bool> matches)
     {
-        OvertureDivisionResult? bestUsable = null;
-        OvertureDivisionResult? bestUnusable = null;
+        OvertureDivisionResult? bestMapped = null;
+        OvertureDivisionResult? bestUnmapped = null;
 
         foreach (var country in candidates)
         {
@@ -149,24 +149,24 @@ public class OvertureDivisionsService
             var mappedAlpha3 = string.IsNullOrWhiteSpace(candidate.Country)
                 ? null
                 : _alpha2ToIso3(candidate.Country);
-            var hasUsableIdentity = !string.IsNullOrWhiteSpace(candidate.Alpha3)
-                                    && !string.IsNullOrWhiteSpace(mappedAlpha3)
-                                    && string.Equals(candidate.Alpha3, mappedAlpha3, StringComparison.OrdinalIgnoreCase);
-            if (hasUsableIdentity)
+            // Rank known countries spatially before validating their stored Alpha-3.
+            // A broken territory identity must surface as an error, not silently become its sovereign.
+            if (!string.IsNullOrWhiteSpace(mappedAlpha3))
             {
-                if (bestUsable is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, bestUsable))
+                if (bestMapped is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, bestMapped))
                 {
-                    bestUsable = candidate;
+                    bestMapped = candidate;
                 }
             }
-            else if (bestUnusable is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, bestUnusable))
+            else if (bestUnmapped is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, bestUnmapped))
             {
-                bestUnusable = candidate;
+                bestUnmapped = candidate;
             }
         }
 
-        return bestUsable ?? bestUnusable;
+        return bestMapped ?? bestUnmapped;
     }
+
     private STRtree<BundledCountryArea> GetBundledCountryIndex(string bundledPath)
     {
         if (_bundledCountryIndex is not null)
@@ -186,14 +186,15 @@ public class OvertureDivisionsService
         }
     }
 
-    private static STRtree<BundledCountryArea> LoadBundledCountryIndex(string bundledPath)
+    private STRtree<BundledCountryArea> LoadBundledCountryIndex(string bundledPath)
     {
         var index = new STRtree<BundledCountryArea>();
 
         using var conn = new SqliteConnection($"Data Source={bundledPath};Pooling=false");
         conn.Open();
         var adminLevelColumn = HasColumn(conn, "division_area", "admin_level") ? "admin_level" : "NULL AS admin_level";
-        var alpha3Column = HasColumn(conn, "division_area", "alpha3") ? "alpha3" : "NULL AS alpha3";
+        var hasAlpha3Column = HasColumn(conn, "division_area", "alpha3");
+        var alpha3Column = hasAlpha3Column ? "alpha3" : "NULL AS alpha3";
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT
@@ -229,14 +230,20 @@ public class OvertureDivisionsService
             var xmax = reader.GetDouble(12);
             var ymax = reader.GetDouble(13);
 
+            var alpha2 = OvertureDataAccess.ReadNullableString(reader, 5);
+            // Older artifacts have no Alpha-3 column. Resolve their existing code through the catalog.
+            // A present but empty or inconsistent Alpha-3 remains an identity error.
+            var alpha3 = hasAlpha3Column
+                ? OvertureDataAccess.ReadNullableString(reader, 6)
+                : string.IsNullOrWhiteSpace(alpha2) ? null : _alpha2ToIso3(alpha2);
             var country = new BundledCountryArea(
                 reader.GetString(0),
                 reader.GetString(1),
                 OvertureDataAccess.ReadNullableString(reader, 2),
                 OvertureDataAccess.ReadNullableString(reader, 3),
                 reader.IsDBNull(4) ? null : reader.GetInt32(4),
-                OvertureDataAccess.ReadNullableString(reader, 5),
-                OvertureDataAccess.ReadNullableString(reader, 6),
+                alpha2,
+                alpha3,
                 OvertureDataAccess.ReadSqliteBool(reader, 7),
                 OvertureDataAccess.ReadSqliteBool(reader, 8),
                 geometry,

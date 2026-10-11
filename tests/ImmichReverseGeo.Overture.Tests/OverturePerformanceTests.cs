@@ -51,14 +51,14 @@ public class OverturePerformanceTests
             coldStart.Stop();
             var memoryAfter = GC.GetTotalMemory(forceFullCollection: true);
             var retainedMemoryDelta = Math.Max(0, memoryAfter - memoryBefore);
-            AssertPerformanceLookupResult(firstResult, permitLegacyIdentitySchema: artifactOverride is not null);
+            AssertPerformanceLookupResult(firstResult);
 
             var sw = Stopwatch.StartNew();
             const int iterations = 25;
             for (var i = 0; i < iterations; i++)
             {
                 var result = await service.FindBundledCountryAsync(52.5200, 13.4050);
-                AssertPerformanceLookupResult(result, permitLegacyIdentitySchema: artifactOverride is not null);
+                AssertPerformanceLookupResult(result);
             }
 
             sw.Stop();
@@ -85,16 +85,8 @@ public class OverturePerformanceTests
         }
     }
 
-    private static void AssertPerformanceLookupResult(
-        BundledCountryLookupResult result,
-        bool permitLegacyIdentitySchema)
+    private static void AssertPerformanceLookupResult(BundledCountryLookupResult result)
     {
-        if (permitLegacyIdentitySchema)
-        {
-            Assert.AreNotEqual(BundledCountryLookupStatus.SpatialNoMatch, result.Status);
-            return;
-        }
-
         Assert.AreEqual(BundledCountryLookupStatus.Matched, result.Status);
         Assert.AreEqual("DEU", result.Iso3);
         Assert.AreEqual("DE", result.Alpha2);

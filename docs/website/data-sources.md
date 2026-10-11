@@ -51,6 +51,8 @@ What it does not do by itself:
 - a territory outside the bundled fixture set can still be missing if the pinned Overture release has no country or dependency boundary for it
 - changing the bundled database requires an application or container restart because the country index stays in memory
 
+Older custom country databases remain usable for country codes the catalog recognizes; the app does not rewrite those files. They retain their original geographic coverage. A missing or conflicting country identity in a newer-format database is reported as a mapping error rather than being assigned to a nearby country.
+
 If a coordinate still looks wrong, use [Lookup](./using-the-app.md#lookup) first. Confirm the country identity, then inspect the downloaded Overture and optional GADM administrative results before changing settings.
 
 Origin:

@@ -25,11 +25,16 @@ Pinned release: `2026-08-19.0`
 | Source identities | 219 | 272 | +24.2% |
 | Database size | 162,414,592 bytes | 167,931,904 bytes | +3.40% |
 | WKB size | 161,847,272 bytes | 167,239,276 bytes | +3.33% |
-| Retained managed memory | 758,169,224 bytes | 791,235,176 bytes | +4.36% |
-| Cold initialization | 784.93 ms | 882.47 ms | +12.43% |
-| Warm lookup average | 2.36 ms | 5.50 ms | +3.14 ms |
+| Retained managed memory | 543,815,184 bytes | 559,270,136 bytes | +2.84% |
+| Cold initialization | 1,921.18 ms | 1,906.06 ms | Similar in this run |
+| Warm lookup average | 0.03185 ms | 0.02992 ms | Similar in this run |
+| Warm allocation per lookup | 2,333 bytes | 2,339 bytes | Similar in this run |
 
-The current artifact contains 105 dependency rows across 53 additional source identities. Validation recognized 248 standard identities. Performance was measured on macOS arm64 with 25 warm Berlin lookups; absolute timings vary by machine.
+The current artifact contains 105 dependency rows across 53 additional source identities. Validation recognized 248 standard identities. Both artifacts were measured with the current Release resolver on Windows x64 and .NET 10.0.12, in separate processes, with 100 warm-up and 10,000 measured Berlin lookups. Retained managed memory is the full-GC heap delta for the country index, not total container memory. These are single-run timings and are not evidence of a speed improvement; both remain around 0.03 ms and 2.3 KB per lookup.
+
+Older geographic databases without an `alpha3` column use the bundled catalog to resolve existing country codes without rewriting the database. If the column exists, a missing or conflicting value remains an identity error. Known territory identities are ranked before their stored Alpha-3 is checked, so broken territory data reports an error rather than silently returning an overlapping sovereign.
+
+Equal spatial candidates use deterministic ordering. Explicit administrative levels precede missing levels; stable IDs break otherwise equal ties. Dependencies receive priority over sovereign countries only in bundled country lookup.
 
 Release budgets enforced by the performance test are no more than 5% file/WKB growth, no more than 5x WKB size in retained managed memory, cold initialization under 30 seconds, and warm lookup average under 250 ms.
 

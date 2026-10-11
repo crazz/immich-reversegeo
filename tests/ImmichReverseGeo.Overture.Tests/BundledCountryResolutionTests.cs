@@ -132,6 +132,104 @@ public class BundledCountryResolutionTests
         Assert.IsTrue(statistics.WkbBytes > 0);
     }
 
+    [TestMethod]
+    public async Task OlderArtifactWithoutAlpha3Column_UsesCatalogWithoutRewritingDatabase()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "defaults"));
+        var path = Path.Combine(root, "defaults", "overture-country-divisions.db");
+        try
+        {
+            CreateSingleCountryDatabase(path);
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=false"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    ALTER TABLE division_area DROP COLUMN alpha3;
+                    UPDATE division_area SET country = 'HK', name = 'Hong Kong';
+                    """;
+                command.ExecuteNonQuery();
+            }
+
+            var before = System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path));
+            var result = await CreateService(root, LoadIdentityCatalog()).FindBundledCountryAsync(0.5, 0.5);
+            Assert.AreEqual(BundledCountryLookupStatus.Matched, result.Status);
+            Assert.AreEqual("HKG", result.Iso3);
+            Assert.AreEqual("HK", result.Alpha2);
+            CollectionAssert.AreEqual(before, System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DataRow(null)]
+    [DataRow("CHN")]
+    public async Task ModernArtifactWithMissingOrInconsistentAlpha3_RemainsAnIdentityError(string? alpha3)
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "defaults"));
+        try
+        {
+            var path = Path.Combine(root, "defaults", "overture-country-divisions.db");
+            CreateSingleCountryDatabase(path);
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=false"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE division_area SET country = 'HK', alpha3 = $alpha3";
+                command.Parameters.AddWithValue("$alpha3", alpha3 ?? (object)DBNull.Value);
+                command.ExecuteNonQuery();
+            }
+
+            var result = await CreateService(root, LoadIdentityCatalog()).FindBundledCountryAsync(0.5, 0.5);
+            Assert.AreEqual(BundledCountryLookupStatus.IdentityMappingFailure, result.Status);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+    [TestMethod]
+    [DataRow("HK", null, "HK", BundledCountryLookupStatus.IdentityMappingFailure)]
+    [DataRow("XA", null, "CN", BundledCountryLookupStatus.Matched)]
+    public async Task OverlappingSovereign_DoesNotHideBrokenMappedDependency(string sourceCode, string? storedAlpha3, string expectedAlpha2, BundledCountryLookupStatus expectedStatus)
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "defaults"));
+        try
+        {
+            var path = Path.Combine(root, "defaults", "overture-country-divisions.db");
+            CreateSingleCountryDatabase(path);
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=false"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = """
+                    UPDATE division_area SET country = $sourceCode, alpha3 = $storedAlpha3, name = 'Test dependency';
+                    INSERT INTO division_area
+                    SELECT 'parent-id', 'China', 'country', class_name, admin_level,
+                           'CN', 'CHN', is_land, is_territorial, geom_wkb,
+                           bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax
+                    FROM division_area WHERE id = 'test-id';
+                    """;
+                command.Parameters.AddWithValue("$sourceCode", sourceCode);
+                command.Parameters.AddWithValue("$storedAlpha3", storedAlpha3 ?? (object)DBNull.Value);
+                command.ExecuteNonQuery();
+            }
+
+            var result = await CreateService(root, LoadIdentityCatalog()).FindBundledCountryAsync(0.5, 0.5);
+            Assert.AreEqual(expectedStatus, result.Status);
+            Assert.AreEqual(expectedAlpha2, result.Alpha2);
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
     private static OvertureDivisionsService CreateService(string root, CountryIdentityCatalog catalog)
     {
         var places = new OverturePlacesService(
