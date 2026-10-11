@@ -3,11 +3,6 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: "Optional SemVer app version; defaults to the tag version or 0.0.0-dev"
-        required: false
-        default: ""
-        type: string
       release_name:
         description: "Optional label for the release artifacts"
         required: false
@@ -39,17 +34,21 @@ jobs:
       - name: Resolve candidate metadata
         id: metadata
         env:
-          REQUESTED_VERSION: ${{ inputs.version }}
           RELEASE_REF_TYPE: ${{ github.ref_type }}
           RELEASE_REF_NAME: ${{ github.ref_name }}
           SOURCE_COMMIT: ${{ github.sha }}
           SOURCE_REF: ${{ github.ref }}
+        shell: pwsh
         run: |
-          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
-          python -B .github/scripts/release-artifacts.py metadata --output _out/release-metadata.json --github-output "$GITHUB_OUTPUT"
+          $commit = git rev-parse HEAD
+          if ($LASTEXITCODE -ne 0 -or $commit -cne $env:SOURCE_COMMIT) { throw 'Checkout does not match candidate source.' }
+          $env:PROJECT_VERSION = dotnet msbuild src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -getProperty:Version
+          if ($LASTEXITCODE -ne 0) { throw 'Could not read project Version.' }
+          ./.github/scripts/Release-Artifacts.ps1 -Action Metadata
 
       - name: Test release verification helpers
-        run: python -B -m unittest discover -s .github/scripts -p test_release_artifacts.py
+        shell: pwsh
+        run: ./.github/scripts/Test-ReleaseArtifacts.ps1
 
       - name: Install docs dependencies
         run: pip install -r docs/website/requirements.txt
@@ -63,10 +62,9 @@ jobs:
       - name: Publish versioned app
         shell: pwsh
         env:
-          ARTIFACT_VERSION: ${{ steps.metadata.outputs.version }}
           INFORMATIONAL_VERSION: ${{ steps.metadata.outputs.informational_version }}
         run: |
-          dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -c Release -o artifacts/web -p:Version=$env:ARTIFACT_VERSION -p:InformationalVersion=$env:INFORMATIONAL_VERSION -p:IncludeSourceRevisionInInformationalVersion=false
+          dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -c Release -o artifacts/web -p:InformationalVersion=$env:INFORMATIONAL_VERSION -p:IncludeSourceRevisionInInformationalVersion=false
           if ($LASTEXITCODE -ne 0) { throw 'App publish failed.' }
           $assemblyPath = [IO.Path]::GetFullPath('artifacts/web/ImmichReverseGeo.Web.dll')
           $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($assemblyPath).ProductVersion
@@ -89,7 +87,8 @@ jobs:
         shell: pwsh
 
       - name: Verify release packages
-        run: python -B .github/scripts/release-artifacts.py verify --metadata _out/release-metadata.json --app immich-reversegeo-web.zip --docs immich-reversegeo-docs.zip --output _out/release-verification
+        shell: pwsh
+        run: ./.github/scripts/Release-Artifacts.ps1 -Action Verify
 
       - name: Upload verification artifact
         uses: actions/upload-artifact@v7
