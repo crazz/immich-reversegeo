@@ -50,7 +50,7 @@ The Settings page lets you control:
 - whether split-territory GADM fallback families should be tried
 - whether every asset is written to the log
 
-Most users should stay on the preset schedule options. Manual runs from the dashboard still work even when automatic scheduling is disabled.
+Most users should stay on the preset schedule options. Custom cron expressions can also schedule infrequent runs, such as once per year. Manual runs from the dashboard still work even when automatic scheduling is disabled.
 
 <div class="feature-grid">
   <div class="card">
