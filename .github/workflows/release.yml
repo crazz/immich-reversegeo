@@ -17,17 +17,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           lfs: true
 
       - name: Setup .NET
-        uses: actions/setup-dotnet@v5
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
 
       - name: Setup Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -55,13 +55,13 @@ jobs:
         shell: pwsh
 
       - name: Upload app artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.release_name != '' && format('{0}-web', inputs.release_name) || 'immich-reversegeo-web' }}
           path: immich-reversegeo-web.zip
 
       - name: Upload docs artifact
-        uses: actions/upload-artifact@v6
+        uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.release_name != '' && format('{0}-docs', inputs.release_name) || 'immich-reversegeo-docs' }}
           path: immich-reversegeo-docs.zip
