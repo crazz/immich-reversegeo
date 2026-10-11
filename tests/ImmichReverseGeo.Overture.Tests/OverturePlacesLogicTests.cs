@@ -74,13 +74,13 @@ public class OverturePlacesLogicTests
     }
 
     [TestMethod]
-    public void ShouldPreferCandidate_PrefersBoundingBoxContainmentBeforeDistance()
+    public void ShouldPreferCandidate_PrefersDistanceOverPointBoundingBox()
     {
         var bboxWinner = CreateCandidate("active", confidence: 0.92, distanceMetres: 800, bboxContainsPoint: true);
         var closer = CreateCandidate("active", confidence: 0.99, distanceMetres: 50, bboxContainsPoint: false);
 
-        Assert.IsTrue(OverturePlacesLogic.ShouldPreferCandidate(bboxWinner, closer));
-        Assert.IsFalse(OverturePlacesLogic.ShouldPreferCandidate(closer, bboxWinner));
+        Assert.IsFalse(OverturePlacesLogic.ShouldPreferCandidate(bboxWinner, closer));
+        Assert.IsTrue(OverturePlacesLogic.ShouldPreferCandidate(closer, bboxWinner));
     }
 
     [TestMethod]
