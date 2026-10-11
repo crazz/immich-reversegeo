@@ -1,3 +1,4 @@
+using ImmichReverseGeo.Overture.Models;
 using ImmichReverseGeo.Overture.Services;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -34,6 +35,8 @@ public class BundledCountryLookupTests
 
             Assert.AreEqual("AAA", result.Iso3, "The point lies inside AA, not the globe-spanning SP.");
             Assert.AreEqual("Aaland", result.CountryName);
+            Assert.AreEqual(BundledCountryLookupStatus.Matched, result.Status);
+            Assert.AreEqual("aa", result.SourceId);
         }
         finally
         {
@@ -135,11 +138,52 @@ public class BundledCountryLookupTests
 
             Assert.IsNull(result.Iso3);
             Assert.IsNull(result.CountryName);
+            Assert.AreEqual(BundledCountryLookupStatus.SpatialNoMatch, result.Status);
         }
         finally
         {
             TryDeleteDirectory(root);
         }
+    }
+
+    [TestMethod]
+    public async Task MatchedBoundaryWithUnresolvedIdentity_ReturnsMappingFailure()
+    {
+        var root = CreateFixture();
+        try
+        {
+            using (var conn = new SqliteConnection($"Data Source={Path.Combine(root, "defaults", "overture-country-divisions.db")}"))
+            {
+                conn.Open();
+                using var cmd = conn.CreateCommand();
+                cmd.CommandText = "UPDATE division_area SET country = 'ZZ' WHERE id = 'aa'";
+                cmd.ExecuteNonQuery();
+            }
+
+            var result = await CreateService(root).FindBundledCountryAsync(PointLat, PointLon);
+
+            Assert.AreEqual(BundledCountryLookupStatus.IdentityMappingFailure, result.Status);
+            Assert.IsNull(result.Iso3);
+            Assert.AreEqual("Aaland", result.CountryName);
+            Assert.AreEqual("ZZ", result.Alpha2);
+            Assert.AreEqual("aa", result.SourceId);
+            Assert.IsNotNull(result.FailureReason);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
+
+    [TestMethod]
+    public async Task MissingBundledDatabase_ReturnsSpatialNoMatch()
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        var result = await CreateService(root).FindBundledCountryAsync(PointLat, PointLon);
+
+        Assert.AreEqual(BundledCountryLookupStatus.SpatialNoMatch, result.Status);
+        Assert.IsNull(result.SourceId);
+        Assert.IsNotNull(result.FailureReason);
     }
 
     private static OvertureDivisionsService CreateService(string root)

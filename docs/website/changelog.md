@@ -11,6 +11,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 ## Unreleased
 
+- Lookup now explains whether no country boundary matched or a matched boundary has an unresolved country code.
+
 - The Dashboard now explains which photos a run processes and how to correct existing names.
 - Added **Preview Location Corrections** under Data. Compare existing and proposed names before resetting selected photos. Preview leaves Immich data unchanged; see [Using the App](./using-the-app.md#preview-location-corrections).
 

@@ -43,7 +43,7 @@ public class OvertureDivisionsService
         _alpha2ToIso3 = alpha2ToIso3;
     }
 
-    public Task<(string? Iso3, string? CountryName, string? Alpha2)> FindBundledCountryAsync(
+    public Task<BundledCountryLookupResult> FindBundledCountryAsync(
         double lat,
         double lon,
         CancellationToken ct = default)
@@ -51,19 +51,26 @@ public class OvertureDivisionsService
         var bundledPath = Path.Combine(_bundledDataDir, "defaults", "overture-country-divisions.db");
         if (!File.Exists(bundledPath))
         {
-            return Task.FromResult<(string? Iso3, string? CountryName, string? Alpha2)>((null, null, null));
+            return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch("Bundled country database is unavailable."));
         }
 
         var best = FindBundledCountryFromMemory(bundledPath, lat, lon);
-        if (best?.Country is null)
+        if (best is null)
         {
-            return Task.FromResult<(string? Iso3, string? CountryName, string? Alpha2)>((null, null, null));
+            return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch());
         }
 
-        return Task.FromResult<(string? Iso3, string? CountryName, string? Alpha2)>((
-            _alpha2ToIso3(best.Country),
-            (string?)best.Name,
-            (string?)best.Country));
+        var iso3 = best.Country is null ? null : _alpha2ToIso3(best.Country);
+        if (iso3 is null)
+        {
+            return Task.FromResult(BundledCountryLookupResult.IdentityMappingFailure(
+                best.Name,
+                best.Country,
+                best.Id,
+                "A country boundary matched, but its country code could not be resolved."));
+        }
+
+        return Task.FromResult(BundledCountryLookupResult.Matched(iso3, best.Name, best.Country!, best.Id));
     }
 
     private OvertureDivisionResult? FindBundledCountryFromMemory(string bundledPath, double lat, double lon)
