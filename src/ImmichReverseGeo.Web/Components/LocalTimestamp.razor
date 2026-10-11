@@ -1,0 +1,44 @@
+@inject IJSRuntime JS
+
+<time datetime="@UtcValue" title="@UtcValue">@(_display ?? Timestamp.UtcDateTime.ToString("u"))</time>
+
+@code {
+    [Parameter, EditorRequired]
+    public DateTimeOffset Timestamp { get; set; }
+
+    private DateTimeOffset? _formattedTimestamp;
+    private string? _display;
+    private string UtcValue => Timestamp.UtcDateTime.ToString("O");
+
+    protected override void OnParametersSet()
+    {
+        if (_formattedTimestamp != Timestamp)
+        {
+            _display = null;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_formattedTimestamp == Timestamp)
+        {
+            return;
+        }
+
+        var timestamp = Timestamp;
+        try
+        {
+            var display = await JS.InvokeAsync<string>("formatLocalTimestamp", timestamp.UtcDateTime.ToString("O"));
+            if (Timestamp == timestamp)
+            {
+                _formattedTimestamp = timestamp;
+                _display = display;
+                StateHasChanged();
+            }
+        }
+        catch (JSDisconnectedException)
+        {
+            // Keep the UTC fallback visible if the circuit disconnects.
+        }
+    }
+}

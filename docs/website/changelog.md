@@ -13,6 +13,16 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 - Fixed the app stopping while waiting for an infrequent custom schedule, such as an annual run.
 
 - You can now reuse Immich's `DB_HOSTNAME` setting to connect to an external database. Existing `DB_HOST` settings continue to work and take precedence when nonblank.
+- Dashboard and Logs now show dates and times in your browser's timezone. Downloaded logs remain in UTC with full dates.
+
+## 2026-08-23
+
+This release fixes the app running out of memory and restarting during processing.
+
+- Fixed the container growing in memory until it was killed, then restarting mid-run. Country matching was doing far more geometry work than it needed to on almost every photo. See [issue #13](https://github.com/immich-reversegeo/immich-reversegeo/issues/13).
+- Country matching is also much faster. On typical European coordinates a country lookup went from roughly 2.5 ms to under 0.1 ms.
+- The [installation snippet](./installation.md#docker) now sets a `mem_limit` of 2 GB. Existing installations can add this to their Compose file to limit total container memory. No extra runtime memory-tuning settings are required. Larger country caches or higher parallelism may need a higher limit. See [The container keeps restarting or gets killed](./troubleshooting.md#the-container-keeps-restarting-or-gets-killed).
+- In rare cases near a border, a photo that sits exactly inside one country but within about 16 m of a neighbour now always resolves to the country it is actually in. Previously the neighbour could win.
 
 ## 2026-04-12
 
