@@ -80,7 +80,8 @@ public class GadmDivisionsService
         double lat,
         double lon,
         IEnumerable<string> iso3Codes,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool requireAdministrativeMatch = false)
     {
         try
         {
@@ -101,7 +102,7 @@ public class GadmDivisionsService
                     continue;
                 }
 
-                var partial = QueryDivisionAreasFromSqlite(dbPath, lat, lon);
+                var partial = QueryDivisionAreasFromSqlite(dbPath, lat, lon, requireAdministrativeMatch);
                 version ??= partial.Version;
 
                 foreach (var candidate in partial.Candidates)
@@ -132,7 +133,8 @@ public class GadmDivisionsService
     private static GadmDivisionLookupDiagnostics QueryDivisionAreasFromSqlite(
         string dbPath,
         double lat,
-        double lon)
+        double lon,
+        bool requireAdministrativeMatch = false)
     {
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false");
         conn.Open();
@@ -166,6 +168,18 @@ public class GadmDivisionsService
 
         while (reader.Read())
         {
+            var name = reader.GetString(1);
+            var adminLevel = reader.GetInt32(4);
+            // Country identity comes from Overture. Shared packages can also contain
+            // unnamed deeper subdivisions marked NA; skip both before decoding geometry.
+            if (requireAdministrativeMatch
+                && (adminLevel <= 0
+                    || string.IsNullOrWhiteSpace(name)
+                    || string.Equals(name.Trim(), "NA", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
             var bboxContains = lon >= reader.GetDouble(6)
                                && lon <= reader.GetDouble(8)
                                && lat >= reader.GetDouble(7)
@@ -175,13 +189,18 @@ public class GadmDivisionsService
 
             var candidate = new GadmDivisionResult(
                 reader.GetString(0),
-                reader.GetString(1),
+                name,
                 reader.IsDBNull(2) ? null : reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.GetInt32(4),
+                adminLevel,
                 bboxContains,
                 geometryContains,
                 bboxArea);
+
+            if (requireAdministrativeMatch && !candidate.GeometryContainsPoint)
+            {
+                continue;
+            }
 
             var selected = false;
             var decision = "considered: weaker than current GADM best";

@@ -209,8 +209,8 @@ else
             <span class="hint">Turn this on if GADM gives you better state or city names for your library. Leave it off to keep Overture primary and use GADM only as fallback.</span>
         </div>
         <div class="form-group">
-            <label><input type="checkbox" @bind="_cfg.Processing.UseGadmTerritoryFallbacks" /> Try related GADM territory packages for split-country families</label>
-            <span class="hint">Useful for places such as Denmark/Greenland/Faroe Islands or United Kingdom/Jersey/Guernsey/Isle of Man when country detection is too coarse.</span>
+            <label><input type="checkbox" @bind="_cfg.Processing.UseGadmTerritoryFallbacks" /> Try related or shared GADM country packages</label>
+            <span class="hint">Try related territory packages, or use China's GADM administrative data for Hong Kong and Macao. The resolved country stays unchanged; shared-package results must match the coordinate.</span>
         </div>
     }
     <div class="form-group">

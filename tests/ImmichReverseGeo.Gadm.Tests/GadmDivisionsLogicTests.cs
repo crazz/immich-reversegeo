@@ -43,6 +43,17 @@ public class GadmDivisionsLogicTests
     }
 
     [TestMethod]
+    [DataRow("HKG")]
+    [DataRow("MAC")]
+    [DataRow(" hkg ")]
+    public void ExpandCandidateCodes_SharedTerritories_UseOnlyChinaPackage(string iso3)
+    {
+        CollectionAssert.AreEqual(new[] { "CHN" }, GadmCountryFallbackCatalog.ExpandCandidateCodes(iso3).ToArray());
+        Assert.IsTrue(GadmCountryFallbackCatalog.UsesSharedCountryDataset(iso3));
+        Assert.IsFalse(GadmCountryFallbackCatalog.UsesSharedCountryDataset("CHN"));
+    }
+
+    [TestMethod]
     public void SelectStateName_PrefersLowestNonCountryLevel()
     {
         var result = GadmDivisionsLogic.SelectStateName(
