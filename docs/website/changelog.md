@@ -11,6 +11,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 ## Unreleased
 
+- Added checks for future bundled country-data updates. The shipped geographic data and country-matching behavior are unchanged by this tooling update.
+
 - Country selection lists now use bundled names consistently across platforms. This change does not add geographic coverage or change how coordinates match a country.
 
 - Nearby Places filters now avoid unrelated sports and transport businesses that previously matched part of a category name.
