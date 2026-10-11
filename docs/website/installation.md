@@ -83,7 +83,7 @@ The example publishes the UI on host port `8080`. Change the left side of the po
 - Releases tagged `v1.2.3` publish both `1.2.3` and `v1.2.3` image tags.
 - Other stable releases retain their version tags without changing `latest`. Rerunning an older release does not automatically move `latest` backwards.
 - Prereleases publish their full version tags, such as `1.2.3-rc.1`, without updating `latest`.
-- `edge` follows development builds from `master`.
+- `edge` follows development builds from `master` after the build, tests, and Docker build checks pass.
 - `sha-...` tags identify builds by commit.
 
 After changing the image version in your Compose file, run `docker compose pull immich-reversegeo` and `docker compose up -d immich-reversegeo`. Keep your existing `/config` and `/data` volumes.

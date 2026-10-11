@@ -3,14 +3,7 @@ name: Publish Docker Image
 on:
   release:
     types: [published]
-  push:
-    branches:
-      - master
-    paths:
-      - "src/**"
-      - "src/ImmichReverseGeo.Web/Dockerfile"
-      - ".github/workflows/docker-publish.yml"
-      - ".github/scripts/docker-publishing.cjs"
+  workflow_call:
   workflow_dispatch:
     inputs:
       publish_latest:
