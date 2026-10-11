@@ -32,7 +32,7 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 - paste or type coordinates to see how the resolver behaves for that point
 - it shows the country match, cached administrative area match, optional airport match, and final values that would be written
 - `Include bundled airport infrastructure lookup` lets you test with or without airport matching for that lookup
-- `Include live Overture Places lookup` adds an extra live place search for debugging, but it is slower and not needed for normal use
+- `Include nearby places` adds a slower live Overture search for investigation. It shows nearby suggestions and a small sample of excluded places; it does not change the location written to Immich
 - `Prefer cached GADM administrative areas` switches the administrative area part of the lookup to an experimental on-demand GADM cache for that country; country detection still starts with the bundled Overture country data
 
 ![Coordinate Lookup input](assets/screenshots/lookup.png){ .doc-screenshot .on-glb }

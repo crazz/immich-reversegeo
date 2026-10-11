@@ -12,6 +12,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 ## Unreleased
 
 - Include version details and integrity checksums with downloadable release packages, along with the bundled geographic data needed by the app.
+- Lookup now shows Nearby Places as an investigation tool, with several suggestions, distances, categories, sources, and reasons for inclusion or exclusion. Nearby places do not change the location written to Immich.
 
 - Improved downloaded administrative coverage for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen. Affected older caches refresh automatically when needed; other country caches remain usable.
 
