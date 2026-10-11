@@ -129,17 +129,17 @@ If the desired place is not in the candidate list, that usually means the fix be
 
 The documentation site is built with Zensical using the existing [`mkdocs.yml`](./mkdocs.yml) compatibility path. Public website content lives under [`docs/website/`](./docs/website/). Generated output goes to [`_out/website/`](./_out/website/).
 
-To build or preview the docs locally, install the Python packages first:
+Use a repository-local environment so local previews and CI use the same pinned Zensical version. From the repository root on Windows:
 
-```bash
-py -m pip install -r docs/website/requirements.txt
+```powershell
+py -m venv _out/docs-venv
+_out/docs-venv/Scripts/python -m pip install -r docs/website/requirements.txt
+_out/docs-venv/Scripts/python -m zensical serve
+_out/docs-venv/Scripts/python -m zensical build --clean --strict
 ```
 
-Then use one of these:
+On Linux or macOS, create the environment with `python3` and use `_out/docs-venv/bin/python` for the remaining commands. With the environment activated, `npm run docs:serve` and `npm run docs:build` use its Python runtime.
 
-```bash
-py -m zensical serve
-py -m zensical build
-```
+Build from the repository root: Compose snippets come from the checked-out source, including in PR previews. Strict validation rejects broken internal links and anchors. When upgrading Zensical, update the pinned requirement and verify a clean strict build.
 
 If you add or rename public docs pages, update [`mkdocs.yml`](./mkdocs.yml) too.
