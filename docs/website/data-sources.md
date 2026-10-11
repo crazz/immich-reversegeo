@@ -62,6 +62,8 @@ Official references:
 
 When the app needs better state and city matching, it downloads a per-country Overture administrative cache into `/data/overture-divisions/{ISO3}.db`.
 
+Downloads include separate Overture source codes for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen in their corresponding country caches. Older affected caches refresh automatically the next time they are needed. This improves downloaded boundary coverage; it does not add boundaries or names missing from Overture. Use Lookup on a known coordinate to check the state and city result before processing your library. Country detection must also recognize the location before normal processing can use its cache.
+
 The app uses this source for:
 
 - normal administrative area matching during processing
