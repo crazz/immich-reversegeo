@@ -1,4 +1,5 @@
 ---
+description: "Use the Dashboard, Lookup, data maintenance tools, and logs in Immich ReverseGeo."
 icon: material/application-outline
 ---
 

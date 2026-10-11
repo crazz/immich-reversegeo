@@ -1,4 +1,5 @@
 ---
+description: "Improve Immich location names with a self-hosted companion. Preview known coordinates before processing your library."
 title: Immich ReverseGeo
 icon: material/home-outline
 hide:

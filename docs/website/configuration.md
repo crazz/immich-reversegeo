@@ -1,4 +1,5 @@
 ---
+description: "Configure processing schedules, airport matching, optional GADM data, and country-specific city matching."
 icon: material/tune-variant
 ---
 

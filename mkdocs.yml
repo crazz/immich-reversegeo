@@ -28,6 +28,7 @@ theme:
     - navigation.top
     - navigation.tracking
     - content.action.edit
+    - content.action.copy
     - content.tabs.link
     - content.code.copy
     - toc.follow
@@ -74,6 +75,27 @@ plugins:
       manual: true
       auto_caption: true
   - search
+  - social:
+      cards_layout_options:
+        background_color: "#141426"
+        color: "#FFFFFF"
+  - llmstxt:
+      sections:
+        Overview:
+          - index.md
+          - architecture.md
+        Setup:
+          - getting-started.md
+          - installation.md
+          - configuration.md
+        Guides:
+          - using-the-app.md
+          - data-sources.md
+        Help:
+          - troubleshooting.md
+          - support.md
+        Releases:
+          - changelog.md
 
 nav:
   - Home: index.md
