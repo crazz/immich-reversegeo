@@ -64,6 +64,95 @@ public class ConfigServiceTests
     }
 
     [TestMethod]
+    public async Task Save_WhileReading_KeepsCompleteOldAndNewSnapshots()
+    {
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        var original = new AppConfig();
+        original.Processing.BatchSize = 17;
+        await svc.SaveConfigAsync(original);
+        var path = Path.Combine(_tempDir, "settings.json");
+        await using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+
+        var updated = new AppConfig();
+        updated.Processing.BatchSize = 83;
+        await svc.SaveConfigAsync(updated);
+
+        var oldSnapshot = await System.Text.Json.JsonSerializer.DeserializeAsync<AppConfig>(reader,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.AreEqual(17, oldSnapshot!.Processing.BatchSize);
+        Assert.AreEqual(83, (await svc.GetConfigAsync()).Processing.BatchSize);
+        Assert.AreEqual(0, Directory.GetFiles(_tempDir, ".settings.*.tmp").Length);
+    }
+
+    [TestMethod]
+    public async Task Save_WhenReplacementFails_PreservesSettingsAndRemovesTemporaryFile()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("Windows file sharing is required for this failure probe.");
+        }
+
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        await svc.SaveConfigAsync(new AppConfig());
+        var path = Path.Combine(_tempDir, "settings.json");
+        var original = await File.ReadAllBytesAsync(path);
+        using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            await Assert.ThrowsAsync<IOException>(() => svc.SaveConfigAsync(new AppConfig
+            {
+                Processing = new ProcessingConfig { BatchSize = 91 }
+            }));
+        }
+
+        CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(path));
+        Assert.AreEqual(0, Directory.GetFiles(_tempDir, ".settings.*.tmp").Length);
+    }
+
+    [TestMethod]
+    public async Task GetConfig_CorruptFile_ThrowsAndPreservesFile()
+    {
+        Directory.CreateDirectory(_tempDir);
+        var path = Path.Combine(_tempDir, "settings.json");
+        await File.WriteAllTextAsync(path, "{broken settings");
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+
+        await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => svc.GetConfigAsync());
+        Assert.AreEqual("{broken settings", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task ConcurrentReadsAndSaves_ReturnCompleteMatchingValues()
+    {
+        var writer = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        var reader = writer; // Runtime uses one singleton for the worker and all UI circuits.
+        await writer.SaveConfigAsync(new AppConfig());
+        var saves = Task.Run(async () =>
+        {
+            for (var i = 1; i <= 40; i++)
+            {
+                await writer.SaveConfigAsync(new AppConfig
+                {
+                    Processing = new ProcessingConfig { BatchSize = i, BatchDelayMs = i }
+                });
+            }
+        });
+        try
+        {
+            while (!saves.IsCompleted)
+            {
+                var snapshot = await reader.GetConfigAsync();
+                Assert.IsTrue(snapshot.Processing.BatchSize == snapshot.Processing.BatchDelayMs
+                    || snapshot.Processing.BatchSize == 50 && snapshot.Processing.BatchDelayMs == 100);
+            }
+        }
+        finally
+        {
+            await saves;
+        }
+        Assert.AreEqual(40, (await reader.GetConfigAsync()).Processing.BatchSize);
+    }
+
+    [TestMethod]
     public async Task GetConfig_LegacySettingsWithoutCityResolver_AddsCompatibleDefaults()
     {
         Directory.CreateDirectory(_tempDir);
