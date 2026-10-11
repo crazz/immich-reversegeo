@@ -5,6 +5,7 @@
 @implements IDisposable
 
 <h2>Logs</h2>
+<p class="run-info">Times are shown in your browser's timezone. Downloads use UTC.</p>
 
 <div class="log-controls">
     <label>Filter
@@ -18,19 +19,19 @@
 </div>
 
 <div class="log-full">
-    @foreach (var line in FilteredLog)
+    @foreach (var entry in FilteredLog)
     {
-        <div class="log-line @(line.Contains("[ERROR]") ? "error" : line.Contains("[WARN]") ? "warn" : "")">@line</div>
+        <div class="log-line @(entry.Message.Contains("[ERROR]") ? "error" : entry.Message.Contains("[WARN]") ? "warn" : "")">[<LocalTimestamp Timestamp="entry.Timestamp" />] @entry.Message</div>
     }
 </div>
 
 @code {
     private string _levelFilter = "";
 
-    private IEnumerable<string> FilteredLog =>
+    private IEnumerable<ProcessingLogEntry> FilteredLog =>
         string.IsNullOrEmpty(_levelFilter)
-            ? State.GetRecentLog()
-            : State.GetRecentLog().Where(l => l.Contains(_levelFilter));
+            ? State.GetRecentLogEntries()
+            : State.GetRecentLogEntries().Where(entry => entry.Message.Contains(_levelFilter));
 
     protected override void OnInitialized() => State.OnChanged += Refresh;
     public void Dispose() => State.OnChanged -= Refresh;
@@ -38,7 +39,7 @@
 
     private async Task DownloadLog()
     {
-        var content = string.Join("\n", FilteredLog);
+        var content = string.Join("\n", FilteredLog.Select(entry => entry.ToUtcString()));
         var bytes = System.Text.Encoding.UTF8.GetBytes(content);
         var base64 = Convert.ToBase64String(bytes);
         await JS.InvokeVoidAsync("downloadFile", "immich-reversegeo.log", "text/plain", base64);

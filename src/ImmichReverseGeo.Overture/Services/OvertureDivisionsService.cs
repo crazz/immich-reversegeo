@@ -95,18 +95,42 @@ public class OvertureDivisionsService
         var countryIndex = GetBundledCountryIndex(bundledPath);
         var point = GeometryFactory.CreatePoint(new Coordinate(lon, lat));
         var queryEnvelope = new Envelope(point.EnvelopeInternal);
-        queryEnvelope.ExpandBy(0.00015);
+        queryEnvelope.ExpandBy(OvertureDataAccess.BoundaryToleranceDegrees);
+        var candidates = countryIndex.Query(queryEnvelope);
+
+        var exact = SelectBestBundledCountry(
+            candidates, lat, lon, true, country => country.PreparedGeometry.Covers(point));
+        if (exact is not null)
+        {
+            return exact;
+        }
+
+        var tolerance = GeometryFactory.ToGeometry(queryEnvelope);
+        return SelectBestBundledCountry(
+            candidates, lat, lon, false, country => country.PreparedGeometry.Intersects(tolerance));
+    }
+
+    private OvertureDivisionResult? SelectBestBundledCountry(
+        IList<BundledCountryArea> candidates,
+        double lat,
+        double lon,
+        bool exactCoverage,
+        Func<BundledCountryArea, bool> matches)
+    {
         OvertureDivisionResult? bestUsable = null;
         OvertureDivisionResult? bestUnusable = null;
 
-        foreach (var country in countryIndex.Query(queryEnvelope))
+        foreach (var country in candidates)
         {
+            if (!matches(country))
+            {
+                continue;
+            }
+
             var boundingBoxContains = lon >= country.BoundingBoxXMin
                                       && lon <= country.BoundingBoxXMax
                                       && lat >= country.BoundingBoxYMin
                                       && lat <= country.BoundingBoxYMax;
-            var exactGeometryContains = country.PreparedGeometry.Covers(point);
-            var geometryContains = exactGeometryContains || country.Geometry.Distance(point) <= 0.00015;
             var candidate = new OvertureDivisionResult(
                 country.Id,
                 country.Name,
@@ -118,14 +142,9 @@ public class OvertureDivisionsService
                 country.IsLand,
                 country.IsTerritorial,
                 boundingBoxContains,
-                exactGeometryContains,
-                geometryContains,
+                exactCoverage,
+                true,
                 country.BoundingBoxArea);
-
-            if (!candidate.GeometryContainsPoint)
-            {
-                continue;
-            }
 
             var mappedAlpha3 = string.IsNullOrWhiteSpace(candidate.Country)
                 ? null
@@ -148,7 +167,6 @@ public class OvertureDivisionsService
 
         return bestUsable ?? bestUnusable;
     }
-
     private STRtree<BundledCountryArea> GetBundledCountryIndex(string bundledPath)
     {
         if (_bundledCountryIndex is not null)

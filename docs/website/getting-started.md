@@ -41,12 +41,14 @@ In Docker setups, that usually means:
 Typical variables:
 
 ```env
-DB_HOST=database
+DB_HOSTNAME=database
 DB_PORT=5432
 DB_USERNAME=...
 DB_PASSWORD=...
 DB_DATABASE_NAME=immich
 ```
+
+Existing `DB_HOST` settings remain supported and take precedence over `DB_HOSTNAME` when nonblank. If neither has a nonblank value, the host defaults to `database`.
 
 ## 2. Start the container
 

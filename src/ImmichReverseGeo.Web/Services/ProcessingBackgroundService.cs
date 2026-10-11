@@ -1,3 +1,5 @@
+using System.IO;
+using System.Text.Json;
 using System;
 using System.Diagnostics;
 using System.Threading;
@@ -32,7 +34,18 @@ public class ProcessingBackgroundService(
 
         while (!stoppingToken.IsCancellationRequested)
         {
-            var cfg = await config.GetConfigAsync();
+            AppConfig cfg;
+            try
+            {
+                cfg = await config.GetConfigAsync();
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+            {
+                logger.LogError(ex, "Settings could not be read; scheduled processing will retry in one minute");
+                state.AppendLog("Settings could not be read. Scheduled processing is paused; restore settings.json or check its permissions.");
+                await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
+                continue;
+            }
             if (!cfg.Schedule.Enabled)
             {
                 await Task.Delay(TimeSpan.FromMinutes(1), stoppingToken);
@@ -50,7 +63,7 @@ public class ProcessingBackgroundService(
             if (delay > TimeSpan.Zero)
             {
                 state.AppendLog($"Next run scheduled at {next.Value:u}");
-                await Task.Delay(delay, stoppingToken);
+                await ScheduledRunWaiter.WaitUntilAsync(next.Value, TimeProvider.System, stoppingToken);
             }
 
             if (!stoppingToken.IsCancellationRequested)

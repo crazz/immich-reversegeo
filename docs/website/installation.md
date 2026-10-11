@@ -29,7 +29,7 @@ Reference file:
 Copy/paste snippet:
 
 ```yaml title="docker-compose.yml"
---8<-- "https://raw.githubusercontent.com/immich-reversegeo/immich-reversegeo/master/docker-compose.yml"
+--8<-- "docker-compose.yml"
 ```
 
 This service expects:
@@ -39,11 +39,20 @@ This service expects:
 - a persistent `/config` volume for settings
 - a persistent `/data` volume for downloaded Overture data and runtime state
 - a free host port for the web UI, with `8080` as the default example
+- about 2 GB of memory, set by `mem_limit` in the snippet above
+
+!!! note "Why the memory limit is there"
+    The bundled country boundary data is held in memory while processing runs and uses several hundred
+    megabytes. `mem_limit` sets a total container memory budget that the .NET runtime can take
+    into account. Large country caches and high parallelism can increase peak memory use.
+
+    Do not lower it much below `2g`. A limit under the working set makes the container fail
+    immediately instead of running. Raising it is fine.
 
 Typical variables come from the shared `.env` file:
 
 ```env
-DB_HOST=database
+DB_HOSTNAME=database
 DB_PORT=5432
 DB_USERNAME=postgres
 DB_PASSWORD=...
@@ -51,6 +60,8 @@ DB_DATABASE_NAME=immich
 DATA_DIR=/data
 CONFIG_DIR=/config
 ```
+
+Use `DB_HOSTNAME` from Immich's `.env` file, including when connecting to an external database. Existing `DB_HOST` settings remain supported and take precedence if both are set. If neither has a nonblank value, the host defaults to `database`.
 
 Then start the stack:
 

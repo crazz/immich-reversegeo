@@ -2,9 +2,14 @@
 @rendermode InteractiveServer
 @using ImmichReverseGeo.Core.Models
 @inject ConfigService Config
+@inject IJSRuntime JS
+@using System.IO
+@using System.Text.Json
 @inject CountryCodeService CountryCodes
 @inject CityResolverProfileCatalogService CityResolverCatalog
 
+<PageTitle>City Resolver - Immich ReverseGeo</PageTitle>
+<NavigationLock ConfirmExternalNavigation="@HasChanges" OnBeforeInternalNavigation="ConfirmNavigation" />
 <h2>City Resolver</h2>
 <p class="page-desc">Choose how Immich ReverseGeo should prefer broader or tighter city-like divisions, with curated bundled defaults and optional country overrides.</p>
 
@@ -19,15 +24,21 @@
     <p class="hint">`admin_level` is shown in Lookup, but it is not a user-facing control here. The current resolver mainly uses subtype order and broader-vs-tighter tie-breaks, with admin level only as a secondary internal signal when present.</p>
 </section>
 
-@if (_saved)
+@if (_loadError is not null)
 {
-    <div class="alert alert-success">City resolver settings saved.</div>
+    <div class="alert alert-error" role="alert">@_loadError</div>
+    <button class="btn btn-secondary" @onclick="LoadSettings">Retry loading settings</button>
 }
-@if (_saveError is not null)
+else if (!_saveState.IsLoaded)
 {
-    <div class="alert alert-error">@_saveError</div>
+    <p role="status">Loading settings...</p>
 }
-
+else
+{
+@if (_saveState.Error is not null)
+{
+    <div class="alert alert-error" role="alert">@_saveState.Error</div>
+}
 <section class="settings-card">
     <h3>Bundled Defaults</h3>
     <p class="section-intro">These curated defaults ship with the app and can improve over time without forcing you to hand-tune every country.</p>
@@ -225,8 +236,11 @@
 </section>
 
 <div class="btn-row">
-    <button @onclick="Save" class="btn btn-primary">Save City Resolver Settings</button>
+    <span role="status">@(_saveState.IsSaving ? "Saving..." : HasChanges ? "Unsaved changes" : "All changes saved")</span>
+    <button @onclick="Save" class="btn btn-primary" disabled="@(_saveState.IsSaving || !HasChanges)">@(_saveState.IsSaving ? "Saving..." : "Save changes")</button>
 </div>
+
+}
 
 @code {
     private static readonly IReadOnlyList<string> SupportedSubtypes =
@@ -255,28 +269,40 @@
     private string _newCountryInput = string.Empty;
     private string? _countryInputError;
     private List<CountryOverrideEditor> _countryEditors = [];
-    private bool _saved;
-    private string? _saveError;
+    private readonly SettingsSaveState _saveState = new();
+    private string? _loadError;
+    private bool HasChanges => _saveState.HasChanges(BuildSaveConfig());
 
-    protected override async Task OnInitializedAsync()
+    protected override Task OnInitializedAsync() => LoadSettings();
+
+    private async Task LoadSettings()
     {
-        _cfg = await Config.GetConfigAsync();
-        _knownCountries = CountryCodes.GetKnownCountries().ToList();
-        _bundledDefaultProfile = CityResolverCatalog.GetProfile(null, null);
+        _loadError = null;
+        try
+        {
+            _cfg = await Config.GetConfigAsync();
+            _knownCountries = CountryCodes.GetKnownCountries().ToList();
+            _bundledDefaultProfile = CityResolverCatalog.GetProfile(null, null);
 
-        var defaultOverride = _cfg.Processing.CityResolver.DefaultProfile;
-        _useDefaultOverride = defaultOverride.PreferredSubtypes.Count > 0 || !string.IsNullOrWhiteSpace(defaultOverride.TieBreakMode);
-        _defaultSubtypeOrder = _useDefaultOverride ? [.. NormalizeEditableSubtypes(defaultOverride.PreferredSubtypes)] : [];
-        _defaultTieBreakMode = _useDefaultOverride
-            ? NormalizeEditableTieBreak(defaultOverride.TieBreakMode)
-            : CityResolverTieBreakModes.SmallestArea;
+            var defaultOverride = _cfg.Processing.CityResolver.DefaultProfile;
+            _useDefaultOverride = defaultOverride.PreferredSubtypes.Count > 0 || !string.IsNullOrWhiteSpace(defaultOverride.TieBreakMode);
+            _defaultSubtypeOrder = _useDefaultOverride ? [.. NormalizeEditableSubtypes(defaultOverride.PreferredSubtypes)] : [];
+            _defaultTieBreakMode = _useDefaultOverride
+                ? NormalizeEditableTieBreak(defaultOverride.TieBreakMode)
+                : CityResolverTieBreakModes.SmallestArea;
 
-        _countryEditors = _cfg.Processing.CityResolver.CountryOverrides
-            .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
-            .Select(kvp => CreateCountryEditor(kvp.Key, kvp.Value))
-            .Where(editor => editor is not null)
-            .Select(editor => editor!)
-            .ToList();
+            _countryEditors = _cfg.Processing.CityResolver.CountryOverrides
+                .OrderBy(kvp => kvp.Key, StringComparer.OrdinalIgnoreCase)
+                .Select(kvp => CreateCountryEditor(kvp.Key, kvp.Value))
+                .Where(editor => editor is not null)
+                .Select(editor => editor!)
+                .ToList();
+            _saveState.Load(BuildSaveConfig());
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
+        {
+            _loadError = "Settings could not be loaded. Check settings.json and its permissions, then retry. The file has been left unchanged.";
+        }
     }
 
     private void AddDefaultSubtype()
@@ -390,18 +416,39 @@
 
     private async Task Save()
     {
-        _saved = false;
-        _saveError = null;
+        var snapshot = _saveState.BeginSave(BuildSaveConfig());
+        if (snapshot is null)
+        {
+            return;
+        }
 
         try
         {
-            _cfg.Processing.CityResolver = BuildCityResolverConfig();
-            await Config.SaveConfigAsync(_cfg);
-            _saved = true;
+            await Config.UpdateConfigAsync(latest =>
+            {
+                latest.Processing.CityResolver = snapshot.Processing.CityResolver;
+            });
+            _saveState.CompleteSave();
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or JsonException)
         {
-            _saveError = ex.Message;
+            _saveState.FailSave("Could not save settings. Your edits are still here; check the config volume and try again.");
+        }
+    }
+
+    private AppConfig BuildSaveConfig()
+    {
+        return new AppConfig
+        {
+            Processing = new ProcessingConfig { CityResolver = BuildCityResolverConfig() }
+        };
+    }
+
+    private async Task ConfirmNavigation(LocationChangingContext context)
+    {
+        if (HasChanges && !await JS.InvokeAsync<bool>("confirm", "You have unsaved settings. Leave this page and discard them?"))
+        {
+            context.PreventNavigation();
         }
     }
 

@@ -1,6 +1,7 @@
 using System;
 using System.IO;
 using System.Text.Json;
+using System.Threading;
 using System.Threading.Tasks;
 using ImmichReverseGeo.Core.Models;
 using Microsoft.Extensions.Logging;
@@ -12,6 +13,8 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
     private readonly string _configPath = Path.Combine(
         configDir ?? "/config", "settings.json");
 
+    private readonly SemaphoreSlim _fileLock = new(1, 1);
+
     private static readonly JsonSerializerOptions _json = new()
     {
         WriteIndented = true,
@@ -20,31 +23,110 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
 
     public async Task<AppConfig> GetConfigAsync()
     {
+        await _fileLock.WaitAsync();
+        try
+        {
+            return await ReadConfigAsync();
+        }
+        finally
+        {
+            _fileLock.Release();
+        }
+    }
+
+    public async Task SaveConfigAsync(AppConfig config)
+    {
+        var json = JsonSerializer.SerializeToUtf8Bytes(config, _json);
+        await _fileLock.WaitAsync();
+        try
+        {
+            await WriteConfigAsync(json);
+        }
+        finally
+        {
+            _fileLock.Release();
+        }
+    }
+
+    // Merge only the edited section against the latest settings under the same lock.
+    public async Task UpdateConfigAsync(Action<AppConfig> update)
+    {
+        await _fileLock.WaitAsync();
+        try
+        {
+            var config = await ReadConfigAsync();
+            update(config);
+            await WriteConfigAsync(JsonSerializer.SerializeToUtf8Bytes(config, _json));
+        }
+        finally
+        {
+            _fileLock.Release();
+        }
+    }
+
+    private async Task<AppConfig> ReadConfigAsync()
+    {
         if (!File.Exists(_configPath))
         {
             logger.LogInformation("No settings file found at {Path}, using defaults", _configPath);
             return new AppConfig();
         }
 
-        await using var fs = File.OpenRead(_configPath);
+        await using var fs = new FileStream(
+            _configPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
         var config = await JsonSerializer.DeserializeAsync<AppConfig>(fs, _json) ?? new AppConfig();
         return EnsureDefaults(config);
     }
 
-    public async Task SaveConfigAsync(AppConfig config)
+    private async Task WriteConfigAsync(byte[] json)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(_configPath)!);
-        await using var fs = File.Create(_configPath);
-        await JsonSerializer.SerializeAsync(fs, config, _json);
-        logger.LogInformation("Config saved to {Path}", _configPath);
+        var directory = Path.GetDirectoryName(_configPath)!;
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(directory, $".settings.{Guid.NewGuid():N}.tmp");
+        try
+        {
+            await File.WriteAllBytesAsync(temporaryPath, json);
+            if (File.Exists(_configPath))
+            {
+                File.Replace(temporaryPath, _configPath, destinationBackupFileName: null);
+            }
+            else
+            {
+                File.Move(temporaryPath, _configPath);
+            }
+            logger.LogInformation("Config saved to {Path}", _configPath);
+        }
+        finally
+        {
+            try
+            {
+                File.Delete(temporaryPath);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            {
+                logger.LogWarning(ex, "Could not remove temporary settings file {Path}", temporaryPath);
+            }
+        }
     }
 
     public DbSettings GetDbSettings() => new(
-        Host: Environment.GetEnvironmentVariable("DB_HOST") ?? "database",
+        Host: GetDbHost(),
         Port: int.TryParse(Environment.GetEnvironmentVariable("DB_PORT"), out var p) ? p : 5432,
         Username: Environment.GetEnvironmentVariable("DB_USERNAME") ?? "postgres",
         Password: Environment.GetEnvironmentVariable("DB_PASSWORD") ?? "",
         Database: Environment.GetEnvironmentVariable("DB_DATABASE_NAME") ?? "immich");
+
+    private static string GetDbHost()
+    {
+        var host = Environment.GetEnvironmentVariable("DB_HOST");
+        if (!string.IsNullOrWhiteSpace(host))
+        {
+            return host;
+        }
+
+        var hostname = Environment.GetEnvironmentVariable("DB_HOSTNAME");
+        return !string.IsNullOrWhiteSpace(hostname) ? hostname : "database";
+    }
 
     private static AppConfig EnsureDefaults(AppConfig config)
     {

@@ -162,11 +162,7 @@ public class PoiService
         await using var conn = new SqliteConnection($"Data Source={dbPath}");
         await conn.OpenAsync(ct);
         await using var cmd = conn.CreateCommand();
-        cmd.CommandText = BuildPoiQuery(allowlistSql);
-        cmd.Parameters.AddWithValue("$minLat", minLat);
-        cmd.Parameters.AddWithValue("$maxLat", maxLat);
-        cmd.Parameters.AddWithValue("$minLon", minLon);
-        cmd.Parameters.AddWithValue("$maxLon", maxLon);
+        cmd.CommandText = BuildPoiQuery(minLat, maxLat, minLon, maxLon, allowlistSql);
 
         PoiResult? best = null;
         var candidates = new List<PoiCandidateDiagnostic>();
@@ -267,7 +263,12 @@ public class PoiService
         return R * 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
     }
 
-    private static string BuildPoiQuery(string allowlistSql)
+    private static string BuildPoiQuery(
+        double minLat,
+        double maxLat,
+        double minLon,
+        double maxLon,
+        string allowlistSql)
     {
         return $"""
             SELECT
@@ -282,8 +283,8 @@ public class PoiService
                 bbox_xmax,
                 bbox_ymax
             FROM poi
-            WHERE latitude  BETWEEN $minLat AND $maxLat
-              AND longitude BETWEEN $minLon AND $maxLon
+            WHERE latitude  BETWEEN {minLat} AND {maxLat}
+              AND longitude BETWEEN {minLon} AND {maxLon}
               AND primary_category_id IN ({allowlistSql})
             """;
     }

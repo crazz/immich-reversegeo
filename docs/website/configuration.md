@@ -16,13 +16,15 @@ Database values are environment-backed and shown as read-only in the UI.
 
 The app reads:
 
-- `DB_HOST`
+- `DB_HOSTNAME` (or the existing `DB_HOST` setting)
 - `DB_PORT`
 - `DB_USERNAME`
 - `DB_PASSWORD`
 - `DB_DATABASE_NAME`
 
 These values are required because the app reads and updates immich data directly.
+
+For the database host, a nonblank `DB_HOST` takes precedence over `DB_HOSTNAME`. If neither has a nonblank value, the host defaults to `database`. You can reuse Immich's `DB_HOSTNAME` value for an external database without renaming it.
 
 <div class="step-grid">
   <div class="step-card">
@@ -34,6 +36,15 @@ These values are required because the app reads and updates immich data directly
     <p>Set the database values where you launch the app, then restart it if you change them.</p>
   </div>
 </div>
+
+## Saving settings
+
+Settings and City Resolver show whether changes are saved. **Save changes** saves the values present when you click it. If you keep editing during a save, those later edits stay pending for another save. Leaving an editor with unsaved changes asks for confirmation.
+
+The two editors save their own sections, so saving City Resolver does not overwrite processing or schedule changes made elsewhere. **Test Connection** checks the environment-backed database connection without saving settings.
+
+
+Saving replaces the settings file only after the new values have been written completely. If a save fails, the previous file remains available. Database credentials stay in the environment.
 
 ## Processing settings
 
@@ -48,7 +59,7 @@ The Settings page lets you control:
 - whether split-territory GADM fallback families should be tried
 - whether every asset is written to the log
 
-Most users should stay on the preset schedule options. Manual runs from the dashboard still work even when automatic scheduling is disabled.
+Most users should stay on the preset schedule options. Custom cron expressions can also schedule infrequent runs, such as once per year. Manual runs from the dashboard still work even when automatic scheduling is disabled.
 
 <div class="feature-grid">
   <div class="card">

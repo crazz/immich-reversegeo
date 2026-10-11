@@ -5,12 +5,24 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ImmichReverseGeo.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public class ConfigServiceTests
 {
+    private static readonly string[] DbEnvironmentKeys =
+        ["DB_HOST", "DB_HOSTNAME", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE_NAME"];
+    private readonly Dictionary<string, string?> _originalEnvironment = new();
     private string _tempDir = null!;
 
     [TestInitialize]
-    public void Setup() => _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+    public void Setup()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        foreach (var key in DbEnvironmentKeys)
+        {
+            _originalEnvironment[key] = Environment.GetEnvironmentVariable(key);
+            Environment.SetEnvironmentVariable(key, null);
+        }
+    }
 
     [TestCleanup]
     public void Cleanup()
@@ -19,10 +31,9 @@ public class ConfigServiceTests
         {
             Directory.Delete(_tempDir, recursive: true);
         }
-        // Clear env vars set by GetDbSettings_ReadsEnvVars
-        foreach (var key in new[] { "DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE_NAME" })
+        foreach (var key in DbEnvironmentKeys)
         {
-            Environment.SetEnvironmentVariable(key, null);
+            Environment.SetEnvironmentVariable(key, _originalEnvironment[key]);
         }
     }
 
@@ -50,6 +61,130 @@ public class ConfigServiceTests
         var loaded = await svc2.GetConfigAsync();
         Assert.AreEqual(99, loaded.Processing.BatchSize);
         Assert.IsFalse(loaded.Processing.UseAirportInfrastructure);
+    }
+
+    [TestMethod]
+    public async Task Save_WhileReading_KeepsCompleteOldAndNewSnapshots()
+    {
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        var original = new AppConfig();
+        original.Processing.BatchSize = 17;
+        await svc.SaveConfigAsync(original);
+        var path = Path.Combine(_tempDir, "settings.json");
+        await using var reader = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+
+        var updated = new AppConfig();
+        updated.Processing.BatchSize = 83;
+        await svc.SaveConfigAsync(updated);
+
+        var oldSnapshot = await System.Text.Json.JsonSerializer.DeserializeAsync<AppConfig>(reader,
+            new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true });
+        Assert.AreEqual(17, oldSnapshot!.Processing.BatchSize);
+        Assert.AreEqual(83, (await svc.GetConfigAsync()).Processing.BatchSize);
+        Assert.AreEqual(0, Directory.GetFiles(_tempDir, ".settings.*.tmp").Length);
+    }
+
+    [TestMethod]
+    public async Task Save_WhenReplacementFails_PreservesSettingsAndRemovesTemporaryFile()
+    {
+        if (!OperatingSystem.IsWindows())
+        {
+            Assert.Inconclusive("Windows file sharing is required for this failure probe.");
+        }
+
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        await svc.SaveConfigAsync(new AppConfig());
+        var path = Path.Combine(_tempDir, "settings.json");
+        var original = await File.ReadAllBytesAsync(path);
+        using (var locked = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        {
+            await Assert.ThrowsAsync<IOException>(() => svc.SaveConfigAsync(new AppConfig
+            {
+                Processing = new ProcessingConfig { BatchSize = 91 }
+            }));
+        }
+
+        CollectionAssert.AreEqual(original, await File.ReadAllBytesAsync(path));
+        Assert.AreEqual(0, Directory.GetFiles(_tempDir, ".settings.*.tmp").Length);
+    }
+
+    [TestMethod]
+    public async Task GetConfig_CorruptFile_ThrowsAndPreservesFile()
+    {
+        Directory.CreateDirectory(_tempDir);
+        var path = Path.Combine(_tempDir, "settings.json");
+        await File.WriteAllTextAsync(path, "{broken settings");
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+
+        await Assert.ThrowsAsync<System.Text.Json.JsonException>(() => svc.GetConfigAsync());
+        Assert.AreEqual("{broken settings", await File.ReadAllTextAsync(path));
+    }
+
+    [TestMethod]
+    public async Task ConcurrentReadsAndSaves_ReturnCompleteMatchingValues()
+    {
+        var writer = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        var reader = writer; // Runtime uses one singleton for the worker and all UI circuits.
+        await writer.SaveConfigAsync(new AppConfig());
+        var saves = Task.Run(async () =>
+        {
+            for (var i = 1; i <= 40; i++)
+            {
+                await writer.SaveConfigAsync(new AppConfig
+                {
+                    Processing = new ProcessingConfig { BatchSize = i, BatchDelayMs = i }
+                });
+            }
+        });
+        try
+        {
+            while (!saves.IsCompleted)
+            {
+                var snapshot = await reader.GetConfigAsync();
+                Assert.IsTrue(snapshot.Processing.BatchSize == snapshot.Processing.BatchDelayMs
+                    || snapshot.Processing.BatchSize == 50 && snapshot.Processing.BatchDelayMs == 100);
+            }
+        }
+        finally
+        {
+            await saves;
+        }
+        Assert.AreEqual(40, (await reader.GetConfigAsync()).Processing.BatchSize);
+    }
+
+    [TestMethod]
+    public async Task SectionUpdates_PreserveOtherEditorsChanges()
+    {
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        await svc.SaveConfigAsync(new AppConfig());
+        var staleSettings = await svc.GetConfigAsync();
+        staleSettings.Processing.BatchSize = 79;
+        await svc.UpdateConfigAsync(latest =>
+        {
+            latest.Processing.CityResolver.CountryOverrides["CHE"] = new CityResolverProfile
+            {
+                PreferredSubtypes = ["localadmin"]
+            };
+        });
+        await svc.UpdateConfigAsync(latest =>
+        {
+            var resolver = latest.Processing.CityResolver;
+            latest.Schedule = staleSettings.Schedule;
+            latest.Processing = staleSettings.Processing;
+            latest.Processing.CityResolver = resolver;
+        });
+        await svc.UpdateConfigAsync(latest =>
+        {
+            latest.Processing.CityResolver.DefaultProfile = new CityResolverProfile
+            {
+                PreferredSubtypes = ["locality"]
+            };
+        });
+
+        var saved = await svc.GetConfigAsync();
+        Assert.AreEqual(79, saved.Processing.BatchSize);
+        CollectionAssert.AreEqual(new[] { "localadmin" }, saved.Processing.CityResolver.CountryOverrides["CHE"].PreferredSubtypes);
+        CollectionAssert.AreEqual(new[] { "locality" }, saved.Processing.CityResolver.DefaultProfile.PreferredSubtypes);
     }
 
     [TestMethod]
@@ -86,6 +221,26 @@ public class ConfigServiceTests
         Assert.AreEqual(25, loaded.Processing.BatchSize);
         Assert.IsFalse(loaded.Processing.UseAirportInfrastructure);
         Assert.IsTrue(loaded.Processing.VerboseLogging);
+    }
+
+    [TestMethod]
+    [DataRow(null, null, "database")]
+    [DataRow("legacy-host", null, "legacy-host")]
+    [DataRow(null, "immich-host", "immich-host")]
+    [DataRow("legacy-host", "immich-host", "legacy-host")]
+    [DataRow("", "immich-host", "immich-host")]
+    [DataRow("  ", "immich-host", "immich-host")]
+    [DataRow(null, "", "database")]
+    [DataRow("", "  ", "database")]
+    public void GetDbSettings_ResolvesHostWithLegacyPrecedence(
+        string? host, string? hostname, string expectedHost)
+    {
+        Environment.SetEnvironmentVariable("DB_HOST", host);
+        Environment.SetEnvironmentVariable("DB_HOSTNAME", hostname);
+
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+
+        Assert.AreEqual(expectedHost, svc.GetDbSettings().Host);
     }
 
     [TestMethod]
