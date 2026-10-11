@@ -29,7 +29,7 @@ Reference file:
 Copy/paste snippet:
 
 ```yaml title="docker-compose.yml"
---8<-- "https://raw.githubusercontent.com/immich-reversegeo/immich-reversegeo/master/docker-compose.yml"
+--8<-- "docker-compose.yml"
 ```
 
 This service expects:
