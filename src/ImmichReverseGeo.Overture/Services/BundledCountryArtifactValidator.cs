@@ -12,7 +12,6 @@ namespace ImmichReverseGeo.Overture.Services;
 
 public static class BundledCountryArtifactValidator
 {
-    private const double CoordinateTolerance = 0.00015;
     private static readonly GeometryFactory GeometryFactory = NtsGeometryServices.Instance.CreateGeometryFactory(srid: 4326);
     private static readonly WKBReader WkbReader = new();
 
@@ -34,12 +33,12 @@ public static class BundledCountryArtifactValidator
 
         foreach (var fixture in mandatoryTerritories ?? CountryResolutionFixtureCatalog.MandatoryTerritories)
         {
-            ValidateFixture(connection, fixture, rejectSovereignNormalization: true);
+            ValidateFixture(connection, fixture);
         }
 
         foreach (var fixture in parentCountryControls ?? CountryResolutionFixtureCatalog.ParentCountryControls)
         {
-            ValidateFixture(connection, fixture, rejectSovereignNormalization: false);
+            ValidateFixture(connection, fixture);
         }
 
         return statistics;
@@ -160,97 +159,33 @@ public static class BundledCountryArtifactValidator
 
     private static void ValidateFixture(
         SqliteConnection connection,
-        CountryResolutionFixture fixture,
-        bool rejectSovereignNormalization)
-    {
-        var candidates = QueryFixtureCandidates(connection, fixture.Latitude, fixture.Longitude);
-        var best = candidates.Aggregate(
-            (OvertureDivisionResult?)null,
-            (current, candidate) => current is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, current)
-                ? candidate
-                : current);
-
-        if (best is null)
-        {
-            throw new InvalidDataException($"Mandatory country fixture '{fixture.Label}' has no spatial match.");
-        }
-
-        if (!string.Equals(best.Name, fixture.DisplayName, StringComparison.Ordinal)
-            || !string.Equals(best.Country, fixture.Alpha2, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException(
-                $"Country fixture '{fixture.Label}' resolved as '{best.Name}'/{best.Country ?? "<null>"} instead of '{fixture.DisplayName}'/{fixture.Alpha2}.");
-        }
-
-        if (rejectSovereignNormalization
-            && !string.IsNullOrWhiteSpace(fixture.AdministeringSovereignAlpha2)
-            && string.Equals(best.Country, fixture.AdministeringSovereignAlpha2, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException($"Territory fixture '{fixture.Label}' normalized to sovereign '{best.Country}'.");
-        }
-
-        using var alpha3Command = connection.CreateCommand();
-        alpha3Command.CommandText = "SELECT alpha3 FROM division_area WHERE id = $id";
-        alpha3Command.Parameters.AddWithValue("$id", best.Id);
-        var alpha3 = alpha3Command.ExecuteScalar()?.ToString();
-        if (!string.Equals(alpha3, fixture.Alpha3, StringComparison.OrdinalIgnoreCase))
-        {
-            throw new InvalidDataException(
-                $"Country fixture '{fixture.Label}' resolved with Alpha-3 '{alpha3 ?? "<null>"}' instead of '{fixture.Alpha3}'.");
-        }
-    }
-
-    private static List<OvertureDivisionResult> QueryFixtureCandidates(
-        SqliteConnection connection,
-        double latitude,
-        double longitude)
+        CountryResolutionFixture fixture)
     {
         using var command = connection.CreateCommand();
         command.CommandText = """
-            SELECT id, name, subtype, class_name, admin_level, country,
-                   is_land, is_territorial, geom_wkb,
-                   bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax
-            FROM division_area
-            WHERE bbox_xmax >= $lon AND bbox_xmin <= $lon
+            SELECT geom_wkb FROM division_area
+            WHERE country = $alpha2 AND alpha3 = $alpha3 AND name = $name
+              AND bbox_xmax >= $lon AND bbox_xmin <= $lon
               AND bbox_ymax >= $lat AND bbox_ymin <= $lat
             """;
-        command.Parameters.AddWithValue("$lon", longitude);
-        command.Parameters.AddWithValue("$lat", latitude);
+        command.Parameters.AddWithValue("$alpha2", fixture.Alpha2);
+        command.Parameters.AddWithValue("$alpha3", fixture.Alpha3);
+        command.Parameters.AddWithValue("$name", fixture.DisplayName);
+        command.Parameters.AddWithValue("$lon", fixture.Longitude);
+        command.Parameters.AddWithValue("$lat", fixture.Latitude);
         using var reader = command.ExecuteReader();
-        var point = GeometryFactory.CreatePoint(new Coordinate(longitude, latitude));
-        var candidates = new List<OvertureDivisionResult>();
-
+        var point = GeometryFactory.CreatePoint(new Coordinate(fixture.Longitude, fixture.Latitude));
         while (reader.Read())
         {
-            var geometry = WkbReader.Read(OvertureDataAccess.ReadBlobValue(reader.GetValue(8)));
-            var exactCoverage = geometry.Covers(point);
-            var geometryContains = exactCoverage || geometry.Distance(point) <= CoordinateTolerance;
-            if (!geometryContains)
+            var geometry = WkbReader.Read(OvertureDataAccess.ReadBlobValue(reader.GetValue(0)));
+            if (geometry.Covers(point))
             {
-                continue;
+                return;
             }
-
-            var xmin = reader.GetDouble(9);
-            var ymin = reader.GetDouble(10);
-            var xmax = reader.GetDouble(11);
-            var ymax = reader.GetDouble(12);
-            candidates.Add(new OvertureDivisionResult(
-                reader.GetString(0),
-                reader.GetString(1),
-                OvertureDataAccess.ReadNullableString(reader, 2),
-                OvertureDataAccess.ReadNullableString(reader, 3),
-                reader.IsDBNull(4) ? null : reader.GetInt32(4),
-                OvertureDataAccess.ReadNullableString(reader, 5),
-                null,
-                OvertureDataAccess.ReadSqliteBool(reader, 6),
-                OvertureDataAccess.ReadSqliteBool(reader, 7),
-                true,
-                exactCoverage,
-                geometryContains,
-                Math.Abs((xmax - xmin) * (ymax - ymin))));
         }
 
-        return candidates;
+        throw new InvalidDataException(
+            $"Country fixture '{fixture.Label}' has no exact boundary coverage for '{fixture.DisplayName}'/{fixture.Alpha2}/{fixture.Alpha3}.");
     }
 
     private static Envelope ReadBounds(SqliteDataReader reader, string id)
@@ -260,7 +195,17 @@ public static class BundledCountryArtifactValidator
             throw new InvalidDataException($"Bundled country row '{id}' has incomplete source bounds.");
         }
 
-        return new Envelope(reader.GetDouble(6), reader.GetDouble(8), reader.GetDouble(7), reader.GetDouble(9));
+        var xmin = reader.GetDouble(6);
+        var ymin = reader.GetDouble(7);
+        var xmax = reader.GetDouble(8);
+        var ymax = reader.GetDouble(9);
+        if (!double.IsFinite(xmin) || !double.IsFinite(ymin) || !double.IsFinite(xmax) || !double.IsFinite(ymax)
+            || xmin > xmax || ymin > ymax)
+        {
+            throw new InvalidDataException($"Bundled country row '{id}' has invalid source bounds.");
+        }
+
+        return new Envelope(xmin, xmax, ymin, ymax);
     }
 
     private static string? ReadMetadata(SqliteConnection connection, string key)

@@ -10,6 +10,20 @@ try
 {
     var options = ExportOptions.Parse(args);
     var outputPath = Path.GetFullPath(options.OutputPath);
+    if (options.ValidateOnly)
+    {
+        if (options.Dataset != ExportDataset.CountryDivisions)
+        {
+            throw new ArgumentException("--validate-only requires --dataset country-divisions.");
+        }
+
+        var statistics = BundledCountryArtifactValidator.Validate(
+            outputPath,
+            CountryIdentityCatalog.Load(Path.Combine(AppContext.BaseDirectory, "bundled-data", "iso3166.json")));
+        Console.WriteLine($"Validated release {statistics.Release}: {statistics.RowCount:N0} rows, {statistics.StandardIdentityCount:N0} identities, {statistics.WkbBytes:N0} WKB bytes.");
+        return 0;
+    }
+
     Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
 
     var release = options.Release ?? GetLatestRelease();
@@ -363,6 +377,7 @@ file sealed record ExportOptions
 
     public string OutputPath { get; init; } = DefaultOutputRelativePath;
     public string? Release { get; init; }
+    public bool ValidateOnly { get; init; }
     public ExportDataset Dataset { get; init; } = ExportDataset.Airports;
 
     public static ExportOptions Parse(string[] args)
@@ -381,6 +396,9 @@ file sealed record ExportOptions
                     break;
                 case "--dataset":
                     options = ParseDataset(options, RequireValue(args, ref i, "--dataset"));
+                    break;
+                case "--validate-only":
+                    options = options with { ValidateOnly = true };
                     break;
                 case "--help":
                 case "-h":
@@ -427,7 +445,7 @@ file sealed record ExportOptions
     private static void PrintHelp()
     {
         Console.WriteLine("Usage:");
-        Console.WriteLine("  dotnet run --project src/ImmichReverseGeo.Tools.OvertureExport [--dataset <airports|country-divisions>] [--output <path>] [--release <release>]");
+        Console.WriteLine("  dotnet run --project src/ImmichReverseGeo.Tools.OvertureExport [--dataset <airports|country-divisions>] [--output <path>] [--release <release>] [--validate-only]");
         Console.WriteLine();
         Console.WriteLine($"Default airports output: {DefaultOutputRelativePath}");
         Console.WriteLine($"Default country-divisions output: {DefaultCountryDivisionsOutputRelativePath}");

@@ -10,6 +10,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 - Fixed offline country detection for Hong Kong and added validated distinct-territory coverage for Macao, Greenland, the Faroe Islands, the Crown Dependencies, selected US and UK territories, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Added structured country-bootstrap outcomes that distinguish spatial misses from identity mapping failures, plus deterministic dependency-over-sovereign selection.
 - Added shared territory fixtures, artifact validation, downstream Overture/GADM routing tests, and country-index size, memory, initialization, and warm-lookup performance budgets.
+- Enhance the country exporter to include dependencies, canonical catalog identities, and source traceability. Validate generated artifacts and shared coordinate coverage before replacement, and add a read-only validation mode. This tooling change does not replace shipped country data or change runtime resolution.
+
 - Add a portable country identity catalog with explicit display names, Alpha-2/Alpha-3 mappings, and source aliases. CountryCodeService uses the catalog for country options; retain legacy flat mapping-file support. Geographic boundaries and containment selection are unchanged.
 
 - Match Nearby Places include/exclude terms at snake-case category boundaries in both SQL and diagnostics, preventing `port` from matching `sports` or `transportation` while retaining compound types such as `art_museum` and `train_station`.

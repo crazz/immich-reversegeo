@@ -14,6 +14,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 - Country detection now keeps supported territories as their own country identity instead of replacing them with the administering country.
 - Fixed the reported Hong Kong coordinates and expanded built-in coverage for Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.
+- Added checks for future bundled country-data updates. The shipped geographic data and country-matching behavior are unchanged by this tooling update.
+
 - Country selection lists now use bundled names consistently across platforms. This change does not add geographic coverage or change how coordinates match a country.
 
 - Nearby Places filters now avoid unrelated sports and transport businesses that previously matched part of a category name.
