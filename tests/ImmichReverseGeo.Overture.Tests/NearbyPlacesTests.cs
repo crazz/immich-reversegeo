@@ -8,6 +8,32 @@ namespace ImmichReverseGeo.Overture.Tests;
 public class NearbyPlacesTests
 {
     [TestMethod]
+    [DataRow("sports_and_recreation", false)]
+    [DataRow("pipeline_transportation", false)]
+    [DataRow("travel_and_transportation", false)]
+    [DataRow("support_service", false)]
+    [DataRow("port", true)]
+    [DataRow("commercial_port", true)]
+    [DataRow("art_museum", true)]
+    [DataRow("train_station", true)]
+    [DataRow("national_park", true)]
+    [DataRow("baroque_church", true)]
+    [DataRow("gas_station", false)]
+    [DataRow("airport_gate", false)]
+    [DataRow("museum_shop", false)]
+    public void CategoryFilter_MatchesCompleteTermsAndPreservesCompoundCategories(string category, bool expected)
+    {
+        Assert.AreEqual(expected, OverturePlacesLogic.IsInterestingPhotoPlace(Place("test", category, 0.99, 10)));
+    }
+
+    [TestMethod]
+    public void CategoryFilter_AlsoMatchesBasicCategoryAsASeparateIdentifier()
+    {
+        var place = Place("test", "unknown_type", 0.99, 10) with { BasicCategory = "art_museum" };
+        Assert.IsTrue(OverturePlacesLogic.IsInterestingPhotoPlace(place));
+        Assert.IsFalse(OverturePlacesLogic.IsInterestingPhotoPlace(place with { Category = "gas_station" }));
+    }
+    [TestMethod]
     public void Sources_HandleDatasetAndProviderResourceWithoutUsingPropertyNamesAsAttribution()
     {
         var sources = OverturePlacesLogic.ParseSources("""
@@ -74,6 +100,12 @@ public class NearbyPlacesTests
                 INSERT INTO fixture VALUES ('unknown', 'museum', NULL, 0.000002, 'open', 'CH');
                 INSERT INTO fixture VALUES ('closed', 'museum', 0, 0.000003, 'permanently_closed', 'CH');
                 INSERT INTO fixture VALUES ('low', 'museum', 0.89, 0.000004, 'open', 'CH');
+                INSERT INTO fixture VALUES ('pipeline', 'pipeline_transportation', 0.99, 0.000005, 'open', 'CH');
+                INSERT INTO fixture VALUES ('sports', 'sports_and_recreation', 0.99, 0.000006, 'open', 'CH');
+                INSERT INTO fixture VALUES ('airport-gate', 'airport_gate', 0.99, 0.000007, 'open', 'CH');
+                INSERT INTO fixture VALUES ('real-port', 'commercial_port', 0.99, 0.001, 'open', 'CH');
+                INSERT INTO fixture VALUES ('art-museum', 'art_museum', 0.99, 0.002, 'open', 'CH');
+                INSERT INTO fixture VALUES ('baroque-church', 'baroque_church', 0.99, 0.0025, 'open', 'CH');
                 COPY (SELECT id,
                     {'primary': id, 'common': map(['en'], [id])} AS names,
                     {'primary': category} AS taxonomy, category AS basic_category, confidence,
@@ -103,10 +135,15 @@ public class NearbyPlacesTests
             }
 
             var result = OverturePlacesLogic.BuildPlaceDiagnostics(places, null, "CH");
-            Assert.AreEqual("nearest", result.BestMatch?.Id, "Nearby shops must not consume the suggestion limit.");
+            Assert.AreEqual("real-port", result.BestMatch?.Id, "Actual ports must match without admitting unrelated transportation categories.");
             Assert.AreEqual(80, result.Candidates.Count(c => c.Eligible));
             Assert.AreEqual(20, result.Candidates.Count(c => !c.Eligible));
-            Assert.AreEqual("museum-78", result.Candidates.Last(c => c.Eligible).Id, "The closest 80 useful places must survive the limit.");
+            Assert.AreEqual("museum-75", result.Candidates.Last(c => c.Eligible).Id, "The closest 80 useful places must survive the limit.");
+            Assert.IsTrue(result.Candidates.Single(c => c.Id == "art-museum").Eligible);
+            Assert.IsTrue(result.Candidates.Single(c => c.Id == "baroque-church").Eligible, "An exclusion such as bar must not match part of another category term.");
+            Assert.IsFalse(result.Candidates.Single(c => c.Id == "pipeline").Eligible);
+            Assert.IsFalse(result.Candidates.Single(c => c.Id == "sports").Eligible);
+            Assert.IsFalse(result.Candidates.Single(c => c.Id == "airport-gate").Eligible);
             Assert.IsFalse(result.Candidates.Any(c => c.Id is "far" or "wrong-country"));
             CollectionAssert.AreEqual(new[] { "fixture-source" }, result.BestMatch!.Sources.ToArray());
             foreach (var place in places)
