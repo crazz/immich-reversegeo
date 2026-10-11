@@ -37,6 +37,10 @@ For the database host, a nonblank `DB_HOST` takes precedence over `DB_HOSTNAME`.
   </div>
 </div>
 
+## Saving settings
+
+Saving replaces the settings file only after the new values have been written completely. If a save fails, the previous file remains available. Database credentials stay in the environment.
+
 ## Processing settings
 
 The Settings page lets you control:
