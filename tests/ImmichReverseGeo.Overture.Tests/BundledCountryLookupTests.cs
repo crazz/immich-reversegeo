@@ -142,7 +142,9 @@ public class BundledCountryLookupTests
     }
 
     [TestMethod]
-    public async Task MatchedBoundaryWithUnresolvedIdentity_ReturnsMappingFailure()
+    [DataRow("ZZ")]
+    [DataRow(null)]
+    public async Task MatchedBoundaryWithUnresolvedIdentity_ReturnsMappingFailure(string? alpha2)
     {
         var root = CreateFixture();
         try
@@ -151,7 +153,8 @@ public class BundledCountryLookupTests
             {
                 conn.Open();
                 using var cmd = conn.CreateCommand();
-                cmd.CommandText = "UPDATE division_area SET country = 'ZZ' WHERE id = 'aa'";
+                cmd.CommandText = "UPDATE division_area SET country = $country WHERE id = 'aa'";
+                cmd.Parameters.AddWithValue("$country", (object?)alpha2 ?? DBNull.Value);
                 cmd.ExecuteNonQuery();
             }
 
@@ -160,7 +163,7 @@ public class BundledCountryLookupTests
             Assert.AreEqual(BundledCountryLookupStatus.IdentityMappingFailure, result.Status);
             Assert.IsNull(result.Iso3);
             Assert.AreEqual("Aaland", result.CountryName);
-            Assert.AreEqual("ZZ", result.Alpha2);
+            Assert.AreEqual(alpha2, result.Alpha2);
             Assert.AreEqual("aa", result.SourceId);
             Assert.IsNotNull(result.FailureReason);
         }
