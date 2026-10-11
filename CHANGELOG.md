@@ -6,6 +6,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Route HKG/MAC GADM territory fallbacks to a shared CHN cache without standalone package requests. Preserve resolved country identity and require named geometry matches in processing and Lookup for these shared-dataset results, excluding GADM's deeper NA placeholder subdivisions.
+
 - Query the bundled country spatial index using the existing tolerance envelope so nearby points outside source bounding boxes can resolve. Preserve prepared-geometry exact matching before tolerance and actual bounding-box containment ranking.
 
 - Make equal Overture division candidates deterministic: rank known administrative levels before missing levels and use ordinal source IDs for otherwise equal candidates. Preserve containment, subtype, territorial, and bounding-box-area priorities.

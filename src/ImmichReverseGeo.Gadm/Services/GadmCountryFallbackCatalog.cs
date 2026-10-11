@@ -6,6 +6,18 @@ namespace ImmichReverseGeo.Gadm.Services;
 
 public static class GadmCountryFallbackCatalog
 {
+    // GADM 4.1 stores these administrative areas in the China package.
+    // This selects source data only; the app's resolved country identity is unchanged.
+    private static readonly IReadOnlyDictionary<string, string> SharedCountryDatasets =
+        new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+        {
+            ["HKG"] = "CHN",
+            ["MAC"] = "CHN"
+        };
+
+    public static bool UsesSharedCountryDataset(string iso3) =>
+        !string.IsNullOrWhiteSpace(iso3) && SharedCountryDatasets.ContainsKey(iso3.Trim());
+
     private static readonly IReadOnlyDictionary<string, IReadOnlyList<string>> Families =
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
         {
@@ -40,6 +52,11 @@ public static class GadmCountryFallbackCatalog
         }
 
         var normalized = iso3.Trim().ToUpperInvariant();
+        if (SharedCountryDatasets.TryGetValue(normalized, out var sourceCode))
+        {
+            return [sourceCode];
+        }
+
         if (!Families.TryGetValue(normalized, out var family))
         {
             return [normalized];

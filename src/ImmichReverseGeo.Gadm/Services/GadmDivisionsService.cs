@@ -80,7 +80,8 @@ public class GadmDivisionsService
         double lat,
         double lon,
         IEnumerable<string> iso3Codes,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        bool requireGeometryMatch = false)
     {
         try
         {
@@ -101,7 +102,7 @@ public class GadmDivisionsService
                     continue;
                 }
 
-                var partial = QueryDivisionAreasFromSqlite(dbPath, lat, lon);
+                var partial = QueryDivisionAreasFromSqlite(dbPath, lat, lon, requireGeometryMatch);
                 version ??= partial.Version;
 
                 foreach (var candidate in partial.Candidates)
@@ -132,7 +133,8 @@ public class GadmDivisionsService
     private static GadmDivisionLookupDiagnostics QueryDivisionAreasFromSqlite(
         string dbPath,
         double lat,
-        double lon)
+        double lon,
+        bool requireGeometryMatch = false)
     {
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false");
         conn.Open();
@@ -182,6 +184,16 @@ public class GadmDivisionsService
                 bboxContains,
                 geometryContains,
                 bboxArea);
+
+            // Shared packages include unnamed deeper subdivisions marked NA.
+            // Reject them before selecting a winner, along with bounding-box-only matches.
+            if (requireGeometryMatch
+                && (!candidate.GeometryContainsPoint
+                    || string.IsNullOrWhiteSpace(candidate.Name)
+                    || string.Equals(candidate.Name.Trim(), "NA", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
 
             var selected = false;
             var decision = "considered: weaker than current GADM best";

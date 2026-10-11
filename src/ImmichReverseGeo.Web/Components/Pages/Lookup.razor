@@ -635,7 +635,9 @@
         if (_preferGadmAdministrativeAreas && r.GadmDivisionCacheReady)
         {
             await UpdateLookupStatusAsync($"Querying cached GADM administrative areas across {string.Join(", ", _gadmCandidateCodes)}...");
-            r.GadmDivisionDiagnostics = await GadmDivisions.FindContainingDivisionAreasAsync(_lat, _lon, _gadmCandidateCodes);
+            r.GadmDivisionDiagnostics = await GadmDivisions.FindContainingDivisionAreasAsync(
+                _lat, _lon, _gadmCandidateCodes,
+                requireGeometryMatch: GadmCountryFallbackCatalog.UsesSharedCountryDataset(r.Iso3!));
             r.GadmDivision = r.GadmDivisionDiagnostics.BestMatch;
             r.GadmDivisionState = GadmDivisionsLogic.SelectStateName(r.GadmDivisionDiagnostics.Candidates);
             r.GadmDivisionCity = GadmDivisionsLogic.SelectCityName(r.GadmDivisionDiagnostics.Candidates);
