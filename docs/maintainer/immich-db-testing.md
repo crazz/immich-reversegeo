@@ -1,6 +1,6 @@
 # Live Immich database checks
 
-The opt-in harness validates ReverseGeo's actual SQL against pinned Immich 3.1.0, 3.2.0, and 3.3.1 servers. It creates separate synthetic libraries; it accepts no production connection settings and does not reuse Lounge stacks.
+The opt-in harness validates ReverseGeo's actual SQL against pinned Immich 3.1.0, 3.2.0, and 3.3.1 servers. It creates separate synthetic libraries; it accepts no production connection settings.
 
 | Target | Immich UI | PostgreSQL | Docker project |
 |---|---|---|---|
