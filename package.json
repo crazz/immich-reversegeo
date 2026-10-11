@@ -5,6 +5,7 @@
   "scripts": {
     "build": "dotnet build",
     "test": "dotnet test --filter \"TestCategory!=Integration&TestCategory!=Performance\"",
+    "test:immich-db": "pwsh -NoProfile -File tests/LiveImmichDb/Run-LiveImmichDb.ps1 -Action Test",
     "test:integration": "dotnet test --settings integration.runsettings --filter \"TestCategory=Integration\"",
     "start": "dotnet run --project src/ImmichReverseGeo.Web",
     "docker:build": "docker compose -f docker-compose.local.yml build --no-cache",
