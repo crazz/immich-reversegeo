@@ -3,20 +3,19 @@
 @inject ProcessingState State
 @implements IDisposable
 
-<nav class="nav-menu">
+<nav class="nav-menu" aria-label="Main navigation">
     <div class="nav-brand">
-        <div class="nav-brand-header">
-            <img class="nav-logo" src="brand/logo-mark.svg" alt="Immich ReverseGeo" />
+        <a class="nav-brand-header" href="/" aria-label="Immich ReverseGeo dashboard">
+            <img class="nav-logo" src="brand/logo-mark.svg" alt="" width="40" height="40" />
             <span class="nav-title">Immich ReverseGeo
                 <span class="status-dot @(State.IsRunning ? "running" : State.LastError is not null ? "error" : "idle")"
                       title="@(State.IsRunning ? "Processing..." : State.LastError is not null ? "Error" : "Idle")"></span>
             </span>
-        </div>
+        </a>
         <p class="nav-tagline">Reverse geocoding for your Immich library.</p>
     </div>
 
     <div class="nav-section">
-        <div class="nav-section-title">Navigation</div>
         <NavLink href="/" Match="NavLinkMatch.All">Dashboard</NavLink>
         <div class="nav-subsection">
             <NavLink href="/data" Match="NavLinkMatch.Prefix">Data</NavLink>
@@ -34,6 +33,7 @@
         </div>
         <NavLink href="/logs">Logs</NavLink>
     </div>
+    <a class="nav-help" href="https://immich-reversegeo.github.io/" target="_blank" rel="noopener noreferrer">Help &amp; setup</a>
 </nav>
 
 @code {

@@ -5,6 +5,9 @@ reconnectModal.addEventListener("components-reconnect-state-changed", handleReco
 const retryButton = document.getElementById("components-reconnect-button");
 retryButton.addEventListener("click", retry);
 
+const reloadButton = document.getElementById("components-reload-button");
+reloadButton.addEventListener("click", () => location.reload());
+
 const resumeButton = document.getElementById("components-resume-button");
 resumeButton.addEventListener("click", resume);
 
@@ -16,7 +19,18 @@ function handleReconnectStateChanged(event) {
     } else if (event.detail.state === "failed") {
         document.addEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
     } else if (event.detail.state === "rejected") {
-        location.reload();
+        showExpiredSession();
+    }
+}
+
+function showExpiredSession() {
+    document.removeEventListener("visibilitychange", retryWhenDocumentBecomesVisible);
+    reconnectModal.classList.remove(
+        "components-reconnect-show", "components-reconnect-hide", "components-reconnect-retrying",
+        "components-reconnect-failed", "components-reconnect-paused", "components-reconnect-resume-failed");
+    reconnectModal.classList.add("components-reconnect-rejected");
+    if (!reconnectModal.open) {
+        reconnectModal.showModal();
     }
 }
 
@@ -31,10 +45,10 @@ async function retry() {
         const successful = await Blazor.reconnect();
         if (!successful) {
             // We have been able to reach the server, but the circuit is no longer available.
-            // We'll reload the page so the user can continue using the app as quickly as possible.
+            // Ask the user to reload if the session cannot be resumed.
             const resumeSuccessful = await Blazor.resumeCircuit();
             if (!resumeSuccessful) {
-                location.reload();
+                showExpiredSession();
             } else {
                 reconnectModal.close();
             }
@@ -49,7 +63,7 @@ async function resume() {
     try {
         const successful = await Blazor.resumeCircuit();
         if (!successful) {
-            location.reload();
+            showExpiredSession();
         }
     } catch {
         reconnectModal.classList.replace("components-reconnect-paused", "components-reconnect-resume-failed");
