@@ -167,9 +167,7 @@ public class BundledCountryLookupTests
         var factory = new GeometryFactory(new PrecisionModel(), 4326);
         var writer = new WKBWriter();
 
-        // A diamond, so that points exist which fall inside the bounding box but outside the
-        // boundary — the only place the tolerance fallback can ever apply (see
-        // PointOutsideBoundingBox_IsRescuedByTolerance).
+        // A diamond provides points inside its bounding box but outside its boundary.
         var compact = factory.CreatePolygon([
             new Coordinate(9.0, 50.0),
             new Coordinate(10.0, 49.0),
