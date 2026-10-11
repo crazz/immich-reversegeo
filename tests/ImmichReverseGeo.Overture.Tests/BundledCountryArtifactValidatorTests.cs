@@ -29,6 +29,7 @@ public class BundledCountryArtifactValidatorTests
     [DataRow("UPDATE division_area SET name = 'China' WHERE country = 'HK'")]
     [DataRow("UPDATE division_area SET source_country = 'ZZ' WHERE country = 'HK'")]
     [DataRow("UPDATE division_area SET source_country = 'CN' WHERE country = 'HK'")]
+    [DataRow("UPDATE division_area SET source_country = 'XA' WHERE country = 'HK'")]
     [DataRow("UPDATE division_area SET subtype = 'locality' WHERE country = 'HK'")]
     [DataRow("UPDATE division_area SET geom_wkb = NULL WHERE country = 'HK'")]
     [DataRow("UPDATE division_area SET bbox_xmax = 0.1 WHERE country = 'HK'")]
@@ -57,6 +58,29 @@ public class BundledCountryArtifactValidatorTests
                 path, catalog, [HongKong with { Longitude = 1.0001 }], [])));
     }
 
+    [TestMethod]
+    [DataRow("point")]
+    [DataRow("line")]
+    public void NonPolygonBoundary_IsRejected(string shape)
+    {
+        WithArtifact(null, (path, catalog) =>
+        {
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=false"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                var factory = new GeometryFactory();
+                Geometry geometry = shape == "point"
+                    ? factory.CreatePoint(new Coordinate(0.5, 0.5))
+                    : factory.CreateLineString([new Coordinate(0, 0), new Coordinate(1, 1)]);
+                command.CommandText = "UPDATE division_area SET geom_wkb = $geometry WHERE country = 'HK'";
+                command.Parameters.AddWithValue("$geometry", new WKBWriter().Write(geometry));
+                command.ExecuteNonQuery();
+            }
+
+            Assert.ThrowsExactly<InvalidDataException>(() => BundledCountryArtifactValidator.Validate(path, catalog, [HongKong], []));
+        });
+    }
     private static void WithArtifact(string? mutation, Action<string, CountryIdentityCatalog> check)
     {
         var root = Path.Combine(Path.GetTempPath(), $"reversegeo-artifact-{Guid.NewGuid():N}");
@@ -66,7 +90,7 @@ public class BundledCountryArtifactValidatorTests
         {
             var catalogPath = Path.Combine(root, "catalog.json");
             File.WriteAllText(catalogPath, """
-                {"iso3ToAlpha2":{"HKG":"HK","CHN":"CN"},"displayNamesByAlpha2":{"HK":"Hong Kong","CN":"China"}}
+                {"iso3ToAlpha2":{"HKG":"HK","CHN":"CN"},"displayNamesByAlpha2":{"HK":"Hong Kong","CN":"China"},"explicitlyNonIsoAlpha2Codes":["XA"]}
                 """);
             using (var connection = new SqliteConnection($"Data Source={path};Pooling=false"))
             {
