@@ -6,6 +6,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Include Overture source aliases CP, XE, XS, and XJ in their canonical FRA, BES, and SJM administrative caches. Store the exported source-code set in cache metadata and refresh only affected older caches; retain ordinary-country caches and keep the old file until a replacement succeeds.
+
 - Fixed scheduler startup failures for cron expressions whose next run is beyond the timer-supported delay range. Scheduled waits now use cancellable intervals of at most one day and recheck the UTC deadline before starting processing.
 - Publish full Docker version tags on GitHub release publication, promote the built digest to `latest` only for GitHub's designated latest stable release through a serialized queue, and retain `edge`, SHA tags, and the explicit manual promotion option. Validate prerelease identifiers including consecutive and trailing hyphens.
 
