@@ -4,6 +4,7 @@
 
 - Push `master`
 - Confirm CI passes
+- Confirm CI's publishing job succeeds. Each master push publishes `edge` and SHA tags only after the same commit passes build, test, and Docker build checks; failed or cancelled checks skip publishing.
 - Confirm Pages deploy passes
 - Confirm the docs site renders correctly
 - Update both changelogs and publish a GitHub release with a `vMAJOR.MINOR.PATCH` tag pointing to the validated commit. This starts the Docker publishing workflow; pushing a tag alone does not publish a versioned image.

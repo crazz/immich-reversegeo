@@ -13,6 +13,7 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 - Fixed the app stopping while waiting for an infrequent custom schedule, such as an annual run.
 - Docker releases now have version tags for controlled upgrades. GitHub's designated latest stable release updates `latest`; older release retries and prereleases do not automatically change it. `edge` continues to follow development builds.
+- Development images now publish only after their build and automated checks pass.
 
 - You can now reuse Immich's `DB_HOSTNAME` setting to connect to an external database. Existing `DB_HOST` settings continue to work and take precedence when nonblank.
 - Dashboard and Logs now show dates and times in your browser's timezone. Downloaded logs remain in UTC with full dates.
