@@ -102,32 +102,7 @@ public class OverturePlacesService
         return release;
     }
 
-    private string GetLatestReleaseViaDuckDb()
-    {
-        try
-        {
-            using var conn = new DuckDBConnection("Data Source=:memory:");
-            conn.Open();
-            OvertureDataAccess.LoadHttpfs(conn);
-
-            using var query = conn.CreateCommand();
-            query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
-            var value = query.ExecuteScalar()?.ToString();
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                return value;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                "Overture latest-release lookup via DuckDB failed; falling back to documented release {Release}: {Message}",
-                OverturePlacesLogic.DocumentedFallbackRelease,
-                ex.Message);
-        }
-
-        return OverturePlacesLogic.DocumentedFallbackRelease;
-    }
+    private static string GetLatestReleaseViaDuckDb() => OvertureReleaseCatalog.GetLatestRelease();
 
     private OvertureLookupDiagnostics QueryOverture(double lat, double lon, string? alpha2, string release)
     {
@@ -146,62 +121,24 @@ public class OverturePlacesService
         using var query = conn.CreateCommand();
         query.CommandText = OverturePlacesLogic.BuildQuery(lat, lon, minLat, maxLat, minLon, maxLon, alpha2, releaseUrl);
 
-        var candidates = new List<OvertureCandidateDiagnostic>();
-        OverturePlaceResult? best = null;
-
+        var places = new List<OverturePlaceResult>();
         using var reader = query.ExecuteReader();
         while (reader.Read())
         {
-            var candidateLat = reader.GetDouble(5);
-            var candidateLon = reader.GetDouble(6);
-            var distance = OverturePlacesLogic.HaversineMetres(lat, lon, candidateLat, candidateLon);
-            if (distance > OverturePlacesLogic.SearchRadiusMetres)
-            {
-                continue;
-            }
-
-            var candidate = new OverturePlaceResult(
+            places.Add(new OverturePlaceResult(
                 reader.GetString(0),
                 reader.GetString(1),
                 OvertureDataAccess.ReadNullableString(reader, 2),
                 OvertureDataAccess.ReadNullableString(reader, 3),
                 reader.IsDBNull(4) ? 0d : reader.GetDouble(4),
                 OvertureDataAccess.ReadNullableString(reader, 7),
-                distance,
-                !reader.IsDBNull(8) && reader.GetBoolean(8),
-                OverturePlacesLogic.ParseSources(OvertureDataAccess.ReadNullableString(reader, 9)));
-
-            if (!OverturePlacesLogic.IsInterestingPhotoPlace(candidate))
-            {
-                continue;
-            }
-
-            var selected = false;
-            var decision = "considered: weaker than current best";
-            if (best is null || OverturePlacesLogic.ShouldPreferCandidate(candidate, best))
-            {
-                decision = best is null
-                    ? "selected: first live Overture candidate"
-                    : "selected: outranked previous live Overture best";
-                best = candidate;
-                selected = true;
-            }
-
-            candidates.Add(new OvertureCandidateDiagnostic(
-                candidate.Id,
-                candidate.Name,
-                candidate.Category,
-                candidate.BasicCategory,
-                candidate.Confidence,
-                candidate.OperatingStatus,
-                candidate.DistanceMetres,
-                candidate.BoundingBoxContainsPoint,
-                candidate.Sources,
-                selected,
-                decision));
+                reader.GetDouble(10),
+                false,
+                OverturePlacesLogic.ParseSources(OvertureDataAccess.ReadNullableString(reader, 9)),
+                !reader.IsDBNull(4)));
         }
 
-        return new OvertureLookupDiagnostics(best, candidates, release, alpha2);
+        return OverturePlacesLogic.BuildPlaceDiagnostics(places, release, alpha2);
     }
 
     private OvertureInfrastructureLookupDiagnostics? QueryBundledInfrastructure(double lat, double lon)

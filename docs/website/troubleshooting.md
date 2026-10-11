@@ -103,3 +103,7 @@ If a save fails, the previous settings file remains available. Check volume perm
 The app tries to reconnect after a temporary connection failure. If the server no longer has your session, the dialog asks you to **Reload page** and warns that unsaved changes may be lost. Reload starts a new session; it does not recover unsaved form values.
 
 If retrying does not work, check that the container is running and your private connection to it is available, then reload.
+
+## Overture release discovery fails
+
+Check that the app can reach `https://stac.overturemaps.org/catalog.json`, then retry the lookup or country download. Overture keeps public releases for only 60 days, so the app does not fall back to a fixed older version. Existing downloaded country caches and built-in data remain usable without release discovery. Optional live Places diagnostics still need internet access.

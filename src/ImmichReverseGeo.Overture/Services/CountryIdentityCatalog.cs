@@ -45,8 +45,16 @@ public sealed class CountryIdentityCatalog
             return Empty();
         }
 
-        var document = JsonSerializer.Deserialize<CountryIdentityCatalogDocument>(File.ReadAllText(path), JsonOptions)
-            ?? new CountryIdentityCatalogDocument();
+        var json = File.ReadAllText(path);
+        using var parsed = JsonDocument.Parse(json);
+        var isCatalog = parsed.RootElement.EnumerateObject()
+            .Any(property => property.Name.Equals("iso3ToAlpha2", StringComparison.OrdinalIgnoreCase));
+        var document = isCatalog
+            ? JsonSerializer.Deserialize<CountryIdentityCatalogDocument>(json, JsonOptions) ?? new CountryIdentityCatalogDocument()
+            : new CountryIdentityCatalogDocument
+            {
+                Iso3ToAlpha2 = JsonSerializer.Deserialize<Dictionary<string, string>>(json, JsonOptions)
+            };
         var displayNames = new Dictionary<string, string>(
             document.DisplayNamesByAlpha2 ?? new Dictionary<string, string>(),
             StringComparer.OrdinalIgnoreCase);

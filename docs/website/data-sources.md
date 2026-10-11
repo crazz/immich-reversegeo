@@ -28,6 +28,8 @@ Use this page when you want to answer questions like:
 
 Immich ReverseGeo ships with a small bundled Overture country cache.
 
+A separate bundled country catalog provides standard codes and display names for country selection lists. It can translate supported Overture source aliases into standard identities, but it does not supply geographic boundaries or add coverage. Use Lookup to check whether a coordinate matches the bundled country data.
+
 The app uses it for:
 
 - the first country match for a coordinate
@@ -69,6 +71,8 @@ Official references:
 When the app needs better state and city matching, it downloads a per-country Overture administrative cache into `/data/overture-divisions/{ISO3}.db`.
 
 Downloads include separate Overture source codes for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen in their corresponding country caches. Older affected caches refresh automatically the next time they are needed. This improves downloaded boundary coverage; it does not add boundaries or names missing from Overture. Use Lookup on a known coordinate to check the state and city result before processing your library. Country detection must also recognize the location before normal processing can use its cache.
+
+New caches also include parent-area information. This can recover a city from a matching neighborhood and keep the selected city and state in the same administrative hierarchy. It cannot invent a missing city or correct an inaccurate boundary. Other older caches remain usable; re-download an individual country on the Data page to gain parent matching, and validate the result in Lookup first.
 
 The app uses this source for:
 
@@ -135,7 +139,11 @@ Official references:
 
 ## Optional live Overture Places diagnostics
 
-The Lookup page can optionally run a live Overture Places search. This is for diagnostics, not for normal background processing.
+Enable **Include nearby places** on the Lookup page to investigate a coordinate. The app shows up to five nearby suggestions with distance, category, operating status, existence confidence, sources, and the reason they were included. Lookup Trace lists all returned candidates.
+
+Suggestions are filtered before the result limit and ordered by distance within 2.5 km. Broad sports or transportation categories do not automatically qualify as useful places. The app returns at most 80 suggestions and a separate sample of up to 20 nearest excluded places, with reasons such as low or unknown confidence, closure, or an unsuitable category. The excluded sample is not a complete list of nearby places.
+
+Existence confidence estimates whether a place exists; it does not measure whether your photo was taken there. Overture Places are points, so proximity does not prove that a coordinate is inside a museum, park, or other venue. These results are for investigation and never replace the city, state, or country written to Immich.
 
 The app uses it for:
 
@@ -242,6 +250,7 @@ The recommended workflow is:
 
 - built-in Overture country and airport data ships inside the app image
 - downloaded Overture and GADM country caches are stored under `/data`
+- new Overture downloads discover the current release from its public catalog; if discovery fails, the app reports an error instead of trying an expired release
 - the first lookup or processing pass for a new country may take longer because the cache must be created locally
 - larger countries can use hundreds of megabytes of local storage per cached country
 

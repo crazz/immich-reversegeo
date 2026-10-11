@@ -14,7 +14,18 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 - Country detection now keeps supported territories as their own country identity instead of replacing them with the administering country.
 - Fixed the reported Hong Kong coordinates and expanded built-in coverage for Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.
+- Country selection lists now use bundled names consistently across platforms. This change does not add geographic coverage or change how coordinates match a country.
+
+- Nearby Places filters now avoid unrelated sports and transport businesses that previously matched part of a category name.
+
+- Make the website easier to read in light and dark mode. Follow your system theme by default and remember your choice when you switch modes.
+- Lookup now shows Nearby Places as an investigation tool, with several suggestions, distances, categories, sources, and reasons for inclusion or exclusion. Nearby places do not change the location written to Immich.
+
 - Improved downloaded administrative coverage for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen. Affected older caches refresh automatically when needed; other country caches remain usable.
+
+- Restored optional live Places lookup compatibility with recent Overture releases.
+- New Overture country downloads can use parent areas to improve city matching and keep city/state results consistent. Existing caches remain usable; re-download a country cache and test known coordinates in Lookup to use the improvement.
+- Overture download failures now report release-discovery problems instead of trying an expired data release.
 
 - Fixed the app stopping while waiting for an infrequent custom schedule, such as an annual run.
 - Docker releases now have version tags for controlled upgrades. GitHub's designated latest stable release updates `latest`; older release retries and prereleases do not automatically change it. `edge` continues to follow development builds.

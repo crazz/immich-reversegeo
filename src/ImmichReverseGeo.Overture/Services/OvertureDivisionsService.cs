@@ -267,9 +267,7 @@ public class OvertureDivisionsService
             return null;
         }
 
-        var state = OvertureDivisionsLogic.SelectStateName(diagnostics.Candidates);
-        var city = OvertureDivisionsLogic.SelectCityName(diagnostics.Candidates, cityResolverProfile);
-        return new OvertureAdministrativeResult(state, city);
+        return OvertureDivisionsLogic.SelectAdministrativeAreas(diagnostics.Candidates, cityResolverProfile);
     }
 
     public async Task<OvertureDivisionLookupDiagnostics> FindContainingDivisionAreasAsync(
@@ -327,6 +325,8 @@ public class OvertureDivisionsService
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false");
         conn.Open();
         var adminLevelColumn = HasColumn(conn, "division_area", "admin_level") ? "admin_level" : "NULL AS admin_level";
+        var divisionIdColumn = HasColumn(conn, "division_area", "division_id") ? "division_id" : "NULL AS division_id";
+        var hierarchyColumn = HasColumn(conn, "division_area", "hierarchy_json") ? "hierarchy_json" : "NULL AS hierarchy_json";
         using var cmd = conn.CreateCommand();
         cmd.CommandText = $"""
             SELECT
@@ -342,7 +342,9 @@ public class OvertureDivisionsService
                 bbox_xmin,
                 bbox_ymin,
                 bbox_xmax,
-                bbox_ymax
+                bbox_ymax,
+                {divisionIdColumn},
+                {hierarchyColumn}
             FROM division_area
             WHERE bbox_xmax >= $lon
               AND bbox_xmin <= $lon
@@ -421,7 +423,9 @@ public class OvertureDivisionsService
                 candidate.GeometryContainsPoint,
                 candidate.BoundingBoxArea,
                 selected,
-                decision));
+                decision,
+                OvertureDataAccess.ReadNullableString(reader, 13),
+                OvertureDataAccess.ReadNullableString(reader, 14)));
         }
 
         using var meta = conn.CreateCommand();
@@ -501,7 +505,9 @@ public class OvertureDivisionsService
                 candidate.GeometryContainsPoint,
                 candidate.BoundingBoxArea,
                 selected,
-                decision));
+                decision,
+                OvertureDataAccess.ReadNullableString(reader, 11),
+                OvertureDataAccess.ReadNullableString(reader, 12)));
         }
 
         return new OvertureDivisionLookupDiagnostics(best, candidates, release);

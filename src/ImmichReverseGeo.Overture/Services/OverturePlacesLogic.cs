@@ -9,13 +9,13 @@ namespace ImmichReverseGeo.Overture.Services;
 
 public static class OverturePlacesLogic
 {
-    public const string LatestCatalogUrl = "https://stac.overturemaps.org/catalog.json";
+    public const string LatestCatalogUrl = OvertureReleaseCatalog.CatalogUrl;
     public const string PlacesReleaseUrlTemplate = "az://overturemapswestus2.blob.core.windows.net/release/{0}/theme=places/type=place/*.parquet";
     public const string InfrastructureReleaseUrlTemplate = "az://overturemapswestus2.blob.core.windows.net/release/{0}/theme=base/type=infrastructure/*.parquet";
-    public const string DocumentedFallbackRelease = "2026-02-18.0";
     public const double SearchRadiusMetres = 2_500;
     public const double InfrastructureSearchRadiusMetres = 8_000;
     public const int QueryLimit = 80;
+    public const int ExcludedPreviewLimit = 20;
     public const double MinimumInterestingConfidence = 0.90;
 
     private static readonly string[] IncludedCategoryTerms =
@@ -124,26 +124,59 @@ public static class OverturePlacesLogic
             ? string.Empty
             : $"  AND lower(addresses[1].country) = '{alpha2.ToLowerInvariant()}'\n";
 
+        var latSql = lat.ToString(CultureInfo.InvariantCulture);
+        var lonSql = lon.ToString(CultureInfo.InvariantCulture);
+        var included = string.Join(" OR ", IncludedCategoryTerms.Select(term => $"contains(category_text, '_{term}_')"));
+        var excluded = string.Join(" OR ", ExcludedCategoryTerms.Select(term => $"contains(category_text, '_{term}_')"));
         return $"""
-            SELECT
-                id,
-                COALESCE(names.common['en'], names.primary) AS name,
-                categories.primary AS primary_category,
-                basic_category,
-                confidence,
-                ST_Y(geometry) AS latitude,
-                ST_X(geometry) AS longitude,
-                operating_status,
-                bbox.xmax >= {lon.ToString(CultureInfo.InvariantCulture)}
-                    AND bbox.xmin <= {lon.ToString(CultureInfo.InvariantCulture)}
-                    AND bbox.ymax >= {lat.ToString(CultureInfo.InvariantCulture)}
-                    AND bbox.ymin <= {lat.ToString(CultureInfo.InvariantCulture)} AS bbox_contains_point,
-                CAST(sources AS VARCHAR) AS sources_json
-            FROM read_parquet('{releaseUrl}', filename = true, hive_partitioning = 1)
-            WHERE names.primary IS NOT NULL
-              AND bbox.xmin BETWEEN {minLon.ToString(CultureInfo.InvariantCulture)} AND {maxLon.ToString(CultureInfo.InvariantCulture)}
-              AND bbox.ymin BETWEEN {minLat.ToString(CultureInfo.InvariantCulture)} AND {maxLat.ToString(CultureInfo.InvariantCulture)}
-            {countryClause}LIMIT {QueryLimit}
+            WITH nearby AS (
+                SELECT
+                    id,
+                    COALESCE(names.common['en'], names.primary) AS name,
+                    COALESCE(taxonomy.primary, basic_category) AS primary_category,
+                    basic_category,
+                    confidence,
+                    ST_Y(geometry) AS latitude,
+                    ST_X(geometry) AS longitude,
+                    operating_status,
+                    false AS bbox_contains_point,
+                    to_json(sources) AS sources_json
+                FROM read_parquet('{releaseUrl}', filename = true, hive_partitioning = 1)
+                WHERE names.primary IS NOT NULL
+                  AND bbox.xmin BETWEEN {minLon.ToString(CultureInfo.InvariantCulture)} AND {maxLon.ToString(CultureInfo.InvariantCulture)}
+                  AND bbox.ymin BETWEEN {minLat.ToString(CultureInfo.InvariantCulture)} AND {maxLat.ToString(CultureInfo.InvariantCulture)}
+                {countryClause}
+            ), measured AS (
+                SELECT *,
+                    6371000 * 2 * asin(sqrt(least(1.0, greatest(0.0,
+                        pow(sin(radians(latitude - {latSql}) / 2), 2)
+                        + cos(radians({latSql})) * cos(radians(latitude))
+                        * pow(sin(radians(longitude - {lonSql}) / 2), 2))))) AS distance_metres,
+                    '_' || lower(COALESCE(primary_category, '')) || '_ _' || lower(COALESCE(basic_category, '')) || '_' AS category_text
+                FROM nearby
+            ), classified AS (
+                SELECT *, CASE
+                    WHEN COALESCE(trim(operating_status), '') <> '' AND lower(trim(operating_status)) NOT IN ('active', 'open')
+                        THEN 'Excluded: place is not operating or its status is unsupported.'
+                    WHEN confidence IS NULL THEN 'Excluded: existence confidence is unknown.'
+                    WHEN NOT (confidence >= {MinimumInterestingConfidence.ToString(CultureInfo.InvariantCulture)} AND confidence <= 1)
+                        THEN 'Excluded: existence confidence is below 0.90 or invalid.'
+                    WHEN NOT ({included}) THEN 'Excluded: category is outside the useful-place filter.'
+                    WHEN {excluded} THEN 'Excluded: category is routine business or transport detail.'
+                    ELSE NULL END AS exclusion_reason
+                FROM measured
+                WHERE distance_metres <= {SearchRadiusMetres.ToString(CultureInfo.InvariantCulture)}
+            ), suggestions AS (
+                SELECT * FROM classified WHERE exclusion_reason IS NULL
+                ORDER BY distance_metres, id LIMIT {QueryLimit}
+            ), excluded_preview AS (
+                SELECT * FROM classified WHERE exclusion_reason IS NOT NULL
+                ORDER BY distance_metres, id LIMIT {ExcludedPreviewLimit}
+            ), combined AS (
+                SELECT * FROM suggestions UNION ALL SELECT * FROM excluded_preview
+            )
+            SELECT * FROM combined
+            ORDER BY exclusion_reason IS NOT NULL, distance_metres, id
             """;
     }
 
@@ -201,45 +234,61 @@ public static class OverturePlacesLogic
             return false;
         }
 
-        if (candidate.BoundingBoxContainsPoint && !currentBest.BoundingBoxContainsPoint)
-        {
-            return true;
-        }
-
-        if (!candidate.BoundingBoxContainsPoint && currentBest.BoundingBoxContainsPoint)
-        {
-            return false;
-        }
-
-        return candidate.DistanceMetres < currentBest.DistanceMetres;
+        return candidate.DistanceMetres < currentBest.DistanceMetres
+            || (candidate.DistanceMetres == currentBest.DistanceMetres
+                && string.CompareOrdinal(candidate.Id, currentBest.Id) < 0);
     }
 
-    public static bool IsInterestingPhotoPlace(OverturePlaceResult candidate)
+    public static bool IsInterestingPhotoPlace(OverturePlaceResult candidate) => GetExclusionReason(candidate) is null;
+
+    public static string? GetExclusionReason(OverturePlaceResult candidate)
     {
         if (!IsPreferredStatus(candidate.OperatingStatus))
         {
-            return false;
+            return "Excluded: place is not operating or its status is unsupported.";
         }
 
-        if (candidate.Confidence < MinimumInterestingConfidence)
+        if (!candidate.ConfidenceKnown)
         {
-            return false;
+            return "Excluded: existence confidence is unknown.";
         }
 
-        var categoryText = $"{candidate.Category} {candidate.BasicCategory}".ToLowerInvariant();
-        if (string.IsNullOrWhiteSpace(categoryText))
+        if (!double.IsFinite(candidate.Confidence) || candidate.Confidence < MinimumInterestingConfidence || candidate.Confidence > 1)
         {
-            return false;
+            return "Excluded: existence confidence is below 0.90 or invalid.";
         }
 
-        var hasIncludedTerm = IncludedCategoryTerms.Any(categoryText.Contains);
-        if (!hasIncludedTerm)
+        // Overture category identifiers use snake_case; pad each identifier to match complete terms.
+        var categoryText = $"_{candidate.Category}_ _{candidate.BasicCategory}_".ToLowerInvariant();
+        if (!IncludedCategoryTerms.Any(term => categoryText.Contains($"_{term}_", StringComparison.Ordinal)))
         {
-            return false;
+            return "Excluded: category is outside the useful-place filter.";
         }
 
-        var hasExcludedTerm = ExcludedCategoryTerms.Any(categoryText.Contains);
-        return !hasExcludedTerm;
+        return ExcludedCategoryTerms.Any(term => categoryText.Contains($"_{term}_", StringComparison.Ordinal))
+            ? "Excluded: category is routine business or transport detail."
+            : null;
+    }
+
+    public static OvertureLookupDiagnostics BuildPlaceDiagnostics(
+        IEnumerable<OverturePlaceResult> places, string? release, string? countryFilter)
+    {
+        var classified = places
+            .Where(p => double.IsFinite(p.DistanceMetres) && p.DistanceMetres >= 0 && p.DistanceMetres <= SearchRadiusMetres)
+            .Select(p => (Place: p, Reason: GetExclusionReason(p)))
+            .OrderBy(p => p.Place.DistanceMetres)
+            .ThenBy(p => p.Place.Id, StringComparer.Ordinal)
+            .ToList();
+        var included = classified.Where(p => p.Reason is null).Take(QueryLimit).ToList();
+        var excluded = classified.Where(p => p.Reason is not null).Take(ExcludedPreviewLimit);
+        var best = included.FirstOrDefault().Place;
+        var candidates = included.Concat(excluded).Select(p => new OvertureCandidateDiagnostic(
+            p.Place.Id, p.Place.Name, p.Place.Category, p.Place.BasicCategory, p.Place.Confidence,
+            p.Place.OperatingStatus, p.Place.DistanceMetres, p.Place.BoundingBoxContainsPoint, p.Place.Sources,
+            p.Reason is null && p.Place.Id == best?.Id,
+            p.Reason ?? "Included: useful place type, sufficient existence confidence, and no known closure.",
+            p.Reason is null, p.Place.ConfidenceKnown)).ToList();
+        return new OvertureLookupDiagnostics(best, candidates, release, countryFilter);
     }
 
     public static bool ShouldPreferInfrastructureCandidate(
@@ -321,21 +370,20 @@ public static class OverturePlacesLogic
             var results = new List<string>();
             foreach (var item in doc.RootElement.EnumerateArray())
             {
-                if (item.TryGetProperty("dataset", out var datasetEl))
+                if (item.ValueKind != JsonValueKind.Object)
                 {
-                    var dataset = datasetEl.GetString();
-                    if (!string.IsNullOrWhiteSpace(dataset))
-                    {
-                        results.Add(dataset);
-                    }
+                    continue;
                 }
-                else if (item.TryGetProperty("property", out var propertyEl))
+
+                var dataset = ReadSourceString(item, "dataset");
+                var provider = ReadSourceString(item, "provider");
+                var resource = ReadSourceString(item, "resource");
+                var label = dataset ?? (provider is not null && resource is not null
+                    ? $"{provider}/{resource}"
+                    : provider ?? resource);
+                if (label is not null)
                 {
-                    var property = propertyEl.GetString();
-                    if (!string.IsNullOrWhiteSpace(property))
-                    {
-                        results.Add(property);
-                    }
+                    results.Add(label);
                 }
             }
 
@@ -347,10 +395,21 @@ public static class OverturePlacesLogic
         }
     }
 
+    private static string? ReadSourceString(JsonElement source, string property)
+    {
+        if (source.TryGetProperty(property, out var value) && value.ValueKind == JsonValueKind.String)
+        {
+            var text = value.GetString();
+            return string.IsNullOrWhiteSpace(text) ? null : text;
+        }
+
+        return null;
+    }
+
     public static bool IsPreferredStatus(string? status) =>
         string.IsNullOrWhiteSpace(status)
-        || status.Equals("active", StringComparison.OrdinalIgnoreCase)
-        || status.Equals("open", StringComparison.OrdinalIgnoreCase);
+        || status.Trim().Equals("active", StringComparison.OrdinalIgnoreCase)
+        || status.Trim().Equals("open", StringComparison.OrdinalIgnoreCase);
 
     public static double HaversineMetres(double lat1, double lon1, double lat2, double lon2)
     {

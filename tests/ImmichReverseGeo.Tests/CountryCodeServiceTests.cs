@@ -9,6 +9,17 @@ namespace ImmichReverseGeo.Tests;
 public class CountryCodeServiceTests
 {
     [TestMethod]
+    public void MandatoryCountryIdentities_MapBothDirectionsAndCanonicalNames()
+    {
+        var service = CountryCodeService.CreateForTest();
+        foreach (var fixture in CountryResolutionFixtureCatalog.MandatoryTerritories.DistinctBy(fixture => fixture.Alpha2))
+        {
+            Assert.AreEqual(fixture.Alpha2, service.Iso3ToAlpha2(fixture.Alpha3), fixture.Label);
+            Assert.AreEqual(fixture.Alpha3, service.Alpha2ToIso3(fixture.Alpha2), fixture.Label);
+            Assert.AreEqual(fixture.DisplayName, service.FindByAlpha2(fixture.Alpha2)?.DisplayName, fixture.Label);
+        }
+    }
+    [TestMethod]
     public void Iso3ToAlpha2_CHE_ReturnsCH()
     {
         var service = CountryCodeService.CreateForTest();
@@ -30,22 +41,18 @@ public class CountryCodeServiceTests
     }
 
     [TestMethod]
-    public void MandatoryCountryIdentities_MapBothDirectionsAndCanonicalNames()
+    [DataRow("HK", "HKG", "Hong Kong")]
+    [DataRow("MO", "MAC", "Macao")]
+    [DataRow("GL", "GRL", "Greenland")]
+    [DataRow("FO", "FRO", "Faroe Islands")]
+    [DataRow("JE", "JEY", "Jersey")]
+    public void CountryIdentities_MapBothDirectionsAndPinnedNames(string alpha2, string alpha3, string displayName)
     {
         var service = CountryCodeService.CreateForTest();
-
-        foreach (var fixture in CountryResolutionFixtureCatalog.MandatoryTerritories
-                     .DistinctBy(fixture => fixture.Alpha2))
-        {
-            Assert.AreEqual(fixture.Alpha2, service.Iso3ToAlpha2(fixture.Alpha3), fixture.Label);
-            Assert.AreEqual(fixture.Alpha3, service.Alpha2ToIso3(fixture.Alpha2), fixture.Label);
-
-            var identity = service.FindByAlpha2(fixture.Alpha2);
-            Assert.IsNotNull(identity, fixture.Label);
-            Assert.AreEqual(fixture.DisplayName, identity.DisplayName, fixture.Label);
-        }
+        Assert.AreEqual(alpha2, service.Iso3ToAlpha2(alpha3));
+        Assert.AreEqual(alpha3, service.Alpha2ToIso3(alpha2));
+        Assert.AreEqual(displayName, service.FindByAlpha2(alpha2)?.DisplayName);
     }
-
     [TestMethod]
     public void CanonicalCatalog_ExplicitlyNamesEveryMappedIdentity()
     {

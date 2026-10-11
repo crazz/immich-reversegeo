@@ -1,0 +1,40 @@
+# Dedicated synthetic libraries only; all host ports bind to loopback.
+services:
+  immich-server:
+    image: ghcr.io/immich-app/immich-server:${IMMICH_VERSION:?Required}
+    ports:
+      - "127.0.0.1:${IMMICH_PORT:?Required}:2283"
+    environment:
+      DB_HOSTNAME: database
+      DB_USERNAME: postgres
+      DB_PASSWORD: ${DB_PASSWORD:?Required}
+      DB_DATABASE_NAME: immich
+      REDIS_HOSTNAME: redis
+      IMMICH_CONFIG_FILE: /config/immich.json
+    volumes:
+      - library:/data
+      - ./immich.json:/config/immich.json:ro
+    depends_on:
+      - database
+      - redis
+    restart: "no"
+  redis:
+    image: docker.io/valkey/valkey:9@sha256:70739f85ad2ee01a726a965584a0f94895f01b0c60b3cc8b0aeef11eaa6888cf
+    restart: "no"
+  database:
+    image: ghcr.io/immich-app/postgres:14-vectorchord0.4.3-pgvectors0.2.0@sha256:bcf63357191b76a916ae5eb93464d65c07511da41e3bf7a8416db519b40b1c23
+    ports:
+      - "127.0.0.1:${DB_PORT:?Required}:5432"
+    environment:
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?Required}
+      POSTGRES_USER: postgres
+      POSTGRES_DB: immich
+      POSTGRES_INITDB_ARGS: --data-checksums
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./${FIXTURE_GUARD:?Required}:/docker-entrypoint-initdb.d/99-reversegeo-fixture.sql:ro
+    shm_size: 128mb
+    restart: "no"
+volumes:
+  library:
+  database:

@@ -10,7 +10,20 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 - Fixed offline country detection for Hong Kong and added validated distinct-territory coverage for Macao, Greenland, the Faroe Islands, the Crown Dependencies, selected US and UK territories, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Added structured country-bootstrap outcomes that distinguish spatial misses from identity mapping failures, plus deterministic dependency-over-sovereign selection.
 - Added shared territory fixtures, artifact validation, downstream Overture/GADM routing tests, and country-index size, memory, initialization, and warm-lookup performance budgets.
+- Add a portable country identity catalog with explicit display names, Alpha-2/Alpha-3 mappings, and source aliases. CountryCodeService uses the catalog for country options; retain legacy flat mapping-file support. Geographic boundaries and containment selection are unchanged.
+
+- Match Nearby Places include/exclude terms at snake-case category boundaries in both SQL and diagnostics, preventing `port` from matching `sports` or `transportation` while retaining compound types such as `art_museum` and `train_station`.
+
+- Follow the system colour preference on the Zensical website until a theme is chosen, improve light/dark link and button contrast, and use solid theme-aware cards and visible keyboard focus.
+- Reworked optional live Places lookup as Nearby Places investigation: bounded distance-ordered suggestions and an excluded preview, with shared eligibility diagnostics, existence-confidence wording, and reliable JSON source attribution. Filter useful candidates and the true search radius before applying result limits; keep the airport and administrative processing paths unchanged.
+
 - Include Overture source aliases CP, XE, XS, and XJ in their canonical FRA, BES, and SJM administrative caches. Store the exported source-code set in cache metadata and refresh only affected older caches; retain ordinary-country caches and keep the old file until a replacement succeeds.
+
+- Updated live Overture Places queries to use `taxonomy.primary` with `basic_category` fallback after removal of `categories` in schema v2.
+- Centralized STAC release discovery for live lookups, country cache exports, and bundled-data exports; reject malformed, future, and expired release paths instead of using a fixed February release.
+- Added optional division-owner IDs and default hierarchy data to new administrative caches. Existing cache schemas remain readable; adding hierarchy metadata does not force a migration or refresh.
+- Shared hierarchy-aware administrative selection between processing and Lookup, preserving city profile ordering and using geometry-matched areas to recover parent cities and consistent states.
+- Added regression coverage for Czech/Slovak locality-to-localadmin and Vietnamese microhood-to-neighborhood changes, plus focused live-release checks.
 
 - Fixed scheduler startup failures for cron expressions whose next run is beyond the timer-supported delay range. Scheduled waits now use cancellable intervals of at most one day and recheck the UTC deadline before starting processing.
 - Publish full Docker version tags on GitHub release publication, promote the built digest to `latest` only for GitHub's designated latest stable release through a serialized queue, and retain `edge`, SHA tags, and the explicit manual promotion option. Validate prerelease identifiers including consecutive and trailing hyphens.
