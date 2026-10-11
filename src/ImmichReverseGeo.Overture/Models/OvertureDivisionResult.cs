@@ -13,7 +13,6 @@ public record OvertureDivisionResult(
     bool IsLand,
     bool IsTerritorial,
     bool BoundingBoxContainsPoint,
-    bool ExactGeometryContainsPoint,
     bool GeometryContainsPoint,
     double BoundingBoxArea);
 

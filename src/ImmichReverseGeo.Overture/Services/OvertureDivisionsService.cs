@@ -52,14 +52,13 @@ public class OvertureDivisionsService
         if (!File.Exists(bundledPath))
         {
             return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch(
-                "Bundled Overture country artifact was not found."));
+                "Bundled country database is unavailable."));
         }
 
         var best = FindBundledCountryFromMemory(bundledPath, lat, lon);
         if (best is null)
         {
-            return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch(
-                "Bundled Overture spatial coverage found no match."));
+            return Task.FromResult(BundledCountryLookupResult.SpatialNoMatch());
         }
 
         if (string.IsNullOrWhiteSpace(best.Country))
@@ -84,7 +83,7 @@ public class OvertureDivisionsService
         }
 
         return Task.FromResult(BundledCountryLookupResult.Matched(
-            best.Alpha3,
+            mappedAlpha3,
             best.Name,
             best.Country,
             best.Id));
@@ -94,27 +93,31 @@ public class OvertureDivisionsService
     {
         var countryIndex = GetBundledCountryIndex(bundledPath);
         var point = GeometryFactory.CreatePoint(new Coordinate(lon, lat));
-        var queryEnvelope = new Envelope(point.EnvelopeInternal);
-        queryEnvelope.ExpandBy(OvertureDataAccess.BoundaryToleranceDegrees);
+        var queryEnvelope = BuildToleranceEnvelope(lon, lat);
         var candidates = countryIndex.Query(queryEnvelope);
 
-        var exact = SelectBestBundledCountry(
-            candidates, lat, lon, true, country => country.PreparedGeometry.Covers(point));
-        if (exact is not null)
+        // Pass 1: exact containment only. Country bounding boxes hugely overstate their
+        // footprint (antimeridian crossings and distant overseas territories), so the index
+        // routinely returns several very large countries that do not contain the point.
+        // PreparedGeometry.Covers is index-backed and allocation-free; Geometry.Distance is
+        // not, so it must never run while an exact match is still possible.
+        var best = SelectBestBundledCountry(candidates, lat, lon, country => country.PreparedGeometry.Covers(point));
+        if (best is not null)
         {
-            return exact;
+            return best;
         }
 
+        // Pass 2: nothing contains the point, so retry with the boundary tolerance. Testing
+        // against a small rectangle reuses the same prepared index, whereas Distance() runs a
+        // brute-force DistanceOp that copies every boundary ring into a fresh Coordinate[].
         var tolerance = GeometryFactory.ToGeometry(queryEnvelope);
-        return SelectBestBundledCountry(
-            candidates, lat, lon, false, country => country.PreparedGeometry.Intersects(tolerance));
+        return SelectBestBundledCountry(candidates, lat, lon, country => country.PreparedGeometry.Intersects(tolerance));
     }
 
     private OvertureDivisionResult? SelectBestBundledCountry(
         IList<BundledCountryArea> candidates,
         double lat,
         double lon,
-        bool exactCoverage,
         Func<BundledCountryArea, bool> matches)
     {
         OvertureDivisionResult? bestMapped = null;
@@ -142,7 +145,6 @@ public class OvertureDivisionsService
                 country.IsLand,
                 country.IsTerritorial,
                 boundingBoxContains,
-                exactCoverage,
                 true,
                 country.BoundingBoxArea);
 
@@ -153,12 +155,12 @@ public class OvertureDivisionsService
             // A broken territory identity must surface as an error, not silently become its sovereign.
             if (!string.IsNullOrWhiteSpace(mappedAlpha3))
             {
-                if (bestMapped is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, bestMapped))
+                if (bestMapped is null || OvertureDivisionsLogic.ShouldPreferDivisionCandidate(candidate, bestMapped))
                 {
                     bestMapped = candidate;
                 }
             }
-            else if (bestUnmapped is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, bestUnmapped))
+            else if (bestUnmapped is null || OvertureDivisionsLogic.ShouldPreferDivisionCandidate(candidate, bestUnmapped))
             {
                 bestUnmapped = candidate;
             }
@@ -166,6 +168,12 @@ public class OvertureDivisionsService
 
         return bestMapped ?? bestUnmapped;
     }
+
+    private static Envelope BuildToleranceEnvelope(double lon, double lat) => new(
+        lon - OvertureDataAccess.BoundaryToleranceDegrees,
+        lon + OvertureDataAccess.BoundaryToleranceDegrees,
+        lat - OvertureDataAccess.BoundaryToleranceDegrees,
+        lat + OvertureDataAccess.BoundaryToleranceDegrees);
 
     private STRtree<BundledCountryArea> GetBundledCountryIndex(string bundledPath)
     {
@@ -395,7 +403,6 @@ public class OvertureDivisionsService
                 OvertureDataAccess.ReadSqliteBool(reader, 7),
                 bboxContains,
                 geometryContains,
-                geometryContains,
                 bboxArea);
 
             var selected = false;
@@ -476,7 +483,6 @@ public class OvertureDivisionsService
                 reader.GetBoolean(6),
                 reader.GetBoolean(7),
                 reader.GetBoolean(8),
-                reader.GetBoolean(9),
                 reader.GetBoolean(9),
                 reader.GetDouble(10));
 

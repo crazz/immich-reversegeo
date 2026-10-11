@@ -53,6 +53,8 @@ What it does not do by itself:
 
 Older custom country databases remain usable for country codes the catalog recognizes; the app does not rewrite those files. They retain their original geographic coverage. A missing or conflicting country identity in a newer-format database is reported as a mapping error rather than being assigned to a nearby country.
 
+Country coverage does not guarantee city or state coverage. Optional GADM data can be unavailable for an identity; the app then keeps available Overture results. Updating the app does not automatically replace existing Immich location names. Use Preview Location Corrections before resetting photos you want to process again.
+
 If a coordinate still looks wrong, use [Lookup](./using-the-app.md#lookup) first. Confirm the country identity, then inspect the downloaded Overture and optional GADM administrative results before changing settings.
 
 Origin:

@@ -70,89 +70,57 @@ public static class OvertureDivisionsLogic
         OvertureDivisionResult candidate,
         OvertureDivisionResult currentBest)
     {
-        return CompareDivisionCandidates(candidate, currentBest, preferDependency: false) < 0;
-    }
-
-    public static bool ShouldPreferBundledCountryCandidate(
-        OvertureDivisionResult candidate,
-        OvertureDivisionResult currentBest)
-    {
-        return CompareDivisionCandidates(candidate, currentBest, preferDependency: true) < 0;
-    }
-
-    private static int CompareDivisionCandidates(
-        OvertureDivisionResult candidate,
-        OvertureDivisionResult currentBest,
-        bool preferDependency)
-    {
-        var comparison = ComparePreferredBoolean(
-            candidate.ExactGeometryContainsPoint,
-            currentBest.ExactGeometryContainsPoint);
-        if (comparison != 0)
+        if (candidate.GeometryContainsPoint && !currentBest.GeometryContainsPoint)
         {
-            return comparison;
+            return true;
         }
 
-        comparison = ComparePreferredBoolean(
-            candidate.GeometryContainsPoint,
-            currentBest.GeometryContainsPoint);
-        if (comparison != 0)
+        if (!candidate.GeometryContainsPoint && currentBest.GeometryContainsPoint)
         {
-            return comparison;
+            return false;
         }
 
-        comparison = ComparePreferredBoolean(
-            candidate.BoundingBoxContainsPoint,
-            currentBest.BoundingBoxContainsPoint);
-        if (comparison != 0)
+        if (candidate.BoundingBoxContainsPoint && !currentBest.BoundingBoxContainsPoint)
         {
-            return comparison;
+            return true;
         }
 
-        if (preferDependency)
+        if (!candidate.BoundingBoxContainsPoint && currentBest.BoundingBoxContainsPoint)
         {
-            comparison = GetDependencyRank(candidate.SubType).CompareTo(GetDependencyRank(currentBest.SubType));
-            if (comparison != 0)
-            {
-                return comparison;
-            }
+            return false;
         }
 
-        comparison = GetSubtypeRank(candidate.SubType).CompareTo(GetSubtypeRank(currentBest.SubType));
-        if (comparison != 0)
+        var candidateSubtypeRank = GetSubtypeRank(candidate.SubType);
+        var currentBestSubtypeRank = GetSubtypeRank(currentBest.SubType);
+        if (candidateSubtypeRank < currentBestSubtypeRank)
         {
-            return comparison;
+            return true;
         }
 
-        comparison = (candidate.AdminLevel ?? int.MaxValue).CompareTo(currentBest.AdminLevel ?? int.MaxValue);
-        if (comparison != 0)
+        if (candidateSubtypeRank > currentBestSubtypeRank)
         {
-            return comparison;
+            return false;
         }
 
-        comparison = ComparePreferredBoolean(candidate.IsTerritorial, currentBest.IsTerritorial);
-        if (comparison != 0)
+        var adminLevelComparison = (candidate.AdminLevel ?? int.MaxValue)
+            .CompareTo(currentBest.AdminLevel ?? int.MaxValue);
+        if (adminLevelComparison != 0)
         {
-            return comparison;
+            return adminLevelComparison < 0;
         }
 
-        comparison = candidate.BoundingBoxArea.CompareTo(currentBest.BoundingBoxArea);
-        if (comparison != 0)
+        if (candidate.IsTerritorial != currentBest.IsTerritorial)
         {
-            return comparison;
+            return candidate.IsTerritorial;
         }
 
-        return string.Compare(candidate.Id, currentBest.Id, StringComparison.Ordinal);
-    }
+        var areaComparison = candidate.BoundingBoxArea.CompareTo(currentBest.BoundingBoxArea);
+        if (areaComparison != 0)
+        {
+            return areaComparison < 0;
+        }
 
-    private static int ComparePreferredBoolean(bool candidate, bool currentBest)
-    {
-        return currentBest.CompareTo(candidate);
-    }
-
-    private static int GetDependencyRank(string? subtype)
-    {
-        return string.Equals(subtype, "dependency", StringComparison.OrdinalIgnoreCase) ? 0 : 1;
+        return string.Compare(candidate.Id, currentBest.Id, StringComparison.Ordinal) < 0;
     }
 
     public static int GetSubtypeRank(string? subtype) =>

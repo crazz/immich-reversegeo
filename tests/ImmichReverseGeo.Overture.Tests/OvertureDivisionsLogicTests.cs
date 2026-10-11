@@ -84,31 +84,13 @@ public class OvertureDivisionsLogicTests
     }
 
     [TestMethod]
-    public void ShouldPreferDivisionCandidate_PrefersExactCoverageBeforeToleranceCoverage()
-    {
-        var exact = CreateCandidate(
-            "dependency",
-            geometryContainsPoint: true,
-            bboxArea: 0.50,
-            exactGeometryContainsPoint: true);
-        var toleranceOnly = CreateCandidate(
-            "dependency",
-            geometryContainsPoint: true,
-            bboxArea: 0.01,
-            exactGeometryContainsPoint: false);
-
-        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(exact, toleranceOnly));
-        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(toleranceOnly, exact));
-    }
-
-    [TestMethod]
-    public void ShouldPreferBundledCountryCandidate_PrefersDependencyBeforeSovereignCountry()
+    public void ShouldPreferDivisionCandidate_PrefersDependencyBeforeSovereignCountry()
     {
         var dependency = CreateCandidate("dependency", true, 0.50, country: "HK");
         var country = CreateCandidate("country", true, 0.01, country: "CN");
 
-        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(dependency, country));
-        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(country, dependency));
+        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(dependency, country));
+        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(country, dependency));
     }
 
     [TestMethod]
@@ -127,7 +109,7 @@ public class OvertureDivisionsLogicTests
     [DataRow("PR", "US")]
     [DataRow("AW", "NL")]
     [DataRow("RE", "FR")]
-    public void ShouldPreferBundledCountryCandidate_ReversedInputOrderProducesSameWinner(
+    public void ShouldPreferDivisionCandidate_ReversedInputOrderProducesSameWinner(
         string dependencyAlpha2,
         string sovereignAlpha2)
     {
@@ -297,7 +279,7 @@ public class OvertureDivisionsLogicTests
     {
         return candidates.Aggregate(
             (OvertureDivisionResult?)null,
-            (current, candidate) => current is null || OvertureDivisionsLogic.ShouldPreferBundledCountryCandidate(candidate, current)
+            (current, candidate) => current is null || OvertureDivisionsLogic.ShouldPreferDivisionCandidate(candidate, current)
                 ? candidate
                 : current)!;
     }
@@ -309,7 +291,6 @@ public class OvertureDivisionsLogicTests
         bool isTerritorial = false,
         int? adminLevel = null,
         string? id = null,
-        bool? exactGeometryContainsPoint = null,
         string country = "CH") =>
         new(
             Id: id ?? Guid.NewGuid().ToString("N"),
@@ -322,7 +303,6 @@ public class OvertureDivisionsLogicTests
             IsLand: true,
             IsTerritorial: isTerritorial,
             BoundingBoxContainsPoint: true,
-            ExactGeometryContainsPoint: exactGeometryContainsPoint ?? geometryContainsPoint,
             GeometryContainsPoint: geometryContainsPoint,
             BoundingBoxArea: bboxArea);
 

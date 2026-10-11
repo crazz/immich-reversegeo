@@ -88,7 +88,7 @@ public class BundledCountryResolutionTests
             var result = await service.FindBundledCountryAsync(0, 0);
 
             Assert.AreEqual(BundledCountryLookupStatus.SpatialNoMatch, result.Status);
-            StringAssert.Contains(result.FailureReason, "artifact was not found");
+            StringAssert.Contains(result.FailureReason, "unavailable");
         }
         finally
         {
@@ -158,6 +158,36 @@ public class BundledCountryResolutionTests
             Assert.AreEqual("HKG", result.Iso3);
             Assert.AreEqual("HK", result.Alpha2);
             CollectionAssert.AreEqual(before, System.Security.Cryptography.SHA256.HashData(File.ReadAllBytes(path)));
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [TestMethod]
+    [DataRow("HKG")]
+    [DataRow("hkg")]
+    public async Task ModernArtifactWithEquivalentAlpha3_ReturnsCanonicalCacheKey(string alpha3)
+    {
+        var root = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(root, "defaults"));
+        try
+        {
+            var path = Path.Combine(root, "defaults", "overture-country-divisions.db");
+            CreateSingleCountryDatabase(path);
+            using (var connection = new SqliteConnection($"Data Source={path};Pooling=false"))
+            {
+                connection.Open();
+                using var command = connection.CreateCommand();
+                command.CommandText = "UPDATE division_area SET country = 'HK', alpha3 = $alpha3";
+                command.Parameters.AddWithValue("$alpha3", alpha3);
+                command.ExecuteNonQuery();
+            }
+
+            var result = await CreateService(root, LoadIdentityCatalog()).FindBundledCountryAsync(0.5, 0.5);
+            Assert.AreEqual(BundledCountryLookupStatus.Matched, result.Status);
+            Assert.AreEqual("HKG", result.Iso3);
         }
         finally
         {
