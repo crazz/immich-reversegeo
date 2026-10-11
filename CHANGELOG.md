@@ -12,6 +12,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 - Added structured country-bootstrap outcomes that distinguish spatial misses from identity mapping failures, plus deterministic dependency-over-sovereign selection.
 - Added shared territory fixtures, artifact validation, downstream Overture/GADM routing tests, and country-index size, memory, initialization, and warm-lookup performance budgets.
 
+- Return structured bundled-country lookup outcomes and source IDs; distinguish spatial misses from unresolved identities in Lookup and processing progress. Preserve the shipped database and existing spatial selection.
+
 - Added explicit Dashboard processing eligibility and links to preview/reset workflows.
 - Added read-only, cancellable location previews by asset GUID, existing city/state/country, or whole library, with keyset pagination, explicit selections retained across pages, per-asset failure reporting, and current-versus-proposed comparison. Cancelled previews can resume after the last checked asset.
 - Shared final administrative/airport/fallback resolution between preview and background processing; preview does not write Immich locations or alter skipped assets.

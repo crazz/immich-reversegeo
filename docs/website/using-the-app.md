@@ -43,6 +43,10 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 
 Click the screenshot to enlarge it. Lookup previews do not update Immich assets.
 
+### Country lookup failures
+
+Lookup distinguishes a point outside the bundled country coverage from a matched boundary whose country code cannot be resolved. If the country code cannot be resolved, check that the bundled country database and country catalog belong to the same app release. A missing boundary match can require newer geographic data; changing city settings will not add country coverage.
+
 ## Data tools
 
 ### Preview Location Corrections
