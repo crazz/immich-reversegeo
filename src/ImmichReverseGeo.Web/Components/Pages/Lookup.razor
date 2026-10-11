@@ -78,7 +78,7 @@
             <div class="result-header">
                 <span class="result-source">Country — Overture Bundled Cache</span>
                 <span class="result-badge @(_result.Iso3 is not null ? "badge-found" : "badge-miss")">
-                    @(_result.Iso3 is not null ? "found" : "no match")
+                    @(_result.Iso3 is not null ? "found" : _result.CountryLookup?.Status == BundledCountryLookupStatus.IdentityMappingFailure ? "identity error" : "no match")
                 </span>
             </div>
             @if (_result.Iso3 is not null)
@@ -89,7 +89,7 @@
             }
             else
             {
-                <div class="result-note">No bundled Overture country division matched this point.</div>
+                <div class="result-note">@(_result.CountryLookup?.FailureReason ?? "No bundled Overture country division matched this point.")</div>
             }
         </div>
 
@@ -579,6 +579,7 @@
 
         await UpdateLookupStatusAsync("Checking bundled Overture country coverage...");
         var countryLookup = await OvertureDivisions.FindBundledCountryAsync(_lat, _lon);
+        r.CountryLookup = countryLookup;
         if (!countryLookup.IsMatched)
         {
             var failure = countryLookup.FailureReason ?? (countryLookup.Status == BundledCountryLookupStatus.SpatialNoMatch
@@ -798,6 +799,7 @@
 
     private sealed class LookupResult
     {
+        public BundledCountryLookupResult? CountryLookup { get; set; }
         public string? Iso3 { get; set; }
         public string? CountryName { get; set; }
         public string? Alpha2 { get; set; }
