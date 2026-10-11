@@ -15,6 +15,10 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -31,6 +35,30 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Read candidate version and source
+        id: metadata
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          version=$(dotnet msbuild src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -getProperty:Version)
+          test -n "$version"
+          if [ "$REF_TYPE" = tag ]; then
+            test "${REF_NAME#v}" = "$version"
+          fi
+          separator=+
+          if [[ "$version" == *+* ]]; then separator=.; fi
+          informational_version="${version}${separator}sha.${SOURCE_COMMIT}"
+          echo "informational_version=$informational_version" >> "$GITHUB_OUTPUT"
+          mkdir -p _out/release-verification
+          jq -n --arg version "$version" --arg information "$informational_version" \
+            --arg commit "$SOURCE_COMMIT" --arg ref "$SOURCE_REF" \
+            '{version:$version, informationalVersion:$information, sourceCommit:$commit, sourceRef:$ref}' \
+            > _out/release-verification/release-build.json
+
       - name: Install docs dependencies
         run: pip install -r docs/website/requirements.txt
 
@@ -40,28 +68,73 @@ jobs:
       - name: Test
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --filter "TestCategory!=Integration&TestCategory!=Performance"
 
-      - name: Publish app
-        run: dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -c Release -o artifacts/web
+      - name: Publish app with source metadata
+        env:
+          INFORMATIONAL_VERSION: ${{ steps.metadata.outputs.informational_version }}
+        run: |
+          dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -c Release -o artifacts/web \
+            "-p:InformationalVersion=$INFORMATIONAL_VERSION" -p:IncludeSourceRevisionInInformationalVersion=false
+          mkdir -p artifacts/web/bundled-data
+          cp -a src/ImmichReverseGeo.Web/bundled-data/. artifacts/web/bundled-data/
+          cp _out/release-verification/release-build.json artifacts/web/
 
       - name: Build docs
-        run: zensical build --clean
+        run: zensical build --clean --strict
 
-      - name: Archive app
-        run: Compress-Archive -Path artifacts/web/* -DestinationPath immich-reversegeo-web.zip
-        shell: pwsh
+      - name: Check required package contents
+        run: |
+          for file in ImmichReverseGeo.Web.dll ImmichReverseGeo.Web.deps.json \
+            ImmichReverseGeo.Web.runtimeconfig.json ImmichReverseGeo.Web.staticwebassets.endpoints.json \
+            release-build.json bundled-data/iso3166.json bundled-data/defaults/city-resolver-profiles.json \
+            bundled-data/defaults/OVERTURE-ATTRIBUTION.txt; do
+            test -s "artifacts/web/$file"
+          done
+          for file in overture-airports.db overture-country-divisions.db; do
+            cmp <(printf 'SQLite format 3\0') <(head -c 16 "artifacts/web/bundled-data/defaults/$file")
+          done
+          for file in index.html installation/index.html configuration/index.html llms.txt installation/index.md; do
+            test -s "_out/website/$file"
+          done
 
-      - name: Archive docs
-        run: Compress-Archive -Path _out/website/* -DestinationPath immich-reversegeo-docs.zip
-        shell: pwsh
+      - name: Archive and checksum packages
+        run: |
+          (cd artifacts/web && zip -qr ../../immich-reversegeo-web.zip .)
+          (cd _out/website && zip -qr ../../immich-reversegeo-docs.zip .)
+          unzip -tq immich-reversegeo-web.zip
+          unzip -tq immich-reversegeo-docs.zip
+          unzip -p immich-reversegeo-web.zip release-build.json | cmp - _out/release-verification/release-build.json
+          sha256sum immich-reversegeo-web.zip immich-reversegeo-docs.zip > _out/release-verification/SHA256SUMS
+
+      - name: Attest package provenance
+        id: attest
+        uses: actions/attest@v4
+        with:
+          subject-path: |
+            immich-reversegeo-web.zip
+            immich-reversegeo-docs.zip
+
+      - name: Keep verification bundle
+        env:
+          BUNDLE_PATH: ${{ steps.attest.outputs.bundle-path }}
+        run: cp "$BUNDLE_PATH" _out/release-verification/attestation.json
+
+      - name: Upload verification artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.release_name != '' && format('{0}-verification', inputs.release_name) || 'immich-reversegeo-verification' }}
+          path: _out/release-verification
+          if-no-files-found: error
 
       - name: Upload app artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.release_name != '' && format('{0}-web', inputs.release_name) || 'immich-reversegeo-web' }}
           path: immich-reversegeo-web.zip
+          if-no-files-found: error
 
       - name: Upload docs artifact
         uses: actions/upload-artifact@v7
         with:
           name: ${{ inputs.release_name != '' && format('{0}-docs', inputs.release_name) || 'immich-reversegeo-docs' }}
           path: immich-reversegeo-docs.zip
+          if-no-files-found: error

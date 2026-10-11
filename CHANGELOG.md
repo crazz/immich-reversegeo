@@ -6,6 +6,7 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Use the web project Version as the release version source and stamp app artifacts with the source SHA, include bundled runtime geodata, validate package contents and SQLite headers, emit SHA-256 checksums and signed provenance through official GitHub actions, and enforce strict release docs builds.
 - Add a portable country identity catalog with explicit display names, Alpha-2/Alpha-3 mappings, and source aliases. CountryCodeService uses the catalog for country options; retain legacy flat mapping-file support. Geographic boundaries and containment selection are unchanged.
 
 - Match Nearby Places include/exclude terms at snake-case category boundaries in both SQL and diagnostics, preventing `port` from matching `sports` or `transportation` while retaining compound types such as `art_museum` and `train_station`.
