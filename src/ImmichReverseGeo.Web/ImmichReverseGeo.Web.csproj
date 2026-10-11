@@ -6,11 +6,6 @@
     <RequiresAspNetWebAssets>true</RequiresAspNetWebAssets>
     <UseAppHost>false</UseAppHost>
 
-    <!--
-      This is a low-throughput batch geocoder, not a high-RPS web service. Server GC would
-      allocate one heap per core and collect lazily, inflating RSS well beyond the working set
-      for no throughput gain. Workstation GC keeps the container footprint predictable.
-    -->
     <ServerGarbageCollection>false</ServerGarbageCollection>
     <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
   </PropertyGroup>
