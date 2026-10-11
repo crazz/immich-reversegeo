@@ -102,22 +102,48 @@ public class BundledCountryLookupTests
     }
 
     [TestMethod]
-    public async Task PointOutsideBoundingBox_IsNotRescuedByTolerance()
+    [DataRow(0.00005, "AAA")]
+    [DataRow(0.00025, null)]
+    public async Task PointOutsideBoundingBox_ResolvesOnlyWithinTolerance(double offset, string? expectedIso3)
     {
         var root = CreateFixture();
         try
         {
-            var service = CreateService(root);
+            var result = await CreateService(root).FindBundledCountryAsync(PointLat, 9.0 - offset);
 
-            // Documents a long-standing limit rather than asserting desirable behaviour: the
-            // spatial index is queried with the bare point envelope, so a country whose bounding
-            // box excludes the point is never a candidate and the tolerance cannot apply. Sitting
-            // ~5m west of AA's bounding box therefore resolves to nothing, even though the
-            // tolerance is ~16m. Widening the query envelope would change this, at the cost of
-            // pulling more countries into every lookup.
-            var result = await service.FindBundledCountryAsync(PointLat, 9.0 - 0.00005);
+            Assert.AreEqual(expectedIso3, result.Iso3);
+        }
+        finally
+        {
+            TryDeleteDirectory(root);
+        }
+    }
 
-            Assert.IsNull(result.Iso3);
+    [TestMethod]
+    public async Task ExactCountryMatch_WinsOverSmallerToleranceOnlyNeighbour()
+    {
+        var root = CreateFixture();
+        try
+        {
+            var factory = new GeometryFactory(new PrecisionModel(), 4326);
+            var nearby = factory.CreatePolygon([
+                new Coordinate(8.99985, 49.99994),
+                new Coordinate(8.99994, 49.99985),
+                new Coordinate(9.00003, 49.99994),
+                new Coordinate(8.99994, 50.00003),
+                new Coordinate(8.99985, 49.99994)
+            ]);
+            using (var conn = new SqliteConnection($"Data Source={Path.Combine(root, "defaults", "overture-country-divisions.db")}"))
+            {
+                conn.Open();
+                InsertCountry(conn, new WKBWriter(), "nearby", "Nearby", "SP", nearby);
+            }
+
+            // AA covers this boundary point exactly. The smaller neighbour's bounding box
+            // also contains it, but its geometry only intersects the tolerance rectangle.
+            var result = await CreateService(root).FindBundledCountryAsync(PointLat, 9.0);
+
+            Assert.AreEqual("AAA", result.Iso3);
         }
         finally
         {
@@ -219,9 +245,7 @@ public class BundledCountryLookupTests
         var factory = new GeometryFactory(new PrecisionModel(), 4326);
         var writer = new WKBWriter();
 
-        // A diamond, so that points exist which fall inside the bounding box but outside the
-        // boundary — the only place the tolerance fallback can ever apply (see
-        // PointOutsideBoundingBox_IsNotRescuedByTolerance).
+        // A diamond provides points inside its bounding box but outside its boundary.
         var compact = factory.CreatePolygon([
             new Coordinate(9.0, 50.0),
             new Coordinate(10.0, 49.0),
