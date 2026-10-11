@@ -11,6 +11,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 ## Unreleased
 
+- Make the website easier to read in light and dark mode. Follow your system theme by default and remember your choice when you switch modes.
+
 - Improved downloaded administrative coverage for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen. Affected older caches refresh automatically when needed; other country caches remain usable.
 
 - Restored optional live Places lookup compatibility with recent Overture releases.
