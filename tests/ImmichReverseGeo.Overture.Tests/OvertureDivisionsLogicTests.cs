@@ -122,16 +122,6 @@ public class OvertureDivisionsLogicTests
     }
 
     [TestMethod]
-    public void ShouldPreferDivisionCandidate_UsesStableIdAsFinalTieBreak()
-    {
-        var first = CreateCandidate("dependency", true, 0.10, id: "a");
-        var second = CreateCandidate("dependency", true, 0.10, id: "b");
-
-        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(first, second));
-        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(second, first));
-    }
-
-    [TestMethod]
     [DataRow("HK", "CN")]
     [DataRow("GL", "DK")]
     [DataRow("PR", "US")]
@@ -149,28 +139,6 @@ public class OvertureDivisionsLogicTests
 
         Assert.AreEqual("dependency", forward.Id);
         Assert.AreEqual(forward.Id, reverse.Id);
-    }
-
-    [TestMethod]
-    public void ShouldPreferDivisionCandidate_AllNullableAdminLevelPermutationsProduceSameWinner()
-    {
-        var first = CreateCandidate("region", true, 100, adminLevel: 1, id: "first");
-        var missing = CreateCandidate("region", true, 1, adminLevel: null, id: "missing");
-        var second = CreateCandidate("region", true, 0.5, adminLevel: 2, id: "second");
-        OvertureDivisionResult[][] permutations =
-        [
-            [first, missing, second],
-            [first, second, missing],
-            [missing, first, second],
-            [missing, second, first],
-            [second, first, missing],
-            [second, missing, first]
-        ];
-
-        foreach (var permutation in permutations)
-        {
-            Assert.AreEqual("first", SelectBest(permutation).Id);
-        }
     }
 
     [TestMethod]
@@ -282,6 +250,38 @@ public class OvertureDivisionsLogicTests
         ]);
 
         Assert.AreEqual("Preferred Region", result);
+    }
+
+    [TestMethod]
+    public void ShouldPreferDivisionCandidate_UsesStableIdAsFinalTieBreak()
+    {
+        var first = CreateCandidate("dependency", true, 0.10, id: "a");
+        var second = CreateCandidate("dependency", true, 0.10, id: "b");
+
+        Assert.IsTrue(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(first, second));
+        Assert.IsFalse(OvertureDivisionsLogic.ShouldPreferDivisionCandidate(second, first));
+    }
+
+    [TestMethod]
+    public void ShouldPreferDivisionCandidate_AllNullableAdminLevelPermutationsProduceSameWinner()
+    {
+        var first = CreateCandidate("region", true, 100, adminLevel: 1, id: "first");
+        var missing = CreateCandidate("region", true, 1, adminLevel: null, id: "missing");
+        var second = CreateCandidate("region", true, 0.5, adminLevel: 2, id: "second");
+        OvertureDivisionResult[][] permutations =
+        [
+            [first, missing, second],
+            [first, second, missing],
+            [missing, first, second],
+            [missing, second, first],
+            [second, first, missing],
+            [second, missing, first]
+        ];
+
+        foreach (var permutation in permutations)
+        {
+            Assert.AreEqual("first", SelectBest(permutation).Id);
+        }
     }
 
     private static OvertureDivisionResult SelectBest(IEnumerable<OvertureDivisionResult> candidates)
