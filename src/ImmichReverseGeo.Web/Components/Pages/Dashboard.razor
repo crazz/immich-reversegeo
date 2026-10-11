@@ -10,6 +10,14 @@
 
 <h2>Dashboard</h2>
 
+<div class="settings-card">
+    <h3>Which photos will be processed?</h3>
+    <p>Runs process assets with GPS coordinates only when both city and country are missing.
+        Existing location names are kept, even when they are incorrect. Previously skipped assets are excluded until you clear the skip list under Data.</p>
+    <p>To correct existing names, <a class="text-link" href="/data/location-preview">preview location corrections</a>,
+        then use <a class="text-link" href="/data/reset-geo-data">Reset Immich Geo Data</a> for the assets you want to reprocess.</p>
+</div>
+
 @if (!_circuitReady)
 {
     <div class="alert alert-info">Starting the interactive UI…</div>

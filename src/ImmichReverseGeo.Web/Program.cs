@@ -59,6 +59,7 @@ builder.Services.AddSingleton(sp =>
 });
 builder.Services.AddSingleton<CityResolverProfileCatalogService>();
 builder.Services.AddSingleton<AdministrativeAreaResolverService>();
+builder.Services.AddSingleton<AssetLocationResolverService>();
 builder.Services.AddSingleton(sp =>
     new OvertureDivisionCacheService(
         sp.GetRequiredService<ILogger<OvertureDivisionCacheService>>(),
