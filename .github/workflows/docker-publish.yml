@@ -10,8 +10,7 @@ on:
       - "src/**"
       - "src/ImmichReverseGeo.Web/Dockerfile"
       - ".github/workflows/docker-publish.yml"
-      - ".github/scripts/promote-latest.sh"
-      - ".github/scripts/validate-release-version.sh"
+      - ".github/scripts/docker-publishing.cjs"
   workflow_dispatch:
     inputs:
       publish_latest:
@@ -43,12 +42,6 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Validate release version
-        if: github.event_name == 'release'
-        env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-        run: bash .github/scripts/validate-release-version.sh
-
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
@@ -60,6 +53,17 @@ jobs:
             type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
             type=raw,value=edge,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
             type=sha,prefix=sha-
+
+      - name: Validate release version
+        if: github.event_name == 'release'
+        uses: actions/github-script@v9
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          IMAGE_METADATA: ${{ steps.meta.outputs.json }}
+        with:
+          script: |
+            const { validateReleaseTag } = require('./.github/scripts/docker-publishing.cjs');
+            validateReleaseTag(process.env.RELEASE_TAG, JSON.parse(process.env.IMAGE_METADATA));
 
       - name: Build and push
         id: build
@@ -91,13 +95,17 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Promote built image to latest
+        uses: actions/github-script@v9
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
-          REPOSITORY: ${{ github.repository }}
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          IS_PRERELEASE: ${{ github.event.release.prerelease }}
           MANUAL_PROMOTION: ${{ inputs.publish_latest }}
           SOURCE_IMAGE: ${{ needs.publish.outputs.image }}
           SOURCE_DIGEST: ${{ needs.publish.outputs.digest }}
-        run: bash .github/scripts/promote-latest.sh
+        with:
+          script: |
+            const { promoteLatest } = require('./.github/scripts/docker-publishing.cjs');
+            await promoteLatest({
+              github, context, core, exec,
+              image: process.env.SOURCE_IMAGE,
+              digest: process.env.SOURCE_DIGEST,
+              manual: process.env.MANUAL_PROMOTION === 'true'
+            });
