@@ -9,10 +9,9 @@ namespace ImmichReverseGeo.Overture.Services;
 
 public static class OverturePlacesLogic
 {
-    public const string LatestCatalogUrl = "https://stac.overturemaps.org/catalog.json";
+    public const string LatestCatalogUrl = OvertureReleaseCatalog.CatalogUrl;
     public const string PlacesReleaseUrlTemplate = "az://overturemapswestus2.blob.core.windows.net/release/{0}/theme=places/type=place/*.parquet";
     public const string InfrastructureReleaseUrlTemplate = "az://overturemapswestus2.blob.core.windows.net/release/{0}/theme=base/type=infrastructure/*.parquet";
-    public const string DocumentedFallbackRelease = "2026-02-18.0";
     public const double SearchRadiusMetres = 2_500;
     public const double InfrastructureSearchRadiusMetres = 8_000;
     public const int QueryLimit = 80;
@@ -128,7 +127,7 @@ public static class OverturePlacesLogic
             SELECT
                 id,
                 COALESCE(names.common['en'], names.primary) AS name,
-                categories.primary AS primary_category,
+                COALESCE(taxonomy.primary, basic_category) AS primary_category,
                 basic_category,
                 confidence,
                 ST_Y(geometry) AS latitude,

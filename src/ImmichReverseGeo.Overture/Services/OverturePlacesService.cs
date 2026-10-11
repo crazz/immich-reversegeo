@@ -102,32 +102,7 @@ public class OverturePlacesService
         return release;
     }
 
-    private string GetLatestReleaseViaDuckDb()
-    {
-        try
-        {
-            using var conn = new DuckDBConnection("Data Source=:memory:");
-            conn.Open();
-            OvertureDataAccess.LoadHttpfs(conn);
-
-            using var query = conn.CreateCommand();
-            query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
-            var value = query.ExecuteScalar()?.ToString();
-            if (!string.IsNullOrWhiteSpace(value))
-            {
-                return value;
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                "Overture latest-release lookup via DuckDB failed; falling back to documented release {Release}: {Message}",
-                OverturePlacesLogic.DocumentedFallbackRelease,
-                ex.Message);
-        }
-
-        return OverturePlacesLogic.DocumentedFallbackRelease;
-    }
+    private static string GetLatestReleaseViaDuckDb() => OvertureReleaseCatalog.GetLatestRelease();
 
     private OvertureLookupDiagnostics QueryOverture(double lat, double lon, string? alpha2, string release)
     {

@@ -64,6 +64,8 @@ When the app needs better state and city matching, it downloads a per-country Ov
 
 Downloads include separate Overture source codes for Saba, Sint Eustatius, Clipperton Island, and Jan Mayen in their corresponding country caches. Older affected caches refresh automatically the next time they are needed. This improves downloaded boundary coverage; it does not add boundaries or names missing from Overture. Use Lookup on a known coordinate to check the state and city result before processing your library. Country detection must also recognize the location before normal processing can use its cache.
 
+New caches also include parent-area information. This can recover a city from a matching neighborhood and keep the selected city and state in the same administrative hierarchy. It cannot invent a missing city or correct an inaccurate boundary. Other older caches remain usable; re-download an individual country on the Data page to gain parent matching, and validate the result in Lookup first.
+
 The app uses this source for:
 
 - normal administrative area matching during processing
@@ -236,6 +238,7 @@ The recommended workflow is:
 
 - built-in Overture country and airport data ships inside the app image
 - downloaded Overture and GADM country caches are stored under `/data`
+- new Overture downloads discover the current release from its public catalog; if discovery fails, the app reports an error instead of trying an expired release
 - the first lookup or processing pass for a new country may take longer because the cache must be created locally
 - larger countries can use hundreds of megabytes of local storage per cached country
 

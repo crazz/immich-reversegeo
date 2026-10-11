@@ -223,8 +223,10 @@ public class OvertureDivisionCacheService
                 bbox.xmin AS bbox_xmin,
                 bbox.ymin AS bbox_ymin,
                 bbox.xmax AS bbox_xmax,
-                bbox.ymax AS bbox_ymax
-            FROM read_parquet('{releaseUrl}', filename = true, hive_partitioning = 1)
+                bbox.ymax AS bbox_ymax,
+                division_id,
+                hierarchy_json
+            FROM {OvertureDivisionsLogic.BuildDivisionAreaSource(releaseUrl, alpha2)}
             WHERE {OvertureCountrySourceCodes.BuildCountryFilter(alpha2)}
             ";
         using var reader = selectCmd.ExecuteReader();
@@ -248,7 +250,9 @@ public class OvertureDivisionCacheService
                     bbox_xmin REAL NULL,
                     bbox_ymin REAL NULL,
                     bbox_xmax REAL NULL,
-                    bbox_ymax REAL NULL
+                    bbox_ymax REAL NULL,
+                    division_id TEXT NULL,
+                    hierarchy_json TEXT NULL
                 );
                 CREATE TABLE _meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
                 CREATE INDEX idx_division_area_bbox_x ON division_area (bbox_xmin, bbox_xmax);
@@ -278,10 +282,10 @@ public class OvertureDivisionCacheService
         insert.CommandText = @"
             INSERT OR IGNORE INTO division_area (
                 id, name, subtype, class_name, admin_level, country, is_land, is_territorial,
-                geom_wkb, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax
+                geom_wkb, bbox_xmin, bbox_ymin, bbox_xmax, bbox_ymax, division_id, hierarchy_json
             ) VALUES (
                 $id, $name, $subtype, $class, $adminLevel, $country, $isLand, $isTerritorial,
-                $geom, $xmin, $ymin, $xmax, $ymax
+                $geom, $xmin, $ymin, $xmax, $ymax, $divisionId, $hierarchy
             )
             ";
         var pId = insert.Parameters.Add("$id", SqliteType.Text);
@@ -297,6 +301,9 @@ public class OvertureDivisionCacheService
         var pYMin = insert.Parameters.Add("$ymin", SqliteType.Real);
         var pXMax = insert.Parameters.Add("$xmax", SqliteType.Real);
         var pYMax = insert.Parameters.Add("$ymax", SqliteType.Real);
+
+        var pDivisionId = insert.Parameters.Add("$divisionId", SqliteType.Text);
+        var pHierarchy = insert.Parameters.Add("$hierarchy", SqliteType.Text);
 
         long rows = 0;
         while (reader.Read())
@@ -314,6 +321,8 @@ public class OvertureDivisionCacheService
             pYMin.Value = reader.IsDBNull(10) ? DBNull.Value : reader.GetDouble(10);
             pXMax.Value = reader.IsDBNull(11) ? DBNull.Value : reader.GetDouble(11);
             pYMax.Value = reader.IsDBNull(12) ? DBNull.Value : reader.GetDouble(12);
+            pDivisionId.Value = reader.IsDBNull(13) ? DBNull.Value : reader.GetString(13);
+            pHierarchy.Value = reader.IsDBNull(14) ? DBNull.Value : reader.GetString(14);
             insert.ExecuteNonQuery();
             rows++;
         }
@@ -324,22 +333,7 @@ public class OvertureDivisionCacheService
         return rows;
     }
 
-    private static string GetLatestOvertureReleaseForCache()
-    {
-        try
-        {
-            using var conn = new DuckDBConnection("Data Source=:memory:");
-            conn.Open();
-            OvertureDataAccess.LoadHttpfs(conn);
-            using var query = conn.CreateCommand();
-            query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
-            return query.ExecuteScalar()?.ToString() ?? OverturePlacesLogic.DocumentedFallbackRelease;
-        }
-        catch
-        {
-            return OverturePlacesLogic.DocumentedFallbackRelease;
-        }
-    }
+    private static string GetLatestOvertureReleaseForCache() => OvertureReleaseCatalog.GetLatestRelease();
 
     private string GetDbPath(string iso3)
     {
