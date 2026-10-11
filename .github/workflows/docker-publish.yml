@@ -1,6 +1,8 @@
 name: Publish Docker Image
 
 on:
+  release:
+    types: [published]
   push:
     branches:
       - master
@@ -36,15 +38,37 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Validate release version
+        if: github.event_name == 'release'
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+        run: |
+          if [[ ! "$RELEASE_TAG" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
+            echo "Release tags must use vMAJOR.MINOR.PATCH, optionally followed by a prerelease suffix."
+            exit 1
+          fi
+          if [[ "$RELEASE_TAG" == *-* ]]; then
+            IFS='.' read -ra identifiers <<< "${RELEASE_TAG#*-}"
+            for identifier in "${identifiers[@]}"; do
+              if [[ "$identifier" =~ ^0[0-9]+$ ]]; then
+                echo "Numeric prerelease identifiers must not have leading zeros."
+                exit 1
+              fi
+            done
+          fi
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/immich-reversegeo
+          flavor: latest=false
           tags: |
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
             type=raw,value=edge,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
             type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish_latest == true }}
+            type=raw,value=latest,enable=${{ (github.event_name == 'release' && !github.event.release.prerelease && !contains(github.event.release.tag_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.publish_latest == true) }}
 
       - name: Build and push
         uses: docker/build-push-action@v7

@@ -69,6 +69,17 @@ Then start the stack:
 docker compose up -d
 ```
 
+## Image versions
+
+Use `latest` for the most recently published stable release, or replace it with a published version tag to control upgrades, for example `ghcr.io/immich-reversegeo/immich-reversegeo:1.2.3`. This is an example; choose an available version from [GitHub Releases](https://github.com/immich-reversegeo/immich-reversegeo/releases).
+
+- Releases tagged `v1.2.3` publish both `1.2.3` and `v1.2.3` image tags.
+- Prereleases publish their full version tags, such as `1.2.3-rc.1`, without updating `latest`.
+- `edge` follows development builds from `master`.
+- `sha-...` tags identify builds by commit.
+
+After changing the image version in your Compose file, run `docker compose pull immich-reversegeo` and `docker compose up -d immich-reversegeo`. Keep your existing `/config` and `/data` volumes.
+
 ## VPS and firewall notes
 
 Do not expose the web UI publicly. Docker-published ports can bypass host firewall rules such as UFW, so do not rely on the host firewall alone to hide a broadly published `8080:8080` mapping on an internet-facing server.
