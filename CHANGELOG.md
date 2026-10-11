@@ -6,7 +6,7 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
-- Use the web project Version as the release version source and stamp app artifacts with the source SHA, include bundled runtime geodata, validate package contents and SQLite headers, emit SHA-256 checksums/provenance, and enforce strict release docs builds using PowerShell verification helpers.
+- Use the web project Version as the release version source and stamp app artifacts with the source SHA, include bundled runtime geodata, validate package contents and SQLite headers, emit SHA-256 checksums and signed provenance through official GitHub actions, and enforce strict release docs builds.
 - Match Nearby Places include/exclude terms at snake-case category boundaries in both SQL and diagnostics, preventing `port` from matching `sports` or `transportation` while retaining compound types such as `art_museum` and `train_station`.
 
 - Follow the system colour preference on the Zensical website until a theme is chosen, improve light/dark link and button contrast, and use solid theme-aware cards and visible keyboard focus.

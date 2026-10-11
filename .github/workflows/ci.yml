@@ -16,10 +16,6 @@ jobs:
         with:
           lfs: true
 
-      - name: Test release verification helpers
-        shell: pwsh
-        run: ./.github/scripts/Test-ReleaseArtifacts.ps1
-
       - name: Test Docker publishing rules
         run: node --test .github/scripts/docker-publishing.test.cjs
 
