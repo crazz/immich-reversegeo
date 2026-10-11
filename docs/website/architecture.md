@@ -1,4 +1,5 @@
 ---
+description: "Understand how Immich ReverseGeo reads GPS coordinates, resolves locations, and updates Immich metadata."
 icon: material/compass-outline
 ---
 

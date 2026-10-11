@@ -1,4 +1,5 @@
 ---
+description: "Set up Immich ReverseGeo with Docker, check a coordinate, and prepare your first processing run."
 icon: material/rocket-launch-outline
 ---
 

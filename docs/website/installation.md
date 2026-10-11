@@ -1,4 +1,5 @@
 ---
+description: "Install Immich ReverseGeo alongside Immich with separate settings and data volumes and private UI access."
 icon: material/docker
 ---
 
