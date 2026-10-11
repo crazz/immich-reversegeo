@@ -60,12 +60,14 @@ For Visual Studio and other tooling that honors repo-level run settings, [`.runs
 For local Visual Studio or `dotnet run` usage, the app reads real process environment variables for database access:
 
 ```env
-DB_HOST=...
+DB_HOSTNAME=...
 DB_PORT=5432
 DB_USERNAME=...
 DB_PASSWORD=...
 DB_DATABASE_NAME=immich
 ```
+
+Existing `DB_HOST` settings remain supported and take precedence over `DB_HOSTNAME` when nonblank. If neither has a nonblank value, the host defaults to `database`.
 
 The app does not parse `.env` directly. In Docker setups, Compose is expected to expose those values as real environment variables to the running container.
 

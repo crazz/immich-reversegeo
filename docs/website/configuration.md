@@ -16,13 +16,15 @@ Database values are environment-backed and shown as read-only in the UI.
 
 The app reads:
 
-- `DB_HOST`
+- `DB_HOSTNAME` (or the existing `DB_HOST` setting)
 - `DB_PORT`
 - `DB_USERNAME`
 - `DB_PASSWORD`
 - `DB_DATABASE_NAME`
 
 These values are required because the app reads and updates immich data directly.
+
+For the database host, a nonblank `DB_HOST` takes precedence over `DB_HOSTNAME`. If neither has a nonblank value, the host defaults to `database`. You can reuse Immich's `DB_HOSTNAME` value for an external database without renaming it.
 
 <div class="step-grid">
   <div class="step-card">

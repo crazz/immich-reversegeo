@@ -8,6 +8,10 @@ This is the public-facing release summary for Immich ReverseGeo.
 
 Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/CHANGELOG.md).
 
+## Unreleased
+
+- You can now reuse Immich's `DB_HOSTNAME` setting to connect to an external database. Existing `DB_HOST` settings continue to work and take precedence when nonblank.
+
 ## 2026-08-23
 
 This release fixes the app running out of memory and restarting during processing.

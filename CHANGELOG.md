@@ -4,6 +4,10 @@ Technical release notes for Immich ReverseGeo live here.
 
 For a shorter user-facing summary, see [docs/website/changelog.md](./docs/website/changelog.md).
 
+## Unreleased
+
+- Added `DB_HOSTNAME` support for shared Immich environment settings, retaining nonblank `DB_HOST` precedence and the `database` default when both values are unset or blank.
+
 ## 2026-08-23
 
 - Fixed repeated `System.OutOfMemoryException` container kills during geocoding. Bundled country containment now resolves in two passes: `PreparedGeometry.Covers` first, with the boundary tolerance applied only when nothing contains the point. Previously every candidate that failed `Covers` fell through to `Geometry.Distance`, and because country bounding boxes overstate their footprint (antimeridian crossings, distant overseas territories), most lookups ran a full brute-force `DistanceOp` against several complete country boundaries.
