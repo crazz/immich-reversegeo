@@ -153,6 +153,41 @@ public class ConfigServiceTests
     }
 
     [TestMethod]
+    public async Task SectionUpdates_PreserveOtherEditorsChanges()
+    {
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+        await svc.SaveConfigAsync(new AppConfig());
+        var staleSettings = await svc.GetConfigAsync();
+        staleSettings.Processing.BatchSize = 79;
+        await svc.UpdateConfigAsync(latest =>
+        {
+            latest.Processing.CityResolver.CountryOverrides["CHE"] = new CityResolverProfile
+            {
+                PreferredSubtypes = ["localadmin"]
+            };
+        });
+        await svc.UpdateConfigAsync(latest =>
+        {
+            var resolver = latest.Processing.CityResolver;
+            latest.Schedule = staleSettings.Schedule;
+            latest.Processing = staleSettings.Processing;
+            latest.Processing.CityResolver = resolver;
+        });
+        await svc.UpdateConfigAsync(latest =>
+        {
+            latest.Processing.CityResolver.DefaultProfile = new CityResolverProfile
+            {
+                PreferredSubtypes = ["locality"]
+            };
+        });
+
+        var saved = await svc.GetConfigAsync();
+        Assert.AreEqual(79, saved.Processing.BatchSize);
+        CollectionAssert.AreEqual(new[] { "localadmin" }, saved.Processing.CityResolver.CountryOverrides["CHE"].PreferredSubtypes);
+        CollectionAssert.AreEqual(new[] { "locality" }, saved.Processing.CityResolver.DefaultProfile.PreferredSubtypes);
+    }
+
+    [TestMethod]
     public async Task GetConfig_LegacySettingsWithoutCityResolver_AddsCompatibleDefaults()
     {
         Directory.CreateDirectory(_tempDir);

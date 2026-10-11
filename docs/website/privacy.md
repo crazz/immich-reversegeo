@@ -12,6 +12,8 @@ Operationally:
 - resolved place names are written back to your immich database
 - bundled and cached data is stored locally on your system
 
+The app UI uses local system fonts and does not request fonts from an external provider.
+
 Live Overture Places diagnostics on the Lookup page may contact Overture-hosted public data sources when enabled.
 
 You are responsible for how and where you deploy the service.

@@ -1,7 +1,7 @@
 /* ═══════════════════════════════════════════════════════════
    immich-reversegeo — indigo night theme
    Palette: base #1e1e2e · accent #7c87ff · rose #ff7c7c · mint #7cffb2
-   Fonts: Syne (display) · Nunito (ui)
+   Fonts: local system fonts
 ═══════════════════════════════════════════════════════════ */
 
 /* ── Variables ────────────────────────────────────────── */
@@ -39,8 +39,8 @@
     --radius-lg: 10px;
     --transition: 140ms ease;
 
-    --font-display: 'Syne', system-ui, sans-serif;
-    --font-ui:      'Nunito', system-ui, sans-serif;
+    --font-display: system-ui, -apple-system, 'Segoe UI', sans-serif;
+    --font-ui:      system-ui, -apple-system, 'Segoe UI', sans-serif;
     --font-mono:    'Courier New', ui-monospace, SFMono-Regular, Consolas, monospace;
 }
 
@@ -60,24 +60,20 @@ html, body {
 
 body {
     min-height: 100vh;
-    background:
-        radial-gradient(circle at top left, rgba(124, 135, 255, 0.18), transparent 28%),
-        linear-gradient(135deg, #10101a 0%, #141426 48%, #17172a 100%);
+    background: var(--bg-base);
 }
 
 /* ── Layout ───────────────────────────────────────────── */
 .page {
     display: grid;
-    grid-template-columns: 280px minmax(0, 1fr);
+    grid-template-columns: 260px minmax(0, 1fr);
     min-height: 100vh;
 }
 
 .sidebar-shell {
     position: relative;
     border-right: 1px solid rgba(124, 135, 255, 0.16);
-    background:
-        radial-gradient(circle at top left, rgba(124, 135, 255, 0.16), transparent 34%),
-        linear-gradient(180deg, #1c1d33 0%, #17182d 45%, #121321 100%);
+    background: var(--bg-surface);
 }
 
 .main-shell {
@@ -103,7 +99,7 @@ body {
     position: sticky;
     top: 0;
     min-height: 100vh;
-    padding: 2rem 1.5rem;
+    padding: 1.5rem 1.25rem;
 }
 
 .nav-brand {
@@ -118,6 +114,8 @@ body {
     display: flex;
     align-items: center;
     gap: 0.8rem;
+    color: inherit;
+    text-decoration: none;
 }
 
 .nav-logo {
@@ -125,7 +123,7 @@ body {
     height: 2.4rem;
     flex: 0 0 auto;
     border-radius: 0.8rem;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.22);
+    box-shadow: none;
 }
 
 .nav-title {
@@ -177,7 +175,8 @@ body {
     margin-bottom: 0.15rem;
 }
 
-.nav-menu a {
+.nav-section a,
+.nav-help {
     display: block;
     padding: 0.75rem 0.9rem;
     color: #c8cbeb;
@@ -185,22 +184,39 @@ body {
     font-size: 0.92rem;
     font-weight: 700;
     border-radius: 12px;
-    border: 1px solid rgba(124, 135, 255, 0.08);
-    background: rgba(255, 255, 255, 0.015);
+    border: 1px solid transparent;
+    background: transparent;
     transition: color var(--transition), background var(--transition), border-color var(--transition);
 }
 
-.nav-menu a:hover {
+.nav-section a:hover,
+.nav-help:hover {
     color: #f5f6ff;
     background: rgba(124, 135, 255, 0.12);
     border-color: rgba(124, 135, 255, 0.24);
 }
 
-.nav-menu a.active {
+.nav-section a.active {
     color: var(--accent);
-    background: linear-gradient(135deg, rgba(124, 135, 255, 0.18), rgba(124, 255, 178, 0.1));
+    background: var(--accent-light);
     border-color: rgba(124, 135, 255, 0.36);
     font-weight: 600;
+}
+
+.nav-section .nav-submenu a {
+    padding: 0.45rem 0.7rem;
+    font-size: 0.82rem;
+}
+
+.nav-help {
+    margin-top: auto;
+    font-weight: 500;
+    color: var(--text-secondary);
+}
+
+:where(a, button, summary, input, select, textarea):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 3px;
 }
 
 /* ── Status indicator ─────────────────────────────────── */
@@ -268,6 +284,7 @@ h1, h2 {
     margin: 0 0 1rem;
     line-height: 1.15;
 }
+h1:focus, h2:focus { outline: none; }
 h1 { font-size: 1.9rem; }
 h2 { font-size: 1.25rem; }
 
@@ -1460,7 +1477,7 @@ input[type="text"].env-readonly {
 
 @media (max-width: 640px) {
     .sidebar-shell {
-        background: linear-gradient(180deg, #1a1b2e 0%, #141521 100%);
+        background: var(--bg-surface);
     }
     .nav-section {
         display: grid;
@@ -1697,5 +1714,176 @@ input[type="text"].env-readonly {
 
     .resolver-subtype-actions {
         justify-content: flex-start;
+    }
+}
+
+/* Reconnect dialog: shared styles stay in this global stylesheet. */
+.components-reconnect-rejected-visible,
+.components-reconnect-first-attempt-visible,
+.components-reconnect-repeated-attempt-visible,
+.components-reconnect-failed-visible,
+.components-pause-visible,
+.components-resume-failed-visible,
+.components-rejoining-animation {
+    display: none;
+}
+
+#components-reconnect-modal.components-reconnect-rejected .components-reconnect-rejected-visible,
+#components-reconnect-modal.components-reconnect-show .components-reconnect-first-attempt-visible,
+#components-reconnect-modal.components-reconnect-show .components-rejoining-animation,
+#components-reconnect-modal.components-reconnect-paused .components-pause-visible,
+#components-reconnect-modal.components-reconnect-resume-failed .components-resume-failed-visible,
+#components-reconnect-modal.components-reconnect-retrying,
+#components-reconnect-modal.components-reconnect-retrying .components-reconnect-repeated-attempt-visible,
+#components-reconnect-modal.components-reconnect-retrying .components-rejoining-animation,
+#components-reconnect-modal.components-reconnect-failed,
+#components-reconnect-modal.components-reconnect-failed .components-reconnect-failed-visible {
+    display: block;
+}
+
+
+#components-reconnect-modal {
+    background-color: var(--bg-surface);
+    color: var(--text-primary);
+    width: min(24rem, calc(100vw - 2rem));
+    margin: 20vh auto;
+    padding: 2rem;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    box-shadow: 0 3px 6px 2px rgba(0, 0, 0, 0.3);
+    opacity: 0;
+    transition: display 0.5s allow-discrete, overlay 0.5s allow-discrete;
+    animation: components-reconnect-modal-fadeOutOpacity 0.5s both;
+    &[open]
+
+{
+    animation: components-reconnect-modal-slideUp 1.5s cubic-bezier(.05, .89, .25, 1.02) 0.3s, components-reconnect-modal-fadeInOpacity 0.5s ease-in-out 0.3s;
+    animation-fill-mode: both;
+}
+
+}
+
+#components-reconnect-modal::backdrop {
+    background-color: rgba(0, 0, 0, 0.4);
+    animation: components-reconnect-modal-fadeInOpacity 0.5s ease-in-out;
+    opacity: 1;
+}
+
+@keyframes components-reconnect-modal-slideUp {
+    0% {
+        transform: translateY(30px) scale(0.95);
+    }
+
+    100% {
+        transform: translateY(0);
+    }
+}
+
+@keyframes components-reconnect-modal-fadeInOpacity {
+    0% {
+        opacity: 0;
+    }
+
+    100% {
+        opacity: 1;
+    }
+}
+
+@keyframes components-reconnect-modal-fadeOutOpacity {
+    0% {
+        opacity: 1;
+    }
+
+    100% {
+        opacity: 0;
+    }
+}
+
+.components-reconnect-container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 1rem;
+}
+
+#components-reconnect-modal p {
+    margin: 0;
+    text-align: center;
+}
+
+#components-reconnect-modal button {
+    border: 0;
+    background-color: var(--accent);
+    color: white;
+    padding: 4px 24px;
+    border-radius: 4px;
+}
+
+    #components-reconnect-modal button:hover {
+        background-color: var(--accent-hover);
+    }
+
+    #components-reconnect-modal button:active {
+        background-color: var(--accent);
+    }
+
+.components-rejoining-animation {
+    position: relative;
+    width: 80px;
+    height: 80px;
+}
+
+    .components-rejoining-animation div {
+        position: absolute;
+        border: 3px solid var(--accent);
+        opacity: 1;
+        border-radius: 50%;
+        animation: components-rejoining-animation 1.5s cubic-bezier(0, 0.2, 0.8, 1) infinite;
+    }
+
+        .components-rejoining-animation div:nth-child(2) {
+            animation-delay: -0.5s;
+        }
+
+@keyframes components-rejoining-animation {
+    0% {
+        top: 40px;
+        left: 40px;
+        width: 0;
+        height: 0;
+        opacity: 0;
+    }
+
+    4.9% {
+        top: 40px;
+        left: 40px;
+        width: 0;
+        height: 0;
+        opacity: 0;
+    }
+
+    5% {
+        top: 40px;
+        left: 40px;
+        width: 0;
+        height: 0;
+        opacity: 1;
+    }
+
+    100% {
+        top: 0px;
+        left: 0px;
+        width: 80px;
+        height: 80px;
+        opacity: 0;
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
     }
 }

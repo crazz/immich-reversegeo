@@ -96,3 +96,9 @@ If logs report that `settings.json` cannot be read, scheduled processing pauses 
 Check that the `/config` volume is writable and restore `settings.json` from a known-good backup if its contents are damaged. Keep a copy of the damaged file while investigating. After restoring it, reload the Settings page and check the values before starting a run.
 
 If a save fails, the previous settings file remains available. Check volume permissions and free disk space, then retry the save.
+
+## Connection interrupted or session expired
+
+The app tries to reconnect after a temporary connection failure. If the server no longer has your session, the dialog asks you to **Reload page** and warns that unsaved changes may be lost. Reload starts a new session; it does not recover unsaved form values.
+
+If retrying does not work, check that the container is running and your private connection to it is available, then reload.
