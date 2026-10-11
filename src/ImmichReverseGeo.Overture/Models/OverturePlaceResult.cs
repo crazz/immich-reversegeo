@@ -11,7 +11,8 @@ public record OverturePlaceResult(
     string? OperatingStatus,
     double DistanceMetres,
     bool BoundingBoxContainsPoint,
-    IReadOnlyList<string> Sources);
+    IReadOnlyList<string> Sources,
+    bool ConfidenceKnown = true);
 
 public record OvertureLookupDiagnostics(
     OverturePlaceResult? BestMatch,
@@ -31,7 +32,9 @@ public record OvertureCandidateDiagnostic(
     bool BoundingBoxContainsPoint,
     IReadOnlyList<string> Sources,
     bool Selected,
-    string Decision);
+    string Decision,
+    bool Eligible = true,
+    bool ConfidenceKnown = true);
 
 public record OvertureInfrastructureResult(
     string Id,
