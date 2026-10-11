@@ -40,11 +40,23 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
     }
 
     public DbSettings GetDbSettings() => new(
-        Host: Environment.GetEnvironmentVariable("DB_HOST") ?? "database",
+        Host: GetDbHost(),
         Port: int.TryParse(Environment.GetEnvironmentVariable("DB_PORT"), out var p) ? p : 5432,
         Username: Environment.GetEnvironmentVariable("DB_USERNAME") ?? "postgres",
         Password: Environment.GetEnvironmentVariable("DB_PASSWORD") ?? "",
         Database: Environment.GetEnvironmentVariable("DB_DATABASE_NAME") ?? "immich");
+
+    private static string GetDbHost()
+    {
+        var host = Environment.GetEnvironmentVariable("DB_HOST");
+        if (!string.IsNullOrWhiteSpace(host))
+        {
+            return host;
+        }
+
+        var hostname = Environment.GetEnvironmentVariable("DB_HOSTNAME");
+        return !string.IsNullOrWhiteSpace(hostname) ? hostname : "database";
+    }
 
     private static AppConfig EnsureDefaults(AppConfig config)
     {

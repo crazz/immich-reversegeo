@@ -5,12 +5,24 @@ using Microsoft.Extensions.Logging.Abstractions;
 namespace ImmichReverseGeo.Tests;
 
 [TestClass]
+[DoNotParallelize]
 public class ConfigServiceTests
 {
+    private static readonly string[] DbEnvironmentKeys =
+        ["DB_HOST", "DB_HOSTNAME", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE_NAME"];
+    private readonly Dictionary<string, string?> _originalEnvironment = new();
     private string _tempDir = null!;
 
     [TestInitialize]
-    public void Setup() => _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+    public void Setup()
+    {
+        _tempDir = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString());
+        foreach (var key in DbEnvironmentKeys)
+        {
+            _originalEnvironment[key] = Environment.GetEnvironmentVariable(key);
+            Environment.SetEnvironmentVariable(key, null);
+        }
+    }
 
     [TestCleanup]
     public void Cleanup()
@@ -19,10 +31,9 @@ public class ConfigServiceTests
         {
             Directory.Delete(_tempDir, recursive: true);
         }
-        // Clear env vars set by GetDbSettings_ReadsEnvVars
-        foreach (var key in new[] { "DB_HOST", "DB_PORT", "DB_USERNAME", "DB_PASSWORD", "DB_DATABASE_NAME" })
+        foreach (var key in DbEnvironmentKeys)
         {
-            Environment.SetEnvironmentVariable(key, null);
+            Environment.SetEnvironmentVariable(key, _originalEnvironment[key]);
         }
     }
 
@@ -86,6 +97,26 @@ public class ConfigServiceTests
         Assert.AreEqual(25, loaded.Processing.BatchSize);
         Assert.IsFalse(loaded.Processing.UseAirportInfrastructure);
         Assert.IsTrue(loaded.Processing.VerboseLogging);
+    }
+
+    [TestMethod]
+    [DataRow(null, null, "database")]
+    [DataRow("legacy-host", null, "legacy-host")]
+    [DataRow(null, "immich-host", "immich-host")]
+    [DataRow("legacy-host", "immich-host", "legacy-host")]
+    [DataRow("", "immich-host", "immich-host")]
+    [DataRow("  ", "immich-host", "immich-host")]
+    [DataRow(null, "", "database")]
+    [DataRow("", "  ", "database")]
+    public void GetDbSettings_ResolvesHostWithLegacyPrecedence(
+        string? host, string? hostname, string expectedHost)
+    {
+        Environment.SetEnvironmentVariable("DB_HOST", host);
+        Environment.SetEnvironmentVariable("DB_HOSTNAME", hostname);
+
+        var svc = new ConfigService(NullLogger<ConfigService>.Instance, configDir: _tempDir);
+
+        Assert.AreEqual(expectedHost, svc.GetDbSettings().Host);
     }
 
     [TestMethod]

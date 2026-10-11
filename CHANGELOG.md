@@ -4,6 +4,10 @@ Technical release notes for Immich ReverseGeo live here.
 
 For a shorter user-facing summary, see [docs/website/changelog.md](./docs/website/changelog.md).
 
+## Unreleased
+
+- Added `DB_HOSTNAME` support for shared Immich environment settings, retaining nonblank `DB_HOST` precedence and the `database` default when both values are unset or blank.
+
 ## 2026-04-12
 
 - Added optional GADM administrative-area support with per-country on-demand downloads, local SQLite cache export, Kosovo code mapping, and curated split-territory fallback families.
