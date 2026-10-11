@@ -28,6 +28,8 @@ Use this page when you want to answer questions like:
 
 Immich ReverseGeo ships with a small bundled Overture country cache.
 
+A separate bundled country catalog provides standard codes and display names for country selection lists. It can translate supported Overture source aliases into standard identities, but it does not supply geographic boundaries or add coverage. Use Lookup to check whether a coordinate matches the bundled country data.
+
 The app uses it for:
 
 - the first country match for a coordinate

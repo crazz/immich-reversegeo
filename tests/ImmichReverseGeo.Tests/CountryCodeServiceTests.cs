@@ -1,4 +1,5 @@
 using System.Text.Json;
+using ImmichReverseGeo.Overture.Services;
 using ImmichReverseGeo.Web.Services;
 using Microsoft.Data.Sqlite;
 
@@ -29,6 +30,39 @@ public class CountryCodeServiceTests
     }
 
     [TestMethod]
+    [DataRow("HK", "HKG", "Hong Kong")]
+    [DataRow("MO", "MAC", "Macao")]
+    [DataRow("GL", "GRL", "Greenland")]
+    [DataRow("FO", "FRO", "Faroe Islands")]
+    [DataRow("JE", "JEY", "Jersey")]
+    public void CountryIdentities_MapBothDirectionsAndPinnedNames(string alpha2, string alpha3, string displayName)
+    {
+        var service = CountryCodeService.CreateForTest();
+        Assert.AreEqual(alpha2, service.Iso3ToAlpha2(alpha3));
+        Assert.AreEqual(alpha3, service.Alpha2ToIso3(alpha2));
+        Assert.AreEqual(displayName, service.FindByAlpha2(alpha2)?.DisplayName);
+    }
+    [TestMethod]
+    public void CanonicalCatalog_ExplicitlyNamesEveryMappedIdentity()
+    {
+        var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
+        var isoPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Web", "bundled-data", "iso3166.json");
+        using var document = JsonDocument.Parse(File.ReadAllText(isoPath));
+        var root = document.RootElement;
+        var mappedAlpha2 = root.GetProperty("iso3ToAlpha2")
+            .EnumerateObject()
+            .Select(property => property.Value.GetString()!)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+        var explicitlyNamedAlpha2 = root.GetProperty("displayNamesByAlpha2")
+            .EnumerateObject()
+            .Select(property => property.Name)
+            .ToArray();
+
+        CollectionAssert.AreEquivalent(mappedAlpha2, explicitlyNamedAlpha2);
+    }
+
+    [TestMethod]
     public void BundledCountryCodes_AreMappedOrExplicitlyNonIso()
     {
         var repoRoot = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "..", "..", "..", "..", ".."));
@@ -36,20 +70,9 @@ public class CountryCodeServiceTests
         var isoPath = Path.Combine(repoRoot, "src", "ImmichReverseGeo.Web", "bundled-data", "iso3166.json");
 
         Assert.IsTrue(File.Exists(dbPath), $"Bundled country divisions DB not found at {dbPath}");
-        Assert.IsTrue(File.Exists(isoPath), $"ISO mapping file not found at {isoPath}");
+        Assert.IsTrue(File.Exists(isoPath), $"ISO identity catalog not found at {isoPath}");
 
-        var iso3ToAlpha2 = JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(isoPath))
-            ?? throw new InvalidOperationException("Failed to parse iso3166.json");
-        var mappedAlpha2 = iso3ToAlpha2.Values
-            .Select(value => value.ToUpperInvariant())
-            .ToHashSet(StringComparer.OrdinalIgnoreCase);
-
-        var explicitlyNonIso = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
-        {
-            "XA", "XB", "XC", "XD", "XG", "XH", "XI", "XL", "XM", "XN", "XO",
-            "XP", "XQ", "XR", "XT", "XU", "XW", "XX", "XY", "XZ"
-        };
-
+        var catalog = CountryIdentityCatalog.Load(isoPath);
         var missing = new List<string>();
 
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false");
@@ -61,7 +84,7 @@ public class CountryCodeServiceTests
         while (reader.Read())
         {
             var alpha2 = reader.GetString(0).ToUpperInvariant();
-            if (!mappedAlpha2.Contains(alpha2) && !explicitlyNonIso.Contains(alpha2))
+            if (catalog.FindByAlpha2(alpha2) is null && !catalog.IsExplicitlyNonIso(alpha2))
             {
                 missing.Add(alpha2);
             }
