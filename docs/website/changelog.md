@@ -11,6 +11,8 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 
 ## Unreleased
 
+- Keep overlapping area choices consistent when otherwise equal matches arrive in a different order.
+
 - Lookup now explains whether no country boundary matched or a matched boundary has an unresolved country code.
 
 - The Dashboard now explains which photos a run processes and how to correct existing names.
