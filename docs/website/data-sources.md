@@ -1,4 +1,5 @@
 ---
+description: "Understand Overture and optional GADM coverage, downloads, attribution, and licence limits."
 icon: material/database-outline
 ---
 

@@ -1,4 +1,5 @@
 ---
+description: "User-facing release notes for Immich ReverseGeo."
 icon: material/history
 ---
 

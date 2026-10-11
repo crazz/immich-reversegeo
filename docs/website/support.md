@@ -1,4 +1,5 @@
 ---
+description: "Get help with Immich ReverseGeo and report problems with useful diagnostic details."
 icon: material/lifebuoy
 ---
 
@@ -16,3 +17,5 @@ Helpful details:
 - whether the issue was in Lookup or full processing
 - whether the country cache was already present
 - whether the app was running locally or in Docker
+
+Use **Copy as Markdown** above a guide's heading to copy its text into a support conversation. The [Markdown documentation index](./llms.txt) links to exported setup, guide, and help pages. Review any logs or configuration details before sharing them.
