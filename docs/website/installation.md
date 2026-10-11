@@ -42,9 +42,9 @@ This service expects:
 - about 2 GB of memory, set by `mem_limit` in the snippet above
 
 !!! note "Why the memory limit is there"
-    The bundled country boundary data is held in memory while processing runs, so the container
-    settles around 750 MB–1 GB once warm. `mem_limit` gives the .NET runtime a ceiling to collect
-    against; without one it sizes itself against total host memory and keeps growing.
+    The bundled country boundary data is held in memory while processing runs and uses several hundred
+    megabytes. `mem_limit` sets a total container memory budget that the .NET runtime can take
+    into account. Large country caches and high parallelism can increase peak memory use.
 
     Do not lower it much below `2g`. A limit under the working set makes the container fail
     immediately instead of running. Raising it is fine.

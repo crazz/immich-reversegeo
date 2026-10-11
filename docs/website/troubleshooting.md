@@ -69,8 +69,9 @@ docker inspect --format '{{.RestartCount}} {{.State.OOMKilled}}' immich-reverseg
 
 If `OOMKilled` is `true`, or the logs end with `System.OutOfMemoryException`, raise the memory
 ceiling. The compose snippet in [Installation](./installation.md#docker) sets `mem_limit: 2g`,
-which suits most libraries. If your compose file has no `mem_limit` at all, add one — without it
-the .NET runtime sizes itself against total host memory and never collects under pressure.
+as a starting memory budget. If your Compose file has no `mem_limit`, add one to set a total
+container memory budget that the .NET runtime can take into account. Large country caches or
+higher parallelism may require a higher limit.
 
 Lowering the limit is not a fix. The bundled country boundary data alone needs several hundred
 megabytes once loaded, so a limit below that makes the container fail straight away.
