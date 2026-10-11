@@ -131,7 +131,11 @@ Official references:
 
 ## Optional live Overture Places diagnostics
 
-The Lookup page can optionally run a live Overture Places search. This is for diagnostics, not for normal background processing.
+Enable **Include nearby places** on the Lookup page to investigate a coordinate. The app shows up to five nearby suggestions with distance, category, operating status, existence confidence, sources, and the reason they were included. Lookup Trace lists all returned candidates.
+
+Suggestions are filtered before the result limit and ordered by distance within 2.5 km. The app returns at most 80 suggestions and a separate sample of up to 20 nearest excluded places, with reasons such as low or unknown confidence, closure, or an unsuitable category. The excluded sample is not a complete list of nearby places.
+
+Existence confidence estimates whether a place exists; it does not measure whether your photo was taken there. Overture Places are points, so proximity does not prove that a coordinate is inside a museum, park, or other venue. These results are for investigation and never replace the city, state, or country written to Immich.
 
 The app uses it for:
 
