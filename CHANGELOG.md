@@ -7,6 +7,7 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 ## Unreleased
 
 - Added `DB_HOSTNAME` support for shared Immich environment settings, retaining nonblank `DB_HOST` precedence and the `database` default when both values are unset or blank.
+- Display dashboard and log timestamps in the browser's timezone. Preserve structured UTC log timestamps and include dates in UTC log downloads.
 
 ## 2026-08-23
 

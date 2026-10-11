@@ -42,8 +42,8 @@ public class ProcessingState
     }
 
     // Ring buffer of last 100 log lines
-    private readonly Queue<string> _recentLog = new(capacity: 100);
-    public IReadOnlyCollection<string> RecentLog => _recentLog;
+    private readonly Queue<ProcessingLogEntry> _recentLog = new(capacity: 100);
+    public IReadOnlyCollection<string> RecentLog => GetRecentLog();
 
     private volatile string? _currentActivity;
     /// <summary>Short description of what the run is doing right now (e.g. "Downloading ARE boundaries…").</summary>
@@ -149,12 +149,17 @@ public class ProcessingState
                 _recentLog.Dequeue();
             }
 
-            _recentLog.Enqueue($"[{DateTime.UtcNow:HH:mm:ss}] {line}");
+            _recentLog.Enqueue(new ProcessingLogEntry(DateTimeOffset.UtcNow, line));
         }
         Notify();
     }
 
     public IReadOnlyList<string> GetRecentLog()
+    {
+        return GetRecentLogEntries().Select(entry => entry.ToUtcString()).ToArray();
+    }
+
+    public IReadOnlyList<ProcessingLogEntry> GetRecentLogEntries()
     {
         lock (_recentLog)
         {
@@ -201,4 +206,9 @@ public class ProcessingState
             }
         }
     }
+}
+
+public sealed record ProcessingLogEntry(DateTimeOffset Timestamp, string Message)
+{
+    public string ToUtcString() => $"[{Timestamp.UtcDateTime:O}] {Message}";
 }
