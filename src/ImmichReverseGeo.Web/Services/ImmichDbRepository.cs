@@ -239,6 +239,59 @@ public class ImmichDbRepository(NpgsqlDataSource dataSource, ILogger<ImmichDbRep
         }
     }
 
+    /// <summary>Reads up to 101 assets; the extra row indicates another 100-row preview page.</summary>
+    public async Task<IReadOnlyList<LocationPreviewAsset>> GetLocationPreviewBatchAsync(
+        LocationPreviewSelection selection, Guid? afterId, CancellationToken ct = default)
+    {
+        var predicate = selection.Scope switch
+        {
+            LocationPreviewScope.All => "TRUE",
+            LocationPreviewScope.AssetIds => "a.id = ANY(@assetIds)",
+            LocationPreviewScope.City => "e.city = @value",
+            LocationPreviewScope.State => "e.state = @value",
+            LocationPreviewScope.Country => "e.country = @value",
+            _ => throw new ArgumentOutOfRangeException(nameof(selection))
+        };
+        var sql = $"""
+            SELECT a.id, e.latitude, e.longitude, e.country, e.state, e.city
+            FROM asset a
+            INNER JOIN asset_exif e ON e."assetId" = a.id
+            WHERE a."deletedAt" IS NULL
+              AND ({predicate})
+              AND (@afterId IS NULL OR a.id > @afterId)
+            ORDER BY a.id
+            LIMIT 101
+            """;
+
+        await using var conn = await dataSource.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("afterId", NpgsqlDbType.Uuid, (object?)afterId ?? DBNull.Value);
+        if (selection.Scope == LocationPreviewScope.AssetIds)
+        {
+            cmd.Parameters.AddWithValue("assetIds", NpgsqlDbType.Array | NpgsqlDbType.Uuid, selection.AssetIds);
+        }
+        else if (selection.Scope != LocationPreviewScope.All)
+        {
+            cmd.Parameters.AddWithValue("value", NpgsqlDbType.Text, (object?)selection.Value ?? DBNull.Value);
+        }
+
+        var results = new List<LocationPreviewAsset>();
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        while (await reader.ReadAsync(ct))
+        {
+            results.Add(new LocationPreviewAsset(
+                reader.GetGuid(0),
+                reader.IsDBNull(1) ? null : reader.GetDouble(1),
+                reader.IsDBNull(2) ? null : reader.GetDouble(2),
+                new GeoResult(
+                    reader.IsDBNull(3) ? null : reader.GetString(3),
+                    reader.IsDBNull(4) ? null : reader.GetString(4),
+                    reader.IsDBNull(5) ? null : reader.GetString(5))));
+        }
+
+        return results;
+    }
+
     private static string GetLocationColumn(LocationResetScope scope) =>
         scope switch
         {

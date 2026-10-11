@@ -1,0 +1,296 @@
+@page "/data/location-preview"
+@rendermode InteractiveServer
+@using System.Linq
+@using System.Threading
+@inject ImmichDbRepository Db
+@inject ConfigService Config
+@inject AssetLocationResolverService Resolver
+@implements IDisposable
+
+<PageTitle>Preview Location Corrections - Immich ReverseGeo</PageTitle>
+
+<h2>Preview Location Corrections</h2>
+
+<section class="settings-card">
+    <p>Compare the names stored in Immich with the results from your current processing settings.
+        Preview does not change Immich data or the skip list. It may download country caches.
+        Deleted assets and GUIDs without an Immich metadata row are excluded.</p>
+    <p>A different result is a suggestion, not proof that the existing name is wrong.
+        Check unfamiliar results in <a class="text-link" href="/lookup">Lookup</a> before deciding which assets to reset.</p>
+    <div class="form-group">
+        <label for="preview-scope">Check assets by</label>
+        <select id="preview-scope" class="form-control" @bind="_scope" disabled="@(_busy || !_circuitReady)">
+            <option value="@LocationPreviewScope.AssetIds">Asset GUIDs</option>
+            <option value="@LocationPreviewScope.City">Existing city</option>
+            <option value="@LocationPreviewScope.State">Existing state</option>
+            <option value="@LocationPreviewScope.Country">Existing country</option>
+            <option value="@LocationPreviewScope.All">Whole library</option>
+        </select>
+    </div>
+    @if (_scope != LocationPreviewScope.All)
+    {
+        <div class="form-group">
+            <label for="preview-input">@(_scope == LocationPreviewScope.AssetIds ? "Asset GUIDs" : "Existing location name")</label>
+            <textarea id="preview-input" class="form-control reset-textarea" @bind="_input" @bind:event="oninput" disabled="@(_busy || !_circuitReady)"></textarea>
+            <span class="hint">@(_scope == LocationPreviewScope.AssetIds
+                ? "Paste up to 1,000 GUIDs, separated by commas, spaces, or new lines."
+                : "Enter the exact city, state, or country name stored in Immich. All assets with that value are included.")</span>
+        </div>
+    }
+    <div class="btn-row">
+        <button class="btn btn-primary" @onclick="StartAsync" disabled="@(_busy || !_circuitReady)">@(_circuitReady ? "Start Preview" : "Starting UI…")</button>
+        @if (_busy)
+        {
+            <button class="btn btn-secondary" @onclick="Cancel">Cancel</button>
+        }
+    </div>
+    <p class="hint">Starting a new preview clears your selected GUIDs. Selections are kept when you move to the next page.</p>
+    @if (_busy)
+    {
+        <p role="status">@(_pageCount == 0 ? "Loading matching assets…" : $"Checking asset {Math.Min(_rows.Count + 1, _pageCount)} of {_pageCount}.")
+            The first lookup for a country may take longer while its cache downloads.</p>
+    }
+    @if (_message is not null)
+    {
+        <p role="status">@_message</p>
+    }
+    @if (_error is not null)
+    {
+        <p class="alert alert-error" role="alert">@_error</p>
+    }
+</section>
+
+@if (_rows.Count > 0 || _review.Count > 0)
+{
+    <section class="settings-card wide-card">
+        <h3>Preview results — page @_page</h3>
+        <p>Selection: @SelectionLabel. Start a new preview to use different inputs or updated settings.</p>
+        <p>@_rows.Count checked on this page; @_rows.Count(row => row.HasChange) have different proposed values.
+            Results use the settings loaded when you started this preview.</p>
+        <label><input type="checkbox" @bind="_onlyChanges" /> Show only different values</label>
+        @if (!_busy && (_rows.Any(row => row.HasChange) || _review.Count > 0))
+        {
+            <div class="btn-row">
+                <button class="btn btn-secondary" @onclick="SelectPageChanges" disabled="@(!_rows.Any(row => row.HasChange))">Select Different Values on This Page</button>
+                <button class="btn btn-secondary" @onclick="_review.Clear" disabled="@(_review.Count == 0)">Clear Selection</button>
+            </div>
+        }
+        <div class="table-scroll">
+            <table class="data-table">
+                <thead><tr><th>Select</th><th>Asset GUID</th><th>Existing location</th><th>Proposed location</th><th>Result</th></tr></thead>
+                <tbody>
+                    @foreach (var row in _rows.Where(row => !_onlyChanges || row.HasChange))
+                    {
+                        <tr>
+                            <td><input type="checkbox" aria-label="Select asset @row.Asset.Id"
+                                       checked="@_review.IsSelected(row.Asset.Id)" disabled="@(_busy || !row.HasChange)"
+                                       @onchange="args => _review.Select(row, args.Value is true)" /></td>
+                            <td><code>@row.Asset.Id</code>
+                                <div class="hint">GPS: @(row.Asset.Latitude?.ToString("G", System.Globalization.CultureInfo.InvariantCulture) ?? "—"), @(row.Asset.Longitude?.ToString("G", System.Globalization.CultureInfo.InvariantCulture) ?? "—")</div>
+                            </td>
+                            <td>
+                                <div>City: @(row.Asset.Existing.City ?? "—")</div>
+                                <div>State: @(row.Asset.Existing.State ?? "—")</div>
+                                <div>Country: @(row.Asset.Existing.Country ?? "—")</div>
+                            </td>
+                            <td>
+                                <div>City: @(row.Proposed?.City ?? "—")</div>
+                                <div>State: @(row.Proposed?.State ?? "—")</div>
+                                <div>Country: @(row.Proposed?.Country ?? "—")</div>
+                            </td>
+                            <td>@row.Status
+                                @if (row.Error is not null)
+                                {
+                                    <div>@row.Error</div>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+        @if (!_busy && _hasMore)
+        {
+            <div class="btn-row">
+                <button class="btn btn-secondary" @onclick="NextAsync">Preview Next 100</button>
+            </div>
+            <p class="hint">The next page replaces these results. Select the assets you want to correct first; selected GUIDs are kept across pages.</p>
+        }
+        @if (!_busy && _review.Count > 0)
+        {
+            <div class="form-group">
+                <label for="preview-changed-ids">Selected GUIDs from reviewed pages (@_review.Count)</label>
+                <textarea id="preview-changed-ids" class="form-control reset-textarea" readonly
+                          value="@string.Join(Environment.NewLine, _review.SelectedIds)"></textarea>
+            </div>
+            <p>After reviewing the results, copy the GUIDs you want to correct into
+                <a class="text-link" href="/data/reset-geo-data">Reset Immich Geo Data → Reset Single Item(s)</a>.
+                Take an Immich database backup before resetting, then run processing from the Dashboard.
+                Results may change if settings, source data, or coordinates change before processing.</p>
+        }
+    </section>
+}
+
+@code {
+    private LocationPreviewScope _scope = LocationPreviewScope.AssetIds;
+    private string? _input;
+    private bool _busy;
+    private bool _circuitReady;
+    private bool _onlyChanges;
+    private bool _hasMore;
+    private bool _disposed;
+    private int _page;
+    private int _pageCount;
+    private string? _message;
+    private string? _error;
+    private Guid? _afterId;
+    private LocationPreviewSelection? _selection;
+    private ProcessingConfig? _settings;
+    private CancellationTokenSource? _cts;
+    private readonly List<LocationPreviewRow> _rows = [];
+    private readonly LocationPreviewReview _review = new();
+
+    private void SelectPageChanges()
+    {
+        foreach (var row in _rows.Where(row => row.HasChange))
+        {
+            _review.Select(row, true);
+        }
+    }
+
+    private string SelectionLabel => _selection?.Scope switch
+    {
+        LocationPreviewScope.AssetIds => $"{_selection.AssetIds.Length} asset GUID(s)",
+        LocationPreviewScope.All => "Whole library",
+        LocationPreviewScope.City => $"Existing city: {_selection.Value}",
+        LocationPreviewScope.State => $"Existing state: {_selection.Value}",
+        LocationPreviewScope.Country => $"Existing country: {_selection.Value}",
+        _ => string.Empty
+    };
+
+    protected override void OnAfterRender(bool firstRender)
+    {
+        if (firstRender)
+        {
+            _circuitReady = true;
+            StateHasChanged();
+        }
+    }
+
+    private async Task StartAsync()
+    {
+        if (_busy)
+        {
+            return;
+        }
+
+        _error = null;
+        LocationPreviewSelection selection;
+        try
+        {
+            selection = LocationPreviewSelection.Create(_scope, _input);
+        }
+        catch (ArgumentException ex)
+        {
+            _error = ex.Message;
+            return;
+        }
+
+        _selection = selection;
+        _message = null;
+        _rows.Clear();
+        _review.Clear();
+        _hasMore = false;
+        _afterId = null;
+        _page = 0;
+        await PreviewPageAsync(reloadSettings: true);
+    }
+
+    private Task NextAsync() => PreviewPageAsync(reloadSettings: false);
+
+    private async Task PreviewPageAsync(bool reloadSettings)
+    {
+        if (_busy || _selection is null || _disposed)
+        {
+            return;
+        }
+
+        _busy = true;
+        _message = null;
+        _error = null;
+        _rows.Clear();
+        _pageCount = 0;
+        _hasMore = false;
+        _cts?.Dispose();
+        _cts = new CancellationTokenSource();
+        var ct = _cts.Token;
+        try
+        {
+            if (reloadSettings)
+            {
+                _settings = (await Config.GetConfigAsync()).Processing;
+            }
+
+            ct.ThrowIfCancellationRequested();
+            var assets = await Db.GetLocationPreviewBatchAsync(_selection, _afterId, ct);
+            _pageCount = Math.Min(assets.Count, 100);
+            _page++;
+            foreach (var asset in assets.Take(100))
+            {
+                ct.ThrowIfCancellationRequested();
+                try
+                {
+                    var proposed = asset.Latitude is not null && asset.Longitude is not null
+                        // Cached geometry and SQLite queries may complete synchronously.
+                        // Keep them off the circuit dispatcher so Cancel remains responsive.
+                        ? await Task.Run(() => Resolver.ResolveAsync(
+                            asset.Latitude.Value, asset.Longitude.Value, _settings!, ct: ct), ct)
+                        : null;
+                    ct.ThrowIfCancellationRequested();
+                    _rows.Add(new LocationPreviewRow(asset, proposed));
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _rows.Add(new LocationPreviewRow(asset, null, ex.Message));
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+
+            _hasMore = assets.Count > 100;
+            _afterId = _rows.LastOrDefault()?.Asset.Id;
+            _message = _rows.Count == 0
+                ? "No matching active assets found. GUIDs without an Immich metadata row are not included."
+                : _hasMore ? "Page complete. More matching assets are available." : "Preview complete. No more matching assets.";
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            _afterId = _rows.LastOrDefault()?.Asset.Id ?? _afterId;
+            _hasMore = _afterId is not null;
+            _message = _hasMore
+                ? "Preview cancelled. Review completed results, then use Preview Next 100 to continue after the last checked asset."
+                : "Preview cancelled before any assets were checked on this page. Start a new preview to check the selection again.";
+        }
+        catch (Exception ex)
+        {
+            _error = $"Could not load preview: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private void Cancel() => _cts?.Cancel();
+
+    public void Dispose()
+    {
+        _disposed = true;
+        _cts?.Cancel();
+        _cts?.Dispose();
+    }
+}

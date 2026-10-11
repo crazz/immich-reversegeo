@@ -64,6 +64,15 @@ body {
 }
 
 /* ── Layout ───────────────────────────────────────────── */
+.text-link {
+    color: var(--accent);
+    text-decoration: underline;
+}
+
+.text-link:hover {
+    color: var(--text-primary);
+}
+
 .page {
     display: grid;
     grid-template-columns: 260px minmax(0, 1fr);
