@@ -1,4 +1,5 @@
 ---
+description: "Terms for using Immich ReverseGeo."
 icon: material/file-document-outline
 ---
 

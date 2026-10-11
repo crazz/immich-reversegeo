@@ -1,4 +1,5 @@
 ---
+description: "Set up Immich ReverseGeo with Docker, check a coordinate, and prepare your first processing run."
 icon: material/rocket-launch-outline
 ---
 
@@ -57,12 +58,10 @@ Use Docker with persistent mounts for:
 - `/config` for settings
 - `/data` for downloaded country data
 
-You can either:
-
-- add the `immich-reversegeo` service to your existing Immich compose file
+Add the service to your existing Immich Compose file. See [Installation](./installation.md) for the snippet or a separate-stack setup.
 
 ```bash
-docker compose up -d
+docker compose up -d immich-reversegeo
 ```
 
 ## 3. Open the UI
@@ -72,6 +71,9 @@ Default container URL:
 ```text
 http://localhost:8080
 ```
+
+??? info "Which computer does localhost refer to?"
+    `localhost` means the computer running your browser. If Docker runs on another machine, use a private connection to that machine, such as the SSH tunnel below.
 
 If port `8080` is already in use on your host, change the left side of the compose port mapping and open that port instead.
 
@@ -100,12 +102,12 @@ Use the Lookup page to confirm the basics before a full run:
   </div>
 </div>
 
-## 5. Run a small processing pass
+## 5. Start manual processing
 
-Use `Run Now` from the Dashboard for your first manual pass. Start with a conservative batch size first and confirm the resulting location names look right in immich before scaling up.
+After checking known coordinates in Lookup, use `Run Now` from the Dashboard for your first manual pass. A smaller batch size reduces work per batch; it does not limit the total number of assets in the run. Inspect the resulting location names in Immich and use `Cancel` if you need to stop processing.
 
-If you want to start from a clean slate, the Reset Immich Geo Data page under Data can clear existing reverse geo `city`, `state`, and `country` values in immich before reprocessing.
+Processing selects GPS-tagged assets only when both the city and country are missing (stored as `NULL` in the database). Assets with an existing city or country are not selected, even if the other value is missing.
 
-You can reset all reverse geo data, paste specific asset GUIDs to reset only those items, or reset everything that currently matches a selected city, state, or country.
+To correct existing location names, first back up the Immich database. Use `Reset Single Item(s)` or `Reset Specific Locations` on the Reset Immich Geo Data page to clear only the affected assets, then run processing again. These actions clear all three location fields—city, state, and country—for the selected assets. See [Data tools](./using-the-app.md#data-tools) for the available reset actions.
 
 For more on the UI after setup, see [Using the App](./using-the-app.md).

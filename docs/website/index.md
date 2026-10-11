@@ -1,4 +1,5 @@
 ---
+description: "Improve Immich location names with a self-hosted companion. Preview known coordinates before processing your library."
 title: Immich ReverseGeo
 icon: material/home-outline
 hide:
@@ -24,85 +25,23 @@ Immich ReverseGeo is a self-hosted companion for <a href="https://immich.app">im
   <a class="md-button" href="https://github.com/immich-reversegeo/immich-reversegeo">GitHub</a>
 </div>
 
-## Why People Use It
+## Check a coordinate before processing
 
-<div class="highlight-grid">
-  <div class="card">
-    <h3>Better place names</h3>
-    <p>Improves country, state, and city names when immich’s built-in result is too rough for the photo.</p>
-  </div>
-  <div class="card">
-    <h3>Tricky places handled better</h3>
-    <p>Often works better around coastlines, islands, border areas, and other places where simple matching falls short.</p>
-  </div>
-  <div class="card">
-    <h3>Smarter airport matching</h3>
-    <p>Can recognize airport areas more accurately, so airport photos can resolve to the airport itself when that is the better fit.</p>
-  </div>
-</div>
+Open **Lookup**, paste coordinates from a photo you know, and inspect the country, state, city, and matching sources before running against your library. Lookup previews location names without updating Immich assets; it may download country data when needed.
 
-## Good Fits
+![Coordinate Lookup with an example coordinate](assets/screenshots/lookup.png){ .doc-screenshot .on-glb }
 
-<div class="section-intro">
-Immich ReverseGeo is a strong fit if your photos already have GPS coordinates and you want cleaner, more useful location names in a self-hosted setup.
-</div>
+## What it can help with
 
-<div class="feature-grid">
-  <div class="card">
-    <h3>Large libraries</h3>
-    <p>Useful when many assets already have coordinates but the place names are missing or low quality.</p>
-  </div>
-  <div class="card">
-    <h3>Self-hosted workflows</h3>
-    <p>Designed for repeatable local processing instead of depending on a third-party geocoding API at run time.</p>
-  </div>
-  <div class="card">
-    <h3>Careful rollouts</h3>
-    <p>Lets you test individual coordinates first, then process the whole library once the results look right.</p>
-  </div>
-</div>
+- Missing or overly broad location names on photos that already have GPS coordinates.
+- Matching around coastlines, islands, administrative boundaries, and airport areas.
+- Repeatable processing with locally cached geographic data.
 
-## Features
+Results depend on the available source data. It cannot add missing GPS coordinates or guarantee a better name for every point. Compare known locations in Lookup first, then choose the settings that fit your library.
 
-<div class="feature-grid">
-  <div class="card">
-    <h3>immich integration</h3>
-    <p>Reads your existing photo coordinates and writes improved location names back into immich.</p>
-  </div>
-  <div class="card">
-    <h3>Better matching</h3>
-    <p>Uses built-in location data plus extra country downloads when needed.</p>
-  </div>
-  <div class="card">
-    <h3>Web UI</h3>
-    <p>Change settings, test coordinates, manage downloads, and run processing manually.</p>
-  </div>
-  <div class="card">
-    <h3>Preview before processing</h3>
-    <p>See why a specific coordinate resolves the way it does before you process your full library.</p>
-  </div>
-</div>
+To replace existing location names, back up the database and clear the affected assets' location fields before reprocessing. See [Start manual processing](./getting-started.md#5-start-manual-processing) for the workflow.
 
-## Architecture Overview
-
-<div class="feature-grid">
-  <div class="card">
-    <h3>immich database</h3>
-    <p>Photo coordinates are read from here, and improved location names are written back here.</p>
-  </div>
-  <div class="card">
-    <h3>Immich ReverseGeo app</h3>
-    <p>The web app handles settings, processing, lookups, and download management.</p>
-  </div>
-  <div class="card">
-    <h3>Built-in data</h3>
-    <p>Used for country matching and airport matching right away.</p>
-  </div>
-  <div class="card">
-    <h3>Downloaded data</h3>
-    <p>Extra country data is downloaded when needed for better state and city matching.</p>
-  </div>
-</div>
+See [Using the App](./using-the-app.md) for the workflow and [Data Sources](./data-sources.md) for coverage and licence limits.
 
 ## Before You Run It On Real Data
 
