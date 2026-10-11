@@ -290,23 +290,7 @@ static long ExportCountryDivisions(string release, string releaseUrl, string sql
     return rowCount;
 }
 
-static string GetLatestRelease()
-{
-    try
-    {
-        using var conn = new DuckDBConnection("Data Source=:memory:");
-        conn.Open();
-        OvertureDataAccess.LoadHttpfs(conn);
-
-        using var query = conn.CreateCommand();
-            query.CommandText = $"SELECT latest FROM '{OverturePlacesLogic.LatestCatalogUrl}'";
-            return query.ExecuteScalar()?.ToString() ?? OverturePlacesLogic.DocumentedFallbackRelease;
-        }
-        catch
-        {
-            return OverturePlacesLogic.DocumentedFallbackRelease;
-        }
-    }
+static string GetLatestRelease() => OvertureReleaseCatalog.GetLatestRelease();
 
 static byte[] ReadBlobValue(object value)
 {

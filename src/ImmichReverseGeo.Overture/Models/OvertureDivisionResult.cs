@@ -34,7 +34,11 @@ public record OvertureDivisionCandidateDiagnostic(
     bool GeometryContainsPoint,
     double BoundingBoxArea,
     bool Selected,
-    string Decision);
+    string Decision,
+    string? DivisionId = null,
+    string? HierarchyJson = null);
+
+public record OvertureDivisionAncestor(string DivisionId, string Name, string SubType);
 
 public record OvertureAdministrativeResult(
     string? State,

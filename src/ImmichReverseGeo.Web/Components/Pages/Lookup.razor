@@ -576,8 +576,9 @@
         await UpdateLookupStatusAsync("Querying cached Overture administrative areas...");
         r.OvertureDivisionDiagnostics = await OvertureDivisions.FindContainingDivisionAreasAsync(_lat, _lon, r.Alpha2, r.Iso3);
         r.OvertureDivision = r.OvertureDivisionDiagnostics.BestMatch;
-        r.OvertureDivisionState = OvertureDivisionsLogic.SelectStateName(r.OvertureDivisionDiagnostics.Candidates);
-        r.OvertureDivisionCity = OvertureDivisionsLogic.SelectCityName(r.OvertureDivisionDiagnostics.Candidates, cityResolverProfile);
+        var overtureAdmin = OvertureDivisionsLogic.SelectAdministrativeAreas(r.OvertureDivisionDiagnostics.Candidates, cityResolverProfile);
+        r.OvertureDivisionState = overtureAdmin.State;
+        r.OvertureDivisionCity = overtureAdmin.City;
         r.Trace.Add(r.OvertureDivisionDiagnostics.Error is not null
             ? $"Overture division lookup failed: {r.OvertureDivisionDiagnostics.Error}"
             : $"Overture division admin resolution: state={r.OvertureDivisionState ?? "—"}, city={r.OvertureDivisionCity ?? "—"}");

@@ -136,13 +136,17 @@ This keeps the main Settings page simple while still giving you a way to fix cou
 
 ### What it actually changes
 
-The City Resolver only affects the `city` value.
+The City Resolver controls which city-like area the app prefers. When Overture provides parent information for that area, the app also uses it to select a consistent state.
 
 It is useful when the app finds the right general area, but chooses the wrong name for your taste. For example:
 
 - it picks a district instead of the wider city
 - it picks a very small local area instead of the municipality
 - it picks something broader than you want
+
+With newly downloaded Overture country caches, a containing neighborhood can supply its parent city when your preferred city type has no polygon match. Your configured place-type order still applies. The app only uses parent information from an area whose geometry matches the coordinate.
+
+Existing caches continue to work. To use parent matching for a country cached before this update, re-download its Overture cache on the Data page, then compare known coordinates in Lookup before reprocessing your library.
 
 ### What it does not change
 

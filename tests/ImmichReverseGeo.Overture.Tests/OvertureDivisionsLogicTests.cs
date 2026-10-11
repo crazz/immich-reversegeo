@@ -17,7 +17,7 @@ public class OvertureDivisionsLogicTests
             releaseUrl: "az://example.test/release/theme=divisions/type=division_area/*.parquet");
 
         StringAssert.Contains(sql, "read_parquet('az://example.test/release/theme=divisions/type=division_area/*.parquet'");
-        StringAssert.Contains(sql, "lower(country) = 'ch'");
+        StringAssert.Contains(sql, "lower(country) IN ('ch')");
         StringAssert.Contains(sql, "ST_Intersects(geometry, ST_Point(8.5574, 47.4513))");
     }
 
