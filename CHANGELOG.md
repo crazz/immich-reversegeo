@@ -6,6 +6,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Match Nearby Places include/exclude terms at snake-case category boundaries in both SQL and diagnostics, preventing `port` from matching `sports` or `transportation` while retaining compound types such as `art_museum` and `train_station`.
+
 - Follow the system colour preference on the Zensical website until a theme is chosen, improve light/dark link and button contrast, and use solid theme-aware cards and visible keyboard focus.
 - Reworked optional live Places lookup as Nearby Places investigation: bounded distance-ordered suggestions and an excluded preview, with shared eligibility diagnostics, existence-confidence wording, and reliable JSON source attribution. Filter useful candidates and the true search radius before applying result limits; keep the airport and administrative processing paths unchanged.
 
