@@ -39,6 +39,8 @@ Open **Lookup**, paste coordinates from a photo you know, and inspect the countr
 
 Results depend on the available source data. It cannot add missing GPS coordinates or guarantee a better name for every point. Compare known locations in Lookup first, then choose the settings that fit your library.
 
+To replace existing location names, back up the database and clear the affected assets' location fields before reprocessing. See [Start manual processing](./getting-started.md#5-start-manual-processing) for the workflow.
+
 See [Using the App](./using-the-app.md) for the workflow and [Data Sources](./data-sources.md) for coverage and licence limits.
 
 ## Before You Run It On Real Data

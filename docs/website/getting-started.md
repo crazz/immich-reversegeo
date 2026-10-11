@@ -106,8 +106,8 @@ Use the Lookup page to confirm the basics before a full run:
 
 After checking known coordinates in Lookup, use `Run Now` from the Dashboard for your first manual pass. A smaller batch size reduces work per batch; it does not limit the total number of assets in the run. Inspect the resulting location names in Immich and use `Cancel` if you need to stop processing.
 
-If you want to start from a clean slate, the Reset Immich Geo Data page under Data can clear existing reverse geo `city`, `state`, and `country` values in immich before reprocessing.
+Processing selects GPS-tagged assets only when both the city and country are missing (stored as `NULL` in the database). Assets with an existing city or country are not selected, even if the other value is missing.
 
-You can reset all reverse geo data, paste specific asset GUIDs to reset only those items, or reset everything that currently matches a selected city, state, or country.
+To correct existing location names, first back up the Immich database. Use `Reset Single Item(s)` or `Reset Specific Locations` on the Reset Immich Geo Data page to clear only the affected assets, then run processing again. These actions clear all three location fields—city, state, and country—for the selected assets. See [Data tools](./using-the-app.md#data-tools) for the available reset actions.
 
 For more on the UI after setup, see [Using the App](./using-the-app.md).

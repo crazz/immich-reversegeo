@@ -19,6 +19,8 @@ Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 - the Dashboard shows live progress, recent activity, and the last completed run
 - `Cancel` stops the current run
 
+Processing selects GPS-tagged assets only when both city and country are missing (stored as `NULL`). To correct existing location names, back up the database and use a targeted reset from [Data tools](#data-tools) before reprocessing.
+
 Run completion and activity timestamps use your browser's local timezone, shown beside each time. This does not change the processing schedule.
 
 ## Lookup

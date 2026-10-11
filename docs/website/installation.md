@@ -72,7 +72,7 @@ DB_PASSWORD=...
 DB_DATABASE_NAME=immich
 ```
 
-Use `DB_HOSTNAME` from Immich's `.env` file, including when connecting to an external database. Existing `DB_HOST` settings remain supported and take precedence if both are set. If neither has a nonblank value, the host defaults to `database`.
+Use `DB_HOSTNAME` from Immich's `.env` file, including when connecting to an external database. A nonblank `DB_HOST` takes precedence over `DB_HOSTNAME` for existing installations. If `DB_HOST` is empty or contains only spaces, the app uses `DB_HOSTNAME`. If neither has a nonblank value, the host defaults to `database`.
 
 The example publishes the UI on host port `8080`. Change the left side of the port mapping if it is already in use. Do not expose the UI publicly; see the private-access options below.
 
