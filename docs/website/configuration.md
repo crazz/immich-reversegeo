@@ -39,6 +39,11 @@ For the database host, a nonblank `DB_HOST` takes precedence over `DB_HOSTNAME`.
 
 ## Saving settings
 
+Settings and City Resolver show whether changes are saved. **Save changes** saves the values present when you click it. If you keep editing during a save, those later edits stay pending for another save. Leaving an editor with unsaved changes asks for confirmation.
+
+The two editors save their own sections, so saving City Resolver does not overwrite processing or schedule changes made elsewhere. **Test Connection** checks the environment-backed database connection without saving settings.
+
+
 Saving replaces the settings file only after the new values have been written completely. If a save fails, the previous file remains available. Database credentials stay in the environment.
 
 ## Processing settings

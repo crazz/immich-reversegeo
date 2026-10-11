@@ -26,16 +26,7 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
         await _fileLock.WaitAsync();
         try
         {
-            if (!File.Exists(_configPath))
-            {
-                logger.LogInformation("No settings file found at {Path}, using defaults", _configPath);
-                return new AppConfig();
-            }
-
-            await using var fs = new FileStream(
-                _configPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
-            var config = await JsonSerializer.DeserializeAsync<AppConfig>(fs, _json) ?? new AppConfig();
-            return EnsureDefaults(config);
+            return await ReadConfigAsync();
         }
         finally
         {
@@ -45,18 +36,56 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
 
     public async Task SaveConfigAsync(AppConfig config)
     {
-        // Capture the caller's values before awaiting; later UI edits belong to the next save.
         var json = JsonSerializer.SerializeToUtf8Bytes(config, _json);
-        var directory = Path.GetDirectoryName(_configPath)!;
-        Directory.CreateDirectory(directory);
-        var temporaryPath = Path.Combine(directory, $".settings.{Guid.NewGuid():N}.tmp");
-
         await _fileLock.WaitAsync();
         try
         {
+            await WriteConfigAsync(json);
+        }
+        finally
+        {
+            _fileLock.Release();
+        }
+    }
+
+    // Merge only the edited section against the latest settings under the same lock.
+    public async Task UpdateConfigAsync(Action<AppConfig> update)
+    {
+        await _fileLock.WaitAsync();
+        try
+        {
+            var config = await ReadConfigAsync();
+            update(config);
+            await WriteConfigAsync(JsonSerializer.SerializeToUtf8Bytes(config, _json));
+        }
+        finally
+        {
+            _fileLock.Release();
+        }
+    }
+
+    private async Task<AppConfig> ReadConfigAsync()
+    {
+        if (!File.Exists(_configPath))
+        {
+            logger.LogInformation("No settings file found at {Path}, using defaults", _configPath);
+            return new AppConfig();
+        }
+
+        await using var fs = new FileStream(
+            _configPath, FileMode.Open, FileAccess.Read, FileShare.Read | FileShare.Delete);
+        var config = await JsonSerializer.DeserializeAsync<AppConfig>(fs, _json) ?? new AppConfig();
+        return EnsureDefaults(config);
+    }
+
+    private async Task WriteConfigAsync(byte[] json)
+    {
+        var directory = Path.GetDirectoryName(_configPath)!;
+        Directory.CreateDirectory(directory);
+        var temporaryPath = Path.Combine(directory, $".settings.{Guid.NewGuid():N}.tmp");
+        try
+        {
             await File.WriteAllBytesAsync(temporaryPath, json);
-            // Same-directory replacement publishes a complete file. Existing readers retain
-            // their old snapshot through FileShare.Delete, including on Windows.
             if (File.Exists(_configPath))
             {
                 File.Replace(temporaryPath, _configPath, destinationBackupFileName: null);
@@ -77,7 +106,6 @@ public class ConfigService(ILogger<ConfigService> logger, string? configDir = nu
             {
                 logger.LogWarning(ex, "Could not remove temporary settings file {Path}", temporaryPath);
             }
-            _fileLock.Release();
         }
     }
 
