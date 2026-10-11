@@ -16,6 +16,9 @@ jobs:
         with:
           lfs: true
 
+      - name: Test Docker publishing rules
+        run: node --test .github/scripts/docker-publishing.test.cjs
+
       - name: Setup .NET
         uses: actions/setup-dotnet@v6
         with:

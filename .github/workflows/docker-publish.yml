@@ -1,6 +1,8 @@
 name: Publish Docker Image
 
 on:
+  release:
+    types: [published]
   push:
     branches:
       - master
@@ -8,6 +10,7 @@ on:
       - "src/**"
       - "src/ImmichReverseGeo.Web/Dockerfile"
       - ".github/workflows/docker-publish.yml"
+      - ".github/scripts/docker-publishing.cjs"
   workflow_dispatch:
     inputs:
       publish_latest:
@@ -23,6 +26,9 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-latest
+    outputs:
+      image: ${{ fromJSON(steps.meta.outputs.json).tags[0] }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -41,12 +47,26 @@ jobs:
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository_owner }}/immich-reversegeo
+          flavor: latest=false
           tags: |
+            type=semver,pattern={{version}},value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
+            type=raw,value=${{ github.event.release.tag_name }},enable=${{ github.event_name == 'release' }}
             type=raw,value=edge,enable=${{ github.event_name == 'push' && github.ref == 'refs/heads/master' }}
             type=sha,prefix=sha-
-            type=raw,value=latest,enable=${{ github.event_name == 'workflow_dispatch' && inputs.publish_latest == true }}
+
+      - name: Validate release version
+        if: github.event_name == 'release'
+        uses: actions/github-script@v9
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          IMAGE_METADATA: ${{ steps.meta.outputs.json }}
+        with:
+          script: |
+            const { validateReleaseTag } = require('./.github/scripts/docker-publishing.cjs');
+            validateReleaseTag(process.env.RELEASE_TAG, JSON.parse(process.env.IMAGE_METADATA));
 
       - name: Build and push
+        id: build
         uses: docker/build-push-action@v7
         with:
           context: .
@@ -54,3 +74,38 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  promote-latest:
+    needs: publish
+    if: ${{ (github.event_name == 'release' && !github.event.release.prerelease && !contains(github.event.release.tag_name, '-')) || (github.event_name == 'workflow_dispatch' && inputs.publish_latest == true) }}
+    runs-on: ubuntu-latest
+    concurrency:
+      group: docker-latest-promotion
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Promote built image to latest
+        uses: actions/github-script@v9
+        env:
+          MANUAL_PROMOTION: ${{ inputs.publish_latest }}
+          SOURCE_IMAGE: ${{ needs.publish.outputs.image }}
+          SOURCE_DIGEST: ${{ needs.publish.outputs.digest }}
+        with:
+          script: |
+            const { promoteLatest } = require('./.github/scripts/docker-publishing.cjs');
+            await promoteLatest({
+              github, context, core, exec,
+              image: process.env.SOURCE_IMAGE,
+              digest: process.env.SOURCE_DIGEST,
+              manual: process.env.MANUAL_PROMOTION === 'true'
+            });

@@ -76,6 +76,18 @@ Use `DB_HOSTNAME` from Immich's `.env` file, including when connecting to an ext
 
 The example publishes the UI on host port `8080`. Change the left side of the port mapping if it is already in use. Do not expose the UI publicly; see the private-access options below.
 
+## Image versions
+
+`latest` normally follows GitHub's designated latest stable release after its image is successfully published. Maintainers can explicitly promote another validated build using the manual publishing option. Use a published version tag to control upgrades, for example `ghcr.io/immich-reversegeo/immich-reversegeo:1.2.3`. This is an example; choose an available version from [GitHub Releases](https://github.com/immich-reversegeo/immich-reversegeo/releases).
+
+- Releases tagged `v1.2.3` publish both `1.2.3` and `v1.2.3` image tags.
+- Other stable releases retain their version tags without changing `latest`. Rerunning an older release does not automatically move `latest` backwards.
+- Prereleases publish their full version tags, such as `1.2.3-rc.1`, without updating `latest`.
+- `edge` follows development builds from `master`.
+- `sha-...` tags identify builds by commit.
+
+After changing the image version in your Compose file, run `docker compose pull immich-reversegeo` and `docker compose up -d immich-reversegeo`. Keep your existing `/config` and `/data` volumes.
+
 ## VPS and firewall notes
 
 Do not expose the web UI publicly. Docker-published ports can bypass host firewall rules such as UFW, so do not rely on the host firewall alone to hide a broadly published `8080:8080` mapping on an internet-facing server.
