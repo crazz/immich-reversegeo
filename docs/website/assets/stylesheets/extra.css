@@ -113,3 +113,10 @@
 .step-card ul {
   padding-left: 1.1rem;
 }
+
+.doc-screenshot {
+  display: block;
+  width: 100%;
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.6rem;
+}

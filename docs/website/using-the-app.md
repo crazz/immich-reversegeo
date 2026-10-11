@@ -28,6 +28,10 @@ Use the Lookup page when you want to test a coordinate before running a full pro
 - `Include live Overture Places lookup` adds an extra live place search for debugging, but it is slower and not needed for normal use
 - `Prefer cached GADM administrative areas` switches the administrative area part of the lookup to an experimental on-demand GADM cache for that country; country detection still starts with the bundled Overture country data
 
+![Coordinate Lookup input](assets/screenshots/lookup.png){ .doc-screenshot .on-glb }
+
+Click the screenshot to enlarge it. Lookup previews do not update Immich assets.
+
 ## Data tools
 
 The Data area contains maintenance tools that change downloaded caches or Immich reverse geo values.

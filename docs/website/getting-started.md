@@ -55,12 +55,10 @@ Use Docker with persistent mounts for:
 - `/config` for settings
 - `/data` for downloaded country data
 
-You can either:
-
-- add the `immich-reversegeo` service to your existing Immich compose file
+Add the service to your existing Immich Compose file. See [Installation](./installation.md) for the snippet or a separate-stack setup.
 
 ```bash
-docker compose up -d
+docker compose up -d immich-reversegeo
 ```
 
 ## 3. Open the UI
@@ -70,6 +68,9 @@ Default container URL:
 ```text
 http://localhost:8080
 ```
+
+??? info "Which computer does localhost refer to?"
+    `localhost` means the computer running your browser. If Docker runs on another machine, use a private connection to that machine, such as the SSH tunnel below.
 
 If port `8080` is already in use on your host, change the left side of the compose port mapping and open that port instead.
 
@@ -98,9 +99,9 @@ Use the Lookup page to confirm the basics before a full run:
   </div>
 </div>
 
-## 5. Run a small processing pass
+## 5. Start manual processing
 
-Use `Run Now` from the Dashboard for your first manual pass. Start with a conservative batch size first and confirm the resulting location names look right in immich before scaling up.
+After checking known coordinates in Lookup, use `Run Now` from the Dashboard for your first manual pass. A smaller batch size reduces work per batch; it does not limit the total number of assets in the run. Inspect the resulting location names in Immich and use `Cancel` if you need to stop processing.
 
 If you want to start from a clean slate, the Reset Immich Geo Data page under Data can clear existing reverse geo `city`, `state`, and `country` values in immich before reprocessing.
 

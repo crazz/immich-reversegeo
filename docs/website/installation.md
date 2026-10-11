@@ -16,31 +16,42 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
     Official guide:
     [Backup and Restore | Immich](https://docs.immich.app/administration/backup-and-restore/)
 
-## Preferred setup
+## Choose your Compose setup
 
-- Add the service to your existing Immich `docker-compose.yml`.
-- Reuse the same `.env` file that already contains your Immich database settings.
-- Keep `/config` and `/data` persisted with Docker volumes.
-- No extra Docker network configuration is needed when the service lives in the same compose project as Immich.
+=== "Existing Immich stack (recommended)"
 
-Reference file:
-[docker-compose.yml](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/docker-compose.yml)
+    Add the service and volume declarations below to your existing Immich Compose file. Reuse its `.env` file and default network. Keep `/config` and `/data` persisted separately.
 
-Copy/paste snippet:
+    ```yaml title="docker-compose.yml"
+    --8<-- "docker-compose.yml"
+    ```
 
-```yaml title="docker-compose.yml"
---8<-- "docker-compose.yml"
-```
+    Start only Immich ReverseGeo:
 
-This service expects:
+    ```bash
+    docker compose up -d immich-reversegeo
+    ```
 
-- the same database connection values Immich already uses
-- to run in the same compose project and Docker network as Immich
-- a persistent `/config` volume for settings
-- a persistent `/data` volume for downloaded Overture data and runtime state
-- a free host port for the web UI, with `8080` as the default example
+=== "Separate Compose stack"
 
-Typical variables come from the shared `.env` file:
+    Save the same service snippet in a separate directory and provide an `.env` file with your Immich database connection values. Join the existing Immich network by adding this section to that Compose file:
+
+    ```yaml
+    networks:
+      default:
+        external: true
+        name: immich_default
+    ```
+
+    Replace `immich_default` with your actual Immich network name. The database hostname must be reachable on that network. You can inspect available networks with `docker network ls`.
+
+    ```bash
+    docker compose up -d immich-reversegeo
+    ```
+
+Reference file: [docker-compose.yml](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/docker-compose.yml).
+
+Both setups need the database connection values from Immich:
 
 ```env
 DB_HOST=database
@@ -48,15 +59,9 @@ DB_PORT=5432
 DB_USERNAME=postgres
 DB_PASSWORD=...
 DB_DATABASE_NAME=immich
-DATA_DIR=/data
-CONFIG_DIR=/config
 ```
 
-Then start the stack:
-
-```bash
-docker compose up -d
-```
+The example publishes the UI on host port `8080`. Change the left side of the port mapping if it is already in use. Do not expose the UI publicly; see the private-access options below.
 
 ## VPS and firewall notes
 
