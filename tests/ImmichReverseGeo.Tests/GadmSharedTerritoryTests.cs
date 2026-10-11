@@ -133,6 +133,14 @@ public class GadmSharedTerritoryTests
             """;
         AddGeometry(command, geometry);
         command.ExecuteNonQuery();
+        // A matching source-country polygon alone must not count as admin coverage.
+        command.CommandText = """
+            INSERT INTO gadm_area VALUES (
+                'country', 'China', 'Country', NULL, 0, $geom, $xmin, $ymin, $xmax, $ymax);
+            """;
+        command.Parameters.Clear();
+        AddGeometry(command, Box(lon, lat));
+        command.ExecuteNonQuery();
     }
 
     private static Polygon Box(double lon, double lat) =>

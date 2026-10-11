@@ -81,7 +81,7 @@ public class GadmDivisionsService
         double lon,
         IEnumerable<string> iso3Codes,
         CancellationToken ct = default,
-        bool requireGeometryMatch = false)
+        bool requireAdministrativeMatch = false)
     {
         try
         {
@@ -102,7 +102,7 @@ public class GadmDivisionsService
                     continue;
                 }
 
-                var partial = QueryDivisionAreasFromSqlite(dbPath, lat, lon, requireGeometryMatch);
+                var partial = QueryDivisionAreasFromSqlite(dbPath, lat, lon, requireAdministrativeMatch);
                 version ??= partial.Version;
 
                 foreach (var candidate in partial.Candidates)
@@ -134,7 +134,7 @@ public class GadmDivisionsService
         string dbPath,
         double lat,
         double lon,
-        bool requireGeometryMatch = false)
+        bool requireAdministrativeMatch = false)
     {
         using var conn = new SqliteConnection($"Data Source={dbPath};Pooling=false");
         conn.Open();
@@ -168,6 +168,18 @@ public class GadmDivisionsService
 
         while (reader.Read())
         {
+            var name = reader.GetString(1);
+            var adminLevel = reader.GetInt32(4);
+            // Country identity comes from Overture. Shared packages can also contain
+            // unnamed deeper subdivisions marked NA; skip both before decoding geometry.
+            if (requireAdministrativeMatch
+                && (adminLevel <= 0
+                    || string.IsNullOrWhiteSpace(name)
+                    || string.Equals(name.Trim(), "NA", StringComparison.OrdinalIgnoreCase)))
+            {
+                continue;
+            }
+
             var bboxContains = lon >= reader.GetDouble(6)
                                && lon <= reader.GetDouble(8)
                                && lat >= reader.GetDouble(7)
@@ -177,20 +189,15 @@ public class GadmDivisionsService
 
             var candidate = new GadmDivisionResult(
                 reader.GetString(0),
-                reader.GetString(1),
+                name,
                 reader.IsDBNull(2) ? null : reader.GetString(2),
                 reader.IsDBNull(3) ? null : reader.GetString(3),
-                reader.GetInt32(4),
+                adminLevel,
                 bboxContains,
                 geometryContains,
                 bboxArea);
 
-            // Shared packages include unnamed deeper subdivisions marked NA.
-            // Reject them before selecting a winner, along with bounding-box-only matches.
-            if (requireGeometryMatch
-                && (!candidate.GeometryContainsPoint
-                    || string.IsNullOrWhiteSpace(candidate.Name)
-                    || string.Equals(candidate.Name.Trim(), "NA", StringComparison.OrdinalIgnoreCase)))
+            if (requireAdministrativeMatch && !candidate.GeometryContainsPoint)
             {
                 continue;
             }

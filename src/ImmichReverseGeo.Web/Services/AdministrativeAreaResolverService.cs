@@ -178,7 +178,7 @@ public class AdministrativeAreaResolverService
         progress?.Report($"Querying cached GADM administrative areas across {string.Join(", ", readyCodes)}...");
         var diagnostics = await _gadmDivisions.FindContainingDivisionAreasAsync(
             lat, lon, readyCodes, ct,
-            requireGeometryMatch: useTerritoryFallbacks && GadmCountryFallbackCatalog.UsesSharedCountryDataset(iso3));
+            requireAdministrativeMatch: useTerritoryFallbacks && GadmCountryFallbackCatalog.UsesSharedCountryDataset(iso3));
         if (diagnostics.Error is not null || diagnostics.Candidates.Count == 0)
         {
             return null;
