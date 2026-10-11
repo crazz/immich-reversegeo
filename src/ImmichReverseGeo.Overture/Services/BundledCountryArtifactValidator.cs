@@ -101,6 +101,11 @@ public static class BundledCountryArtifactValidator
                 throw new InvalidDataException($"Bundled country row '{id}' uses unknown source identity '{sourceAlpha2}'.");
             }
 
+            if (sourceIdentity is null && !string.Equals(sourceAlpha2, alpha2, StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidDataException(
+                    $"Bundled country row '{id}' changes non-ISO source identity '{sourceAlpha2}' to '{alpha2}' without a catalog alias.");
+            }
             var identity = identityCatalog.FindByAlpha2(alpha2);
             if (identity is not null)
             {
@@ -128,7 +133,7 @@ public static class BundledCountryArtifactValidator
 
             var wkb = OvertureDataAccess.ReadBlobValue(reader.GetValue(5));
             var geometry = WkbReader.Read(wkb);
-            if (geometry.IsEmpty || !geometry.IsValid)
+            if (geometry is not Polygon and not MultiPolygon || geometry.IsEmpty || !geometry.IsValid)
             {
                 throw new InvalidDataException($"Bundled country row '{id}' has invalid geometry.");
             }

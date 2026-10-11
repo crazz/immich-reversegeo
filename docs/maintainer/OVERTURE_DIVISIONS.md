@@ -21,7 +21,7 @@ Only switch to the more specific neighborhood-style name when Overture provides 
 
 ## Country database export and validation
 
-The maintainer exporter includes both Overture `country` and `dependency` boundaries, writes canonical names and Alpha-2/Alpha-3 codes from the bundled catalog, and retains source names/codes for traceability. Unknown source identities fail the export unless explicitly classified as non-ISO.
+The maintainer exporter includes both Overture `country` and `dependency` boundaries, writes canonical names and Alpha-2/Alpha-3 codes from the bundled catalog, and retains source names/codes for traceability. Unknown source identities fail the export unless explicitly classified as non-ISO. Unmapped non-ISO codes retain their source identity; only catalog aliases may change a source code into a canonical identity.
 
 Generate a candidate into ignored output rather than overwriting the shipped database during review:
 
@@ -29,7 +29,7 @@ Generate a candidate into ignored output rather than overwriting the shipped dat
 dotnet run --project src/ImmichReverseGeo.Tools.OvertureExport -- --dataset country-divisions --release 2026-08-19.0 --output _out/country-export/country.db
 ```
 
-The exporter validates required columns, identities, geometries, source bounds, release metadata, and exact coverage for the shared territory and mainland coordinates before replacing the requested output. On failure the previous output remains in place and the temporary export is removed.
+The exporter validates required columns, identities, valid polygon boundaries, source bounds, release metadata, and exact coverage for the shared territory and mainland coordinates before replacing the requested output. On failure the previous output remains in place and the temporary export is removed.
 
 Recheck an existing candidate without network access or file changes:
 
