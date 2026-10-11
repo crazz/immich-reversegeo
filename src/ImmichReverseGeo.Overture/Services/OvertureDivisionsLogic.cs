@@ -102,17 +102,11 @@ public static class OvertureDivisionsLogic
             return false;
         }
 
-        if (candidate.AdminLevel.HasValue && currentBest.AdminLevel.HasValue)
+        var adminLevelComparison = (candidate.AdminLevel ?? int.MaxValue)
+            .CompareTo(currentBest.AdminLevel ?? int.MaxValue);
+        if (adminLevelComparison != 0)
         {
-            if (candidate.AdminLevel.Value < currentBest.AdminLevel.Value)
-            {
-                return true;
-            }
-
-            if (candidate.AdminLevel.Value > currentBest.AdminLevel.Value)
-            {
-                return false;
-            }
+            return adminLevelComparison < 0;
         }
 
         if (candidate.IsTerritorial != currentBest.IsTerritorial)
@@ -120,7 +114,13 @@ public static class OvertureDivisionsLogic
             return candidate.IsTerritorial;
         }
 
-        return candidate.BoundingBoxArea < currentBest.BoundingBoxArea;
+        var areaComparison = candidate.BoundingBoxArea.CompareTo(currentBest.BoundingBoxArea);
+        if (areaComparison != 0)
+        {
+            return areaComparison < 0;
+        }
+
+        return string.Compare(candidate.Id, currentBest.Id, StringComparison.Ordinal) < 0;
     }
 
     public static int GetSubtypeRank(string? subtype) =>
