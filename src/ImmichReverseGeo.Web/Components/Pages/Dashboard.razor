@@ -77,15 +77,16 @@ else if (_dbError is not null)
     </button>
     @if (State.LastRunCompleted.HasValue)
     {
-        <span class="run-info">Last completed: @State.LastRunCompleted.Value.ToString("u")</span>
+        <span class="run-info">Last completed: <LocalTimestamp Timestamp="@(new DateTimeOffset(State.LastRunCompleted.Value))" /></span>
     }
 </div>
 
 <h3>Recent Activity</h3>
+<p class="run-info">Times are shown in your browser's timezone.</p>
 <div class="log-tail">
-    @foreach (var line in State.GetRecentLog().TakeLast(50).Reverse())
+    @foreach (var entry in State.GetRecentLogEntries().TakeLast(50).Reverse())
     {
-        <div class="log-line @(line.Contains("[ERROR]") ? "error" : "")">@line</div>
+        <div class="log-line @(entry.Message.Contains("[ERROR]") ? "error" : "")">[<LocalTimestamp Timestamp="entry.Timestamp" />] @entry.Message</div>
     }
 </div>
 

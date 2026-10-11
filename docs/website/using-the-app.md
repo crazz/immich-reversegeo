@@ -19,6 +19,8 @@ Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 - the Dashboard shows live progress, recent activity, and the last completed run
 - `Cancel` stops the current run
 
+Run completion and activity timestamps use your browser's local timezone, shown beside each time. This does not change the processing schedule.
+
 ## Lookup
 
 Use the Lookup page when you want to test a coordinate before running a full processing pass.
@@ -58,3 +60,5 @@ Use the Logs page when you want to inspect recent activity outside the Dashboard
 
 - filter the in-app log view to all messages, warnings, or errors
 - download the current filtered view as `immich-reversegeo.log`
+
+On-screen timestamps use your browser's timezone. Downloaded logs use full UTC timestamps with dates so you can compare activity across systems. While the interactive page is connecting, timestamps are shown in UTC.

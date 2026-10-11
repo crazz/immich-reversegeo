@@ -58,6 +58,28 @@ Things that affect throughput:
   </div>
 </div>
 
+## The container keeps restarting or gets killed
+
+This usually means the container ran out of memory.
+
+Check whether the restarts line up with processing runs:
+
+```bash
+docker inspect --format '{{.RestartCount}} {{.State.OOMKilled}}' immich-reversegeo
+```
+
+If `OOMKilled` is `true`, or the logs end with `System.OutOfMemoryException`, raise the memory
+ceiling. The compose snippet in [Installation](./installation.md#docker) sets `mem_limit: 2g`,
+as a starting memory budget. If your Compose file has no `mem_limit`, add one to set a total
+container memory budget that the .NET runtime can take into account. Large country caches or
+higher parallelism may require a higher limit.
+
+Lowering the limit is not a fix. The bundled country boundary data alone needs several hundred
+megabytes once loaded, so a limit below that makes the container fail straight away.
+
+Reducing **max parallelism** in processing settings also lowers peak memory, at the cost of
+throughput.
+
 ## I want to rerun everything from scratch
 
 The Data page can clear existing `city`, `state`, and `country` values in immich.
@@ -67,3 +89,11 @@ See [Using the App](./using-the-app.md) for the reset options and what each one 
 Because this is a destructive write operation against immich metadata, back up your database first:
 
 - [Backup and Restore | Immich](https://docs.immich.app/administration/backup-and-restore/)
+
+## Settings cannot be read or saved
+
+If logs report that `settings.json` cannot be read, scheduled processing pauses and retries once a minute. The file is left unchanged; the app does not substitute default settings for a damaged file.
+
+Check that the `/config` volume is writable and restore `settings.json` from a known-good backup if its contents are damaged. Keep a copy of the damaged file while investigating. After restoring it, reload the Settings page and check the values before starting a run.
+
+If a save fails, the previous settings file remains available. Check volume permissions and free disk space, then retry the save.

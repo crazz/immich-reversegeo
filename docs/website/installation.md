@@ -52,6 +52,16 @@ If you already run immich with Docker Compose, the simplest setup is to add one 
 
 Reference file: [docker-compose.yml](https://github.com/immich-reversegeo/immich-reversegeo/blob/master/docker-compose.yml).
 
+Both setups need about 2 GB of memory, as set by `mem_limit` in the service snippet.
+
+!!! note "Why the memory limit is there"
+    The bundled country boundary data is held in memory while processing runs and uses several hundred
+    megabytes. `mem_limit` sets a total container memory budget that the .NET runtime can take
+    into account. Large country caches and high parallelism can increase peak memory use.
+
+    Do not lower it much below `2g`. A limit under the working set makes the container fail
+    immediately instead of running. Raising it is fine.
+
 Both setups need the database connection values from Immich:
 
 ```env
