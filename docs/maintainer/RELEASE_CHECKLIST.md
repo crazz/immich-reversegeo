@@ -1,5 +1,14 @@
 # Release Checklist
 
+## Prepare and verify candidate artifacts
+
+- Start from a reviewed candidate commit and keep unrelated work separate.
+- Run the Release workflow on that branch or tag. Set `version` to the intended SemVer for a branch candidate (for example `1.2.3-rc.1`); `release_name` only labels artifacts. A tag supplies its version automatically. Untagged builds without an explicit version are stamped `0.0.0-dev`.
+- The workflow stamps the app's version and full source SHA, runs tests and strict docs validation, includes bundled geodata, and verifies required ZIP contents and real SQLite headers. An override on a tag must match that tag.
+- Download the web, docs, and verification artifacts. Check `release-manifest.json` against the exact candidate SHA and version, then verify both ZIP digests against `SHA256SUMS`. The app ZIP also contains `release-build.json` with that provenance.
+- Keep checksums beside the ZIPs in a draft release. If the source commit changes after review or merge, regenerate the artifacts and replace the draft assets and checksums together.
+- Candidate packaging does not publish a GitHub release, create a tag, or promote Docker images. Complete the existing publishing checks below separately. Docker remains the recommended end-user installation path.
+
 ## GitHub
 
 - Push `master`

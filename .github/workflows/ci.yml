@@ -16,6 +16,14 @@ jobs:
         with:
           lfs: true
 
+      - name: Setup Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Test release verification helpers
+        run: python -B -m unittest discover -s .github/scripts -p test_release_artifacts.py
+
       - name: Test Docker publishing rules
         run: node --test .github/scripts/docker-publishing.test.cjs
 

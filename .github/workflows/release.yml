@@ -3,6 +3,11 @@ name: Release
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: "Optional SemVer app version; defaults to the tag version or 0.0.0-dev"
+        required: false
+        default: ""
+        type: string
       release_name:
         description: "Optional label for the release artifacts"
         required: false
@@ -31,6 +36,21 @@ jobs:
         with:
           python-version: "3.12"
 
+      - name: Resolve candidate metadata
+        id: metadata
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+          SOURCE_COMMIT: ${{ github.sha }}
+          SOURCE_REF: ${{ github.ref }}
+        run: |
+          test "$(git rev-parse HEAD)" = "$SOURCE_COMMIT"
+          python -B .github/scripts/release-artifacts.py metadata --output _out/release-metadata.json --github-output "$GITHUB_OUTPUT"
+
+      - name: Test release verification helpers
+        run: python -B -m unittest discover -s .github/scripts -p test_release_artifacts.py
+
       - name: Install docs dependencies
         run: pip install -r docs/website/requirements.txt
 
@@ -40,11 +60,25 @@ jobs:
       - name: Test
         run: dotnet test --solution immich-reversegeo.slnx --configuration Release --filter "TestCategory!=Integration&TestCategory!=Performance"
 
-      - name: Publish app
-        run: dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -c Release -o artifacts/web
+      - name: Publish versioned app
+        shell: pwsh
+        env:
+          ARTIFACT_VERSION: ${{ steps.metadata.outputs.version }}
+          INFORMATIONAL_VERSION: ${{ steps.metadata.outputs.informational_version }}
+        run: |
+          dotnet publish src/ImmichReverseGeo.Web/ImmichReverseGeo.Web.csproj -c Release -o artifacts/web -p:Version=$env:ARTIFACT_VERSION -p:InformationalVersion=$env:INFORMATIONAL_VERSION -p:IncludeSourceRevisionInInformationalVersion=false
+          if ($LASTEXITCODE -ne 0) { throw 'App publish failed.' }
+          $assemblyPath = [IO.Path]::GetFullPath('artifacts/web/ImmichReverseGeo.Web.dll')
+          $productVersion = [Diagnostics.FileVersionInfo]::GetVersionInfo($assemblyPath).ProductVersion
+          if ($productVersion -ne $env:INFORMATIONAL_VERSION) { throw 'Published assembly version does not match candidate metadata.' }
+          New-Item -ItemType Directory -Force -Path 'artifacts/web/bundled-data' | Out-Null
+          Get-ChildItem -LiteralPath 'src/ImmichReverseGeo.Web/bundled-data' -Force | ForEach-Object {
+            Copy-Item -LiteralPath $_.FullName -Destination 'artifacts/web/bundled-data' -Recurse -Force
+          }
+          Copy-Item -LiteralPath '_out/release-metadata.json' -Destination 'artifacts/web/release-build.json'
 
       - name: Build docs
-        run: zensical build --clean
+        run: zensical build --clean --strict
 
       - name: Archive app
         run: Compress-Archive -Path artifacts/web/* -DestinationPath immich-reversegeo-web.zip
@@ -53,6 +87,15 @@ jobs:
       - name: Archive docs
         run: Compress-Archive -Path _out/website/* -DestinationPath immich-reversegeo-docs.zip
         shell: pwsh
+
+      - name: Verify release packages
+        run: python -B .github/scripts/release-artifacts.py verify --metadata _out/release-metadata.json --app immich-reversegeo-web.zip --docs immich-reversegeo-docs.zip --output _out/release-verification
+
+      - name: Upload verification artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ inputs.release_name != '' && format('{0}-verification', inputs.release_name) || 'immich-reversegeo-verification' }}
+          path: _out/release-verification
 
       - name: Upload app artifact
         uses: actions/upload-artifact@v7

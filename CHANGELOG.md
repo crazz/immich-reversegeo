@@ -6,6 +6,8 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 
 ## Unreleased
 
+- Stamp release app artifacts with candidate SemVer and source SHA, include bundled runtime geodata, validate package contents and SQLite headers, emit SHA-256 checksums/provenance, and enforce strict release docs builds.
+
 - Include Overture source aliases CP, XE, XS, and XJ in their canonical FRA, BES, and SJM administrative caches. Store the exported source-code set in cache metadata and refresh only affected older caches; retain ordinary-country caches and keep the old file until a replacement succeeds.
 
 - Updated live Overture Places queries to use `taxonomy.primary` with `basic_category` fallback after removal of `categories` in schema v2.
