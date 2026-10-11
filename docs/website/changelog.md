@@ -15,6 +15,10 @@ Technical implementation notes live in [CHANGELOG.md](https://github.com/immich-
 - Fixed the reported Hong Kong coordinates and expanded built-in coverage for Macao, Greenland, the Faroe Islands, Jersey, Guernsey, the Isle of Man, Puerto Rico, Guam, the U.S. Virgin Islands, Bermuda, Gibraltar, the Cayman Islands, the British Virgin Islands, Aruba, Curaçao, the Åland Islands, Réunion, French Polynesia, and New Caledonia.
 - Older custom country databases remain readable without modification. Incorrect identities in newer-format databases produce a clear mapping error.
 - Country detection still works offline from bundled data. Use [Lookup](./using-the-app.md#lookup) to verify a coordinate and inspect the later Overture and optional GADM results before processing your library.
+
+- The Dashboard now explains which photos a run processes and how to correct existing names.
+- Added **Preview Location Corrections** under Data. Compare existing and proposed names before resetting selected photos. Preview leaves Immich data unchanged; see [Using the App](./using-the-app.md#preview-location-corrections).
+
 - Added checks for future bundled country-data updates. The shipped geographic data and country-matching behavior are unchanged by this tooling update.
 
 - Include version details, integrity checksums, and signed build provenance with downloadable release packages, along with the bundled geographic data needed by the app.

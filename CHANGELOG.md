@@ -11,6 +11,11 @@ For a shorter user-facing summary, see [docs/website/changelog.md](./docs/websit
 - Preserve older bundled/custom databases without Alpha-3 columns through catalog-based inference; keep malformed modern identities visible instead of substituting an overlapping sovereign. No database migration is performed.
 - Added structured country-bootstrap outcomes that distinguish spatial misses from identity mapping failures, plus deterministic dependency-over-sovereign selection.
 - Added shared territory fixtures, artifact validation, downstream Overture/GADM routing tests, and country-index size, memory, initialization, and warm-lookup performance budgets.
+
+- Added explicit Dashboard processing eligibility and links to preview/reset workflows.
+- Added read-only, cancellable location previews by asset GUID, existing city/state/country, or whole library, with keyset pagination, explicit selections retained across pages, per-asset failure reporting, and current-versus-proposed comparison. Cancelled previews can resume after the last checked asset.
+- Shared final administrative/airport/fallback resolution between preview and background processing; preview does not write Immich locations or alter skipped assets.
+
 - Enhance the country exporter to include dependencies, canonical catalog identities, and source traceability. Validate generated artifacts and shared coordinate coverage before replacement, and add a read-only validation mode. This tooling change does not replace shipped country data or change runtime resolution.
 
 - Use the web project Version as the release version source and stamp app artifacts with the source SHA, include bundled runtime geodata, validate package contents and SQLite headers, emit SHA-256 checksums and signed provenance through official GitHub actions, and enforce strict release docs builds.

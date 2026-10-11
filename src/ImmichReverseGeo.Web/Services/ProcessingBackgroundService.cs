@@ -6,7 +6,6 @@ using System.Threading;
 using System.Threading.Tasks;
 using Cronos;
 using ImmichReverseGeo.Core.Models;
-using ImmichReverseGeo.Overture.Services;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -15,10 +14,9 @@ namespace ImmichReverseGeo.Web.Services;
 public class ProcessingBackgroundService(
     ILogger<ProcessingBackgroundService> logger,
     ConfigService config,
-    AdministrativeAreaResolverService administrativeResolver,
+    AssetLocationResolverService locationResolver,
     ProcessingState state,
     ImmichDbRepository db,
-    OverturePlacesService overturePlaces,
     SkippedAssetsRepository skipped) : BackgroundService
 {
     private CancellationTokenSource? _runCts;
@@ -121,7 +119,7 @@ public class ProcessingBackgroundService(
 
             if (total == 0)
             {
-                state.AppendLog("Run started — nothing to process, all assets already have location data.");
+                state.AppendLog("Nothing to process: no active GPS assets have both city and country missing. Use Preview Location Corrections to check existing names.");
                 return;
             }
 
@@ -191,52 +189,24 @@ public class ProcessingBackgroundService(
 
     private async Task ProcessAssetAsync(AssetRecord asset, AppConfig cfg, CancellationToken ct)
     {
-        var step = "FindCountry";
+        var step = "ResolveLocation";
         try
         {
             // 1. Country detection — bundled Overture country divisions only.
-            var adminResolution = await administrativeResolver.ResolveAsync(
+            var geoResult = await locationResolver.ResolveAsync(
                 asset.Latitude,
                 asset.Longitude,
                 cfg.Processing,
                 new ProcessingResolutionProgress(state),
                 ct);
 
-            if (adminResolution is null)
+            if (geoResult is null)
             {
                 state.AppendLog($"[WARN] Asset {asset.Id}: no country found at ({asset.Latitude:F4}, {asset.Longitude:F4}), skipping.");
                 await skipped.AddAsync(asset.Id);
                 state.IncrementSkipped();
                 return;
             }
-
-            step = "FindAdminLevels";
-            var iso3 = adminResolution.Iso3;
-            var countryName = adminResolution.CountryName;
-            var geoResult = adminResolution.GeoResult;
-
-            if (cfg.Processing.UseAirportInfrastructure)
-            {
-                // 2. Transport lookup — bundled Overture airport infrastructure.
-                step = "FindNearestInfrastructure";
-                var infrastructure = await overturePlaces.FindNearestInfrastructureWithDiagnosticsAsync(
-                    asset.Latitude,
-                    asset.Longitude,
-                    iso3,
-                    ct);
-
-                if (infrastructure.BestMatch?.GeometryContainsPoint == true)
-                {
-                    geoResult = geoResult with { City = infrastructure.BestMatch.Name };
-                }
-                else if (geoResult.City is null && infrastructure.BestMatch is not null)
-                {
-                    geoResult = geoResult with { City = infrastructure.BestMatch.Name };
-                }
-            }
-
-            // 3. City fallback — prefer city, then state, then country for country-only microstates.
-            geoResult = geoResult.WithFallbackCity();
 
             // 4. Write back (only if we have country AND city)
             step = "WriteLocation";
@@ -269,7 +239,7 @@ public class ProcessingBackgroundService(
             }
             else
             {
-                state.AppendLog($"[WARN] Asset {asset.Id}: country={countryName} but no admin match, skipping.");
+                state.AppendLog($"[WARN] Asset {asset.Id}: country={geoResult.Country} but no admin match, skipping.");
                 await skipped.AddAsync(asset.Id);
                 state.IncrementSkipped();
             }

@@ -16,6 +16,10 @@ The sidebar keeps the main tools available and includes **Help & setup** for the
 
 Use `Run Now` on the Dashboard to start a manual processing pass immediately.
 
+Runs process active assets with GPS coordinates only when **both city and country are missing**. Existing names are kept, even if they are incorrect. Assets on the skip list are excluded until you clear that list under Data. The unprocessed count includes eligible assets that may still be on the skip list.
+
+To correct existing names, use [Preview Location Corrections](#preview-location-corrections) first, reset only the assets you want to correct, then select `Run Now`.
+
 - it works even if automatic scheduling is turned off
 - it uses your current Settings values for batch size, delay, parallelism, and airport matching
 - the Dashboard shows live progress, recent activity, and the last completed run
@@ -41,10 +45,29 @@ Click the screenshot to enlarge it. Lookup previews do not update Immich assets.
 
 ## Data tools
 
+### Preview Location Corrections
+
+Open **Data → Preview Location Corrections** to compare existing city, state, and country names with proposed values from your current processing settings.
+
+1. Choose pasted asset GUIDs, an exact existing city/state/country name, or the whole library.
+2. Start the preview. It checks up to 100 assets per page and may download country caches. It does not write to Immich or change the skip list.
+3. Review the existing and proposed values. Use **Show only different values** to focus on changes. Different does not necessarily mean better: test unfamiliar results in Lookup using the coordinates shown in the table.
+4. Select only the assets you want to correct. The GUID list includes your selections across reviewed pages. Copy those GUIDs and take an [Immich database backup](https://docs.immich.app/administration/backup-and-restore/) before resetting them under **Reset Immich Geo Data → Reset Single Item(s)**.
+5. Select **Run Now** on the Dashboard to process the reset assets.
+
+**Preview Next 100** replaces the current results, so select the assets you want to retain first. Selected GUIDs are kept across pages; **Start Preview** clears the selection. After cancellation, you can review completed results and continue after the last checked asset. If cancellation happens before any results are available, start a new preview.
+
+Settings are loaded once when you start the preview; start again after changing settings. Results may change if settings, source data, or coordinates change before processing.
+
+Deleted assets and GUIDs without an Immich metadata row are excluded. Missing GPS coordinates, unresolved locations, and lookup failures are shown separately and are excluded from the list of GUIDs with proposed changes. Preview can help find inconsistent names; it cannot recover missing GPS coordinates or guarantee that a proposed name is correct.
+
+### Maintenance actions
+
 The Data area contains maintenance tools that change downloaded caches or Immich reverse geo values.
 
 | Page or action | What it does |
 |---|---|
+| `Preview Location Corrections` | Compares existing and proposed names in pages of 100 without changing Immich. |
 | `Clear Skip List` | Removes permanently skipped assets so they can be retried on the next run. |
 | `Reset All Data` | Clears Immich reverse geo `city`, `state`, and `country` values for all matching assets and clears the skip list. |
 | `Reset Single Item(s)` | Clears reverse geo values only for the pasted asset GUIDs and removes those assets from the skip list. |
